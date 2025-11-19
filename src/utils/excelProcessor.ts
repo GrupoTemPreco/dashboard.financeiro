@@ -1,0 +1,849 @@
+import * as XLSX from 'xlsx';
+import { FinancialRecord, Company, AccountsPayable, Revenue, FinancialTransaction } from '../types/financial';
+
+export const processCompaniesFile = (file: File): Promise<Company[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet);
+        
+        const companies: any[] = jsonData.map((row: any) => {
+          const companyName = row['C'] || row['Nome'] || row['Name'] || row.company_name || '';
+          return {
+            company_code: row['A'] || row['Codigo'] || row['Código'] || row.company_code || '',
+            company_name: companyName,
+            group_name: row['B'] || row['Grupo'] || row['Group'] || row.group_name || '',
+            name: companyName // Required field in the database
+          };
+        });
+        
+        resolve(companies);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsBinaryString(file);
+  });
+};
+
+export const processExcelFile = (file: File): Promise<FinancialRecord[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet);
+        
+        const records: FinancialRecord[] = jsonData.map((row: any, index) => ({
+          id: `record-${index}`,
+          company: row.Company || row.company || '',
+          group: row.Group || row.group || '',
+          date: row.Date || row.date || '',
+          openingBalance: parseFloat(row.OpeningBalance || row.opening_balance || 0),
+          forecastedRevenue: parseFloat(row.ForecastedRevenue || row.forecasted_revenue || 0),
+          actualRevenue: parseFloat(row.ActualRevenue || row.actual_revenue || 0),
+          forecastedOutflows: parseFloat(row.ForecastedOutflows || row.forecasted_outflows || 0),
+          actualOutflows: parseFloat(row.ActualOutflows || row.actual_outflows || 0),
+          finalBalance: parseFloat(row.FinalBalance || row.final_balance || 0),
+          cogs: parseFloat(row.COGS || row.cogs || 0),
+          loans: parseFloat(row.Loans || row.loans || 0),
+          financing: parseFloat(row.Financing || row.financing || 0)
+        }));
+        
+        resolve(records);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsBinaryString(file);
+  });
+};
+
+export const processAccountsPayableFile = (file: File): Promise<AccountsPayable[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        const accountsPayable: AccountsPayable[] = [];
+        let totalRows = 0;
+        let skippedEmpty = 0;
+        let skippedNoDate = 0;
+        let processed = 0;
+        const un02Total = { count: 0, sum: 0 };
+
+        console.log('📊 CONTAS A PAGAR - Total de linhas na planilha:', jsonData.length - 1);
+
+        for (let i = 1; i < jsonData.length; i++) {
+          const row = jsonData[i] as any[];
+          totalRows++;
+
+          if (!row[0] && !row[1] && !row[2]) {
+            skippedEmpty++;
+            console.log(`⚠️ Linha ${i}: Ignorada (vazia) - Row:`, row);
+            continue;
+          }
+
+          const paymentDateStr = row[4];
+          let paymentDate = '';
+
+          if (paymentDateStr) {
+            if (typeof paymentDateStr === 'number') {
+              const date = new Date((paymentDateStr - 25569) * 86400 * 1000);
+              paymentDate = date.toISOString().split('T')[0];
+            } else if (typeof paymentDateStr === 'string') {
+              const parts = paymentDateStr.split('/');
+              if (parts.length === 3) {
+                paymentDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+              }
+            }
+          }
+
+          // Skip records without valid date
+          if (!paymentDate) {
+            skippedNoDate++;
+            console.warn(`⚠️ Linha ${i}: Ignorada (sem data válida) - Row:`, row);
+            continue;
+          }
+
+          const statusValue = (row[0] || '').toLowerCase().trim();
+          const isRealized = statusValue === 'realizado' || statusValue === 'paga' || statusValue === 'pago';
+          const businessUnit = String(row[1] || '').trim();
+          const amount = parseFloat(row[5]) || 0;
+
+          const accountPayable: any = {
+            status: isRealized ? 'realizado' : 'previsto',
+            business_unit: businessUnit,
+            chart_of_accounts: row[2] || '',
+            creditor: row[3] || '',
+            payment_date: paymentDate,
+            amount: amount
+          };
+
+          processed++;
+          accountsPayable.push(accountPayable);
+
+          // Track UN 02
+          if (businessUnit === '02' || businessUnit === '2') {
+            un02Total.count++;
+            un02Total.sum += amount;
+            console.log(`✅ Linha ${i}: UN 02 - Valor: ${amount.toFixed(2)} | Status: ${statusValue} | Data: ${paymentDate}`);
+          }
+        }
+
+        console.log('📊 RESUMO CONTAS A PAGAR:');
+        console.log(`   Total de linhas: ${totalRows}`);
+        console.log(`   Ignoradas (vazias): ${skippedEmpty}`);
+        console.log(`   Ignoradas (sem data): ${skippedNoDate}`);
+        console.log(`   Processadas: ${processed}`);
+        console.log(`   UN 02 - Registros: ${un02Total.count} | Total: R$ ${un02Total.sum.toFixed(2)}`);
+
+        resolve(accountsPayable);
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsBinaryString(file);
+  });
+};
+
+export const processRevenuesFile = (file: File): Promise<Revenue[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        const revenues: Revenue[] = [];
+
+        for (let i = 1; i < jsonData.length; i++) {
+          const row = jsonData[i] as any[];
+
+          if (!row[0] && !row[1] && !row[2]) continue;
+
+          const paymentDateStr = row[3];
+          let paymentDate = '';
+
+          if (paymentDateStr) {
+            if (typeof paymentDateStr === 'number') {
+              const date = new Date((paymentDateStr - 25569) * 86400 * 1000);
+              paymentDate = date.toISOString().split('T')[0];
+            } else if (typeof paymentDateStr === 'string') {
+              const parts = paymentDateStr.split('/');
+              if (parts.length === 3) {
+                paymentDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+              }
+            }
+          }
+
+          // Skip records without valid date
+          if (!paymentDate) {
+            console.warn('Skipping revenue record without valid date:', row);
+            continue;
+          }
+
+          const statusValue = (row[0] || '').toLowerCase().trim();
+          const isRealized = statusValue === 'realizado' || statusValue === 'recebida' || statusValue === 'recebido' || statusValue === 'paga' || statusValue === 'pago';
+
+          const revenue: any = {
+            status: isRealized ? 'realizado' : 'previsto',
+            business_unit: row[1] || '',
+            chart_of_accounts: row[2] || '',
+            payment_date: paymentDate,
+            amount: parseFloat(row[4]) || 0
+          };
+
+          revenues.push(revenue);
+        }
+
+        resolve(revenues);
+      } catch (error) {
+        console.error('Error processing revenues file:', error);
+        reject(error);
+      }
+    };
+
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsBinaryString(file);
+  });
+};
+
+export const processForecastedEntriesFile = (file: File): Promise<any[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+
+        if (!data) {
+          reject(new Error('Não foi possível ler o arquivo'));
+          return;
+        }
+
+        const workbook = XLSX.read(data, { type: 'binary' });
+
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          reject(new Error('O arquivo Excel não contém planilhas'));
+          return;
+        }
+
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        console.log('Processing forecasted entries file...');
+        console.log('Total rows:', jsonData.length);
+        console.log('First 3 rows:', jsonData.slice(0, 3));
+        console.log('Last 3 rows:', jsonData.slice(-3));
+
+        if (jsonData.length < 2) {
+          reject(new Error('O arquivo deve conter pelo menos uma linha de dados além do cabeçalho'));
+          return;
+        }
+
+        const entries: any[] = [];
+
+        for (let i = 1; i < jsonData.length; i++) {
+          const row: any = jsonData[i];
+
+          if (!row || row.length === 0) {
+            console.log(`Row ${i} skipped: empty row`);
+            continue;
+          }
+
+          // Check if all important columns are empty
+          const hasData = row[1] || row[2] || row[3] || row[4] || row[5];
+          if (!hasData) {
+            console.log(`Row ${i} skipped: no data in any column`);
+            continue;
+          }
+
+          if (!row[1] || String(row[1]).trim() === '') {
+            console.log(`Row ${i} skipped: missing business unit (column B):`, row);
+            continue;
+          }
+
+          let paymentDate = '';
+          if (row[4]) {
+            if (typeof row[4] === 'number') {
+              const date = XLSX.SSF.parse_date_code(row[4]);
+              paymentDate = `${date.y}-${String(date.m).padStart(2, '0')}-${String(date.d).padStart(2, '0')}`;
+            } else if (typeof row[4] === 'string') {
+              const parts = row[4].split('/');
+              if (parts.length === 3) {
+                paymentDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+              }
+            }
+          }
+
+          if (!paymentDate) {
+            console.warn(`Skipping row ${i} - no valid date in column E:`, row);
+            continue;
+          }
+
+          const amount = parseFloat(row[5]);
+          if (isNaN(amount)) {
+            console.warn(`Skipping row ${i} - invalid amount in column F:`, row);
+            continue;
+          }
+
+          const statusValue = String(row[0] || 'pendente').toLowerCase().trim();
+          const normalizedStatus = statusValue === 'paga' ? 'paga' : 'pendente';
+
+          // Use default values for optional fields
+          const businessUnit = String(row[1] || '').trim();
+          const chartOfAccounts = String(row[2] || '').trim();
+          const supplier = String(row[3] || 'N/A').trim();
+
+          const entry: any = {
+            status: normalizedStatus,
+            business_unit: businessUnit,
+            chart_of_accounts: chartOfAccounts,
+            supplier: supplier,
+            due_date: paymentDate,
+            amount: amount
+          };
+
+          console.log(`Row ${i + 1} processed:`, entry);
+          entries.push(entry);
+        }
+
+        console.log(`Total entries processed: ${entries.length}`);
+
+        if (entries.length === 0) {
+          reject(new Error('Nenhum lançamento válido foi encontrado no arquivo. Verifique se as colunas estão corretas: A=Status, B=Unidade, C=Plano de Contas, D=Credor, E=Data Vencimento, F=Valor'));
+          return;
+        }
+
+        resolve(entries);
+      } catch (error) {
+        console.error('Error processing forecasted entries file:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+        reject(new Error(`Erro ao processar arquivo: ${errorMessage}`));
+      }
+    };
+
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo. Verifique se é um arquivo Excel válido.'));
+    reader.readAsBinaryString(file);
+  });
+};
+
+export const processFinancialTransactionsFile = (file: File): Promise<FinancialTransaction[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        const transactions: FinancialTransaction[] = [];
+
+        for (let i = 1; i < jsonData.length; i++) {
+          const row = jsonData[i] as any[];
+
+          if (!row[0] && !row[1] && !row[2]) continue;
+
+          const transactionDateStr = row[3];
+          let transactionDate = '';
+
+          if (transactionDateStr) {
+            if (typeof transactionDateStr === 'number') {
+              const date = new Date((transactionDateStr - 25569) * 86400 * 1000);
+              transactionDate = date.toISOString().split('T')[0];
+            } else if (typeof transactionDateStr === 'string') {
+              const parts = transactionDateStr.split('/');
+              if (parts.length === 3) {
+                transactionDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+              }
+            }
+          }
+
+          // Skip records without valid date
+          if (!transactionDate) {
+            console.warn('Skipping financial transaction record without valid date:', row);
+            continue;
+          }
+
+          const statusValue = (row[0] || '').toLowerCase().trim();
+          const isRealized = statusValue === 'realizado' || statusValue === 'paga' || statusValue === 'pago';
+
+          const transaction: any = {
+            status: isRealized ? 'realizado' : 'previsto',
+            business_unit: row[1] || '',
+            chart_of_accounts: row[2] || '',
+            transaction_date: transactionDate,
+            amount: parseFloat(row[4]) || 0
+          };
+
+          console.log('Lançamentos - Row:', row, '| BU:', row[1], '| Amount:', row[4]);
+          transactions.push(transaction);
+        }
+
+        resolve(transactions);
+      } catch (error) {
+        console.error('Error processing financial transactions file:', error);
+        reject(error);
+      }
+    };
+
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsBinaryString(file);
+  });
+};
+
+export const generateMockData = (): FinancialRecord[] => {
+  const companies = ['Rede Tem Preço - Matriz', 'Rede Tem Preço - Filial 1', 'X Brother - Loja A', 'X Brother - Loja B'];
+  const groups = ['Rede Tem Preço', 'X Brother'];
+  const records: FinancialRecord[] = [];
+  
+  // Generate 90 days of mock data
+  for (let i = 0; i < 90; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() - 45 + i); // 45 days ago to 45 days in future
+    
+    companies.forEach((company, companyIndex) => {
+      const group = groups[Math.floor(companyIndex / 2)];
+      const baseRevenue = 15000 + Math.random() * 10000;
+      const baseCogs = baseRevenue * (0.35 + Math.random() * 0.1);
+      const baseOutflows = 8000 + Math.random() * 5000;
+      const openingBalance = 25000 + Math.random() * 15000;
+      
+      records.push({
+        id: `${company}-${date.toISOString().split('T')[0]}`,
+        company,
+        group,
+        date: date.toISOString().split('T')[0],
+        openingBalance,
+        forecastedRevenue: baseRevenue,
+        actualRevenue: i < 45 ? baseRevenue * (0.9 + Math.random() * 0.2) : 0,
+        forecastedOutflows: baseOutflows,
+        actualOutflows: i < 45 ? baseOutflows * (0.85 + Math.random() * 0.3) : 0,
+        finalBalance: openingBalance + baseRevenue - baseOutflows,
+        cogs: baseCogs,
+        loans: 5000 + Math.random() * 3000,
+        financing: 2000 + Math.random() * 1500
+      });
+    });
+  }
+  
+  return records;
+};
+
+export const processRevenuesDREFile = (file: File): Promise<any[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        console.log('🔄 Iniciando processamento de Receita DRE...');
+        const data = e.target?.result;
+
+        if (!data) {
+          throw new Error('Arquivo vazio ou não pôde ser lido');
+        }
+
+        const workbook = XLSX.read(data, { type: 'binary' });
+        console.log('📊 Planilhas disponíveis:', workbook.SheetNames);
+
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        console.log(`📋 Total de linhas no arquivo: ${jsonData.length}`);
+
+        if (jsonData.length < 2) {
+          throw new Error('Arquivo não contém dados suficientes (necessário pelo menos 2 linhas: cabeçalho + dados)');
+        }
+
+        const revenuesDRE: any[] = [];
+
+        for (let i = 1; i < jsonData.length; i++) {
+          try {
+            const row = jsonData[i] as any[];
+
+            if (!row || row.length === 0) continue;
+
+            const status = row[0];
+            const businessUnit = row[1];
+            const chartOfAccounts = row[2];
+            const issueDate = row[3];
+            const amount = row[4];
+
+            if (!status || !businessUnit || !chartOfAccounts || !issueDate) {
+              console.log(`⚠️ Linha ${i + 1} ignorada: dados incompletos`);
+              continue;
+            }
+
+            const statusStr = String(status).toLowerCase().trim();
+            if (statusStr !== 'recebida') {
+              console.log(`⚠️ Linha ${i + 1} ignorada: Status deve ser "Recebida", encontrado: "${status}"`);
+              continue;
+            }
+
+            const chartStr = String(chartOfAccounts).trim();
+            if (chartStr !== 'Receita Bruta') {
+              console.log(`⚠️ Linha ${i + 1} ignorada: Plano de Contas deve ser "Receita Bruta", encontrado: "${chartOfAccounts}"`);
+              continue;
+            }
+
+            const businessUnitNum = typeof businessUnit === 'number' ? businessUnit : parseInt(String(businessUnit));
+            if (isNaN(businessUnitNum)) {
+              console.log(`⚠️ Linha ${i + 1} ignorada: Unidade de Negócio deve ser um número, encontrado: "${businessUnit}"`);
+              continue;
+            }
+
+            if (amount === undefined || amount === null || amount === '') {
+              console.log(`⚠️ Linha ${i + 1} ignorada: valor ausente`);
+              continue;
+            }
+
+            let formattedDate: string;
+            if (typeof issueDate === 'number') {
+              const jsDate = XLSX.SSF.parse_date_code(issueDate);
+              formattedDate = `${jsDate.y}-${String(jsDate.m).padStart(2, '0')}-${String(jsDate.d).padStart(2, '0')}`;
+            } else if (typeof issueDate === 'string') {
+              const dateParts = issueDate.split('/');
+              if (dateParts.length === 3) {
+                formattedDate = `${dateParts[2]}-${dateParts[1].padStart(2, '0')}-${dateParts[0].padStart(2, '0')}`;
+              } else {
+                console.log(`⚠️ Linha ${i + 1} ignorada: formato de data inválido`);
+                continue;
+              }
+            } else {
+              console.log(`⚠️ Linha ${i + 1} ignorada: data em formato desconhecido`);
+              continue;
+            }
+
+            const parsedAmount = parseFloat(String(amount).replace(',', '.'));
+            if (isNaN(parsedAmount)) {
+              console.log(`⚠️ Linha ${i + 1} ignorada: valor inválido`);
+              continue;
+            }
+
+            revenuesDRE.push({
+              status: 'recebida',
+              business_unit: String(businessUnitNum),
+              chart_of_accounts: 'Receita Bruta',
+              issue_date: formattedDate,
+              amount: parsedAmount
+            });
+          } catch (rowError) {
+            console.error(`❌ Erro ao processar linha ${i + 1}:`, rowError);
+            continue;
+          }
+        }
+
+        if (revenuesDRE.length === 0) {
+          throw new Error('Nenhum registro válido foi encontrado no arquivo. Verifique se o formato está correto.');
+        }
+
+        console.log(`✅ Receita DRE - Processados ${revenuesDRE.length} registros com sucesso`);
+        resolve(revenuesDRE);
+      } catch (error) {
+        console.error('❌ Erro ao processar Receita DRE:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido ao processar arquivo';
+        reject(new Error(errorMessage));
+      }
+    };
+
+    reader.onerror = (error) => {
+      console.error('❌ Erro ao ler arquivo:', error);
+      reject(new Error('Falha ao ler o arquivo. Verifique se o arquivo está corrompido.'));
+    };
+
+    reader.readAsBinaryString(file);
+  });
+};
+
+export const processCMVDREFile = (file: File): Promise<any[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        console.log('🔄 Iniciando processamento de CMV DRE...');
+        const data = e.target?.result;
+
+        if (!data) {
+          throw new Error('Arquivo vazio ou não pôde ser lido');
+        }
+
+        const workbook = XLSX.read(data, { type: 'binary' });
+        console.log('📊 Planilhas disponíveis:', workbook.SheetNames);
+
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        console.log(`📋 Total de linhas no arquivo: ${jsonData.length}`);
+        console.log('📋 Cabeçalho (linha 1):', jsonData[0]);
+        console.log('📋 Primeira linha de dados (linha 2):', jsonData[1]);
+
+        if (jsonData.length < 2) {
+          throw new Error('Arquivo não contém dados suficientes (necessário pelo menos 2 linhas: cabeçalho + dados)');
+        }
+
+        const cmvDRE: any[] = [];
+        let totalProcessed = 0;
+        let totalIgnored = 0;
+
+        for (let i = 1; i < jsonData.length; i++) {
+          try {
+            const row = jsonData[i] as any[];
+
+            if (!row || row.length === 0) continue;
+
+            const status = row[0];
+            const businessUnit = row[1];
+            const chartOfAccounts = row[2];
+            const issueDate = row[3];
+            const amount = row[4];
+
+            console.log(`📋 Linha ${i + 1} - Raw data:`, { status, businessUnit, chartOfAccounts, issueDate, amount });
+
+            if (!status || !businessUnit || !chartOfAccounts || !issueDate) {
+              console.log(`⚠️ Linha ${i + 1} ignorada: dados incompletos`);
+              totalIgnored++;
+              continue;
+            }
+
+            const statusStr = String(status).toLowerCase().trim();
+            console.log(`🔍 Linha ${i + 1} - Status comparação: "${statusStr}" === "pago"?`, statusStr === 'pago');
+            if (statusStr !== 'pago') {
+              console.log(`⚠️ Linha ${i + 1} ignorada: Status deve ser "Pago", encontrado: "${status}"`);
+              totalIgnored++;
+              continue;
+            }
+
+            const chartStr = String(chartOfAccounts).trim().toUpperCase();
+            console.log(`🔍 Linha ${i + 1} - Plano de Contas comparação: "${chartStr}" === "CMV"?`, chartStr === 'CMV');
+            if (chartStr !== 'CMV') {
+              console.log(`⚠️ Linha ${i + 1} ignorada: Plano de Contas deve ser "CMV", encontrado: "${chartOfAccounts}"`);
+              totalIgnored++;
+              continue;
+            }
+
+            const businessUnitNum = typeof businessUnit === 'number' ? businessUnit : parseInt(String(businessUnit));
+            if (isNaN(businessUnitNum)) {
+              console.log(`⚠️ Linha ${i + 1} ignorada: Unidade de Negócio deve ser um número, encontrado: "${businessUnit}"`);
+              totalIgnored++;
+              continue;
+            }
+
+            if (amount === undefined || amount === null || amount === '') {
+              console.log(`⚠️ Linha ${i + 1} ignorada: valor ausente`);
+              totalIgnored++;
+              continue;
+            }
+
+            let formattedDate: string;
+            if (typeof issueDate === 'number') {
+              const jsDate = XLSX.SSF.parse_date_code(issueDate);
+              formattedDate = `${jsDate.y}-${String(jsDate.m).padStart(2, '0')}-${String(jsDate.d).padStart(2, '0')}`;
+            } else if (typeof issueDate === 'string') {
+              const dateParts = issueDate.split('/');
+              if (dateParts.length === 3) {
+                formattedDate = `${dateParts[2]}-${dateParts[1].padStart(2, '0')}-${dateParts[0].padStart(2, '0')}`;
+              } else {
+                console.log(`⚠️ Linha ${i + 1} ignorada: formato de data inválido`);
+                totalIgnored++;
+                continue;
+              }
+            } else {
+              console.log(`⚠️ Linha ${i + 1} ignorada: data em formato desconhecido`, typeof issueDate, issueDate);
+              totalIgnored++;
+              continue;
+            }
+
+            const parsedAmount = parseFloat(String(amount).replace(',', '.'));
+            if (isNaN(parsedAmount)) {
+              console.log(`⚠️ Linha ${i + 1} ignorada: valor inválido`);
+              totalIgnored++;
+              continue;
+            }
+
+            console.log(`✅ Linha ${i + 1} - Registro válido processado`);
+            cmvDRE.push({
+              status: 'pago',
+              business_unit: String(businessUnitNum),
+              chart_of_accounts: 'CMV',
+              issue_date: formattedDate,
+              amount: parsedAmount
+            });
+            totalProcessed++;
+          } catch (rowError) {
+            console.error(`❌ Erro ao processar linha ${i + 1}:`, rowError);
+            totalIgnored++;
+            continue;
+          }
+        }
+
+        console.log(`\n📊 RESUMO DO PROCESSAMENTO:`);
+        console.log(`✅ Registros processados: ${totalProcessed}`);
+        console.log(`⚠️ Linhas ignoradas: ${totalIgnored}`);
+        console.log(`📋 Total de linhas (exceto cabeçalho): ${jsonData.length - 1}`);
+
+        if (cmvDRE.length === 0) {
+          console.error('❌ ERRO: Nenhum registro válido foi encontrado!');
+          console.error('Verifique os logs acima para entender por que as linhas foram ignoradas.');
+          throw new Error('Nenhum registro válido foi encontrado no arquivo. Verifique se o formato está correto.');
+        }
+
+        console.log(`✅ CMV DRE - Processados ${cmvDRE.length} registros com sucesso`);
+        resolve(cmvDRE);
+      } catch (error) {
+        console.error('❌ Erro ao processar CMV DRE:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido ao processar arquivo';
+        reject(new Error(errorMessage));
+      }
+    };
+
+    reader.onerror = (error) => {
+      console.error('❌ Erro ao ler arquivo:', error);
+      reject(new Error('Falha ao ler o arquivo. Verifique se o arquivo está corrompido.'));
+    };
+
+    reader.readAsBinaryString(file);
+  });
+};
+
+export const processInitialBalancesFile = (file: File): Promise<any[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        console.log('📊 Iniciando processamento de Saldos Bancários...');
+        console.log(`Total de linhas no arquivo: ${jsonData.length}`);
+
+        const initialBalances: any[] = [];
+        let totalProcessed = 0;
+        let totalIgnored = 0;
+
+        for (let i = 1; i < jsonData.length; i++) {
+          const row: any = jsonData[i];
+
+          if (!row || row.length === 0 || !row[0]) {
+            totalIgnored++;
+            continue;
+          }
+
+          try {
+            const businessUnitRaw = row[0];
+            const bankName = String(row[1] || 'Banco').trim();
+            const balanceRaw = row[2];
+            const dateRaw = row[3];
+
+            const businessUnitNum = parseInt(String(businessUnitRaw).replace(/\D/g, ''));
+            if (isNaN(businessUnitNum)) {
+              console.warn(`⚠️ Linha ${i + 1}: Unidade de Negócio inválida - ignorando`);
+              totalIgnored++;
+              continue;
+            }
+
+            const parsedAmount = parseFloat(String(balanceRaw).replace(/[^0-9.-]/g, ''));
+            if (isNaN(parsedAmount)) {
+              console.warn(`⚠️ Linha ${i + 1}: Saldo inválido - ignorando`);
+              totalIgnored++;
+              continue;
+            }
+
+            let formattedDate = '';
+            if (typeof dateRaw === 'number') {
+              const excelDate = XLSX.SSF.parse_date_code(dateRaw);
+              const year = excelDate.y;
+              const month = String(excelDate.m).padStart(2, '0');
+              const day = String(excelDate.d).padStart(2, '0');
+              formattedDate = `${year}-${month}-${day}`;
+            } else if (typeof dateRaw === 'string') {
+              const parts = dateRaw.split('/');
+              if (parts.length === 3) {
+                const day = parts[0].padStart(2, '0');
+                const month = parts[1].padStart(2, '0');
+                const year = parts[2].length === 2 ? '20' + parts[2] : parts[2];
+                formattedDate = `${year}-${month}-${day}`;
+              }
+            }
+
+            if (!formattedDate) {
+              console.warn(`⚠️ Linha ${i + 1}: Data inválida - usando data atual`);
+              formattedDate = new Date().toISOString().split('T')[0];
+            }
+
+            initialBalances.push({
+              business_unit: String(businessUnitNum),
+              bank_name: bankName,
+              balance: parsedAmount,
+              balance_date: formattedDate
+            });
+            totalProcessed++;
+          } catch (rowError) {
+            console.error(`❌ Erro ao processar linha ${i + 1}:`, rowError);
+            totalIgnored++;
+            continue;
+          }
+        }
+
+        console.log(`\n📊 RESUMO DO PROCESSAMENTO:`);
+        console.log(`✅ Registros processados: ${totalProcessed}`);
+        console.log(`⚠️ Linhas ignoradas: ${totalIgnored}`);
+
+        if (initialBalances.length === 0) {
+          throw new Error('Nenhum registro válido foi encontrado no arquivo.');
+        }
+
+        console.log(`✅ Saldos Bancários - Processados ${initialBalances.length} registros com sucesso`);
+        resolve(initialBalances);
+      } catch (error) {
+        console.error('❌ Erro ao processar Saldos Bancários:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido ao processar arquivo';
+        reject(new Error(errorMessage));
+      }
+    };
+
+    reader.onerror = (error) => {
+      console.error('❌ Erro ao ler arquivo:', error);
+      reject(new Error('Falha ao ler o arquivo. Verifique se o arquivo está corrompido.'));
+    };
+
+    reader.readAsBinaryString(file);
+  });
+};
