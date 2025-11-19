@@ -392,16 +392,9 @@ export const DREPage: React.FC<DREPageProps> = ({
     return expandedAccounts[account.parent] === true;
   };
 
-  // Helper para calcular valores das contas
-  const getAccountValue = (accountName: string, month: 'current' | 'previous'): number => {
-    // Por enquanto retorna 0, depois vamos mapear com os dados reais
-    const { start: currentStart, end: currentEnd } = getCurrentMonthDates();
-    const { start: previousStart, end: previousEnd } = getPreviousMonthDates();
-
-    const startDate = month === 'current' ? currentStart : previousStart;
-    const endDate = month === 'current' ? currentEnd : previousEnd;
-
-    // Mapear contas para dados reais
+  // Calcula o valor direto de uma conta a partir dos dados financeiros
+  const getDirectAccountValue = (accountName: string, startDate: string, endDate: string): number => {
+    // Mapear contas especiais
     if (accountName === 'Receita') {
       return calculateRevenue(startDate, endDate);
     }
@@ -409,8 +402,129 @@ export const DREPage: React.FC<DREPageProps> = ({
       return calculateCMV(startDate, endDate);
     }
 
-    // Para contas analíticas, retornar 0 por enquanto (depois vamos mapear)
-    return 0;
+    // Para outras contas, buscar em accountsPayable e financialTransactions
+    let total = 0;
+
+    // Buscar em accountsPayable
+    const apValue = accountsPayable
+      .filter(ap => {
+        const dateMatch = ap.payment_date >= startDate && ap.payment_date <= endDate;
+        const accountMatch = ap.chart_of_accounts === accountName;
+        const companyMatch = isCompanyFiltered(ap.business_unit);
+        return dateMatch && accountMatch && companyMatch;
+      })
+      .reduce((sum, ap) => sum + parseFloat(ap.amount || 0), 0);
+
+    // Buscar em financialTransactions (apenas valores negativos para despesas)
+    const ftValue = financialTransactions
+      .filter(ft => {
+        const dateMatch = ft.transaction_date >= startDate && ft.transaction_date <= endDate;
+        const accountMatch = ft.chart_of_accounts === accountName;
+        const isNegative = parseFloat(ft.amount || 0) < 0;
+        const companyMatch = isCompanyFiltered(ft.business_unit);
+        return dateMatch && accountMatch && companyMatch && isNegative;
+      })
+      .reduce((sum, ft) => sum + Math.abs(parseFloat(ft.amount || 0)), 0);
+
+    total = apValue + ftValue;
+    return total;
+  };
+
+  // Calcula o valor de uma conta recursivamente (soma das subcontas)
+  const getAccountValueRecursive = (account: any, month: 'current' | 'previous'): number => {
+    const { start: currentStart, end: currentEnd } = getCurrentMonthDates();
+    const { start: previousStart, end: previousEnd } = getPreviousMonthDates();
+
+    const startDate = month === 'current' ? currentStart : previousStart;
+    const endDate = month === 'current' ? currentEnd : previousEnd;
+
+    // Se a conta tem fórmula 'sum', calcular a soma das subcontas
+    if (account.formula === 'sum') {
+      // Encontrar todas as subcontas desta conta
+      const subAccounts = dreAccountStructure.filter(
+        acc => acc.parent === account.id || acc.parent === account.name
+      );
+
+      // Somar recursivamente todas as subcontas
+      let sum = 0;
+      subAccounts.forEach(subAccount => {
+        sum += getAccountValueRecursive(subAccount, month);
+      });
+
+      return sum;
+    }
+
+    // Se a conta tem uma fórmula específica (como receita-deducoes)
+    if (account.formula && account.formula !== 'sum') {
+      // Implementar fórmulas específicas se necessário
+      if (account.formula === 'receita-deducoes') {
+        const receita = getAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'receita') || { name: 'Receita' },
+          month
+        );
+        const deducoes = getAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'deducoes') || { name: 'Deduções' },
+          month
+        );
+        return receita - deducoes;
+      }
+      if (account.formula === 'receitaliq-cmv') {
+        const receitaLiq = getAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'receita-liquida') || { name: 'Receita Líquida' },
+          month
+        );
+        const cmv = getAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'cmv') || { name: 'CMV' },
+          month
+        );
+        return receitaLiq - cmv;
+      }
+      if (account.formula === 'lucrobruto-despop') {
+        const lucroBruto = getAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'lucro-bruto') || { name: 'Lucro Bruto' },
+          month
+        );
+        const despesasOp = getAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'despesas-op') || { name: 'Despesas Operacionais' },
+          month
+        );
+        return lucroBruto - despesasOp;
+      }
+      if (account.formula === 'ebitda-despnaoop') {
+        const ebitda = getAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'ebitda') || { name: 'EBITDA' },
+          month
+        );
+        const despesasNaoOp = getAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'despesas-nao-op') || { name: 'Despesas não operacionais' },
+          month
+        );
+        return ebitda - despesasNaoOp;
+      }
+    }
+
+    // Se não tem fórmula ou é uma conta editável, buscar valor direto
+    return getDirectAccountValue(account.name || account.id, startDate, endDate);
+  };
+
+  // Helper para calcular valores das contas
+  const getAccountValue = (accountName: string, month: 'current' | 'previous'): number => {
+    // Encontrar a conta na estrutura
+    const account = dreAccountStructure.find(
+      acc => acc.name === accountName || acc.id === accountName
+    );
+
+    if (!account) {
+      // Se não encontrou, tentar buscar valor direto
+      const { start: currentStart, end: currentEnd } = getCurrentMonthDates();
+      const { start: previousStart, end: previousEnd } = getPreviousMonthDates();
+      const startDate = month === 'current' ? currentStart : previousStart;
+      const endDate = month === 'current' ? currentEnd : previousEnd;
+      return getDirectAccountValue(accountName, startDate, endDate);
+    }
+
+    // Calcular recursivamente
+    return getAccountValueRecursive(account, month);
   };
 
   // Helper para renderizar célula de orçamento editável

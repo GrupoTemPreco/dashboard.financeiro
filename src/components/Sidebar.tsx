@@ -98,7 +98,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const pages = [
     { id: 'cashflow', name: 'Fluxo de Caixa', icon: TrendingUp },
-    { id: 'analytical', name: 'Dados Analíticos', icon: BarChart3 },
     { id: 'dre', name: 'DRE', icon: FileText },
     { id: 'import', name: 'Importar Dados', icon: Upload }
   ];
