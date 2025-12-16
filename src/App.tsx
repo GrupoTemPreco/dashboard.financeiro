@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { KPICard } from './components/KPICard';
 import { KPIDetailModal } from './components/KPIDetailModal';
@@ -11,10 +11,12 @@ import { AnalyticalInsights } from './components/AnalyticalInsights';
 import { ExpenseBreakdown } from './components/ExpenseBreakdown';
 import { DataImport } from './components/DataImport';
 import { DREPage } from './components/DREPage';
+import { ConfirmOverwriteModal } from './components/ConfirmOverwriteModal';
+import { ErrorModal } from './components/ErrorModal';
 import { FinancialRecord, Filters } from './types/financial';
-import { processExcelFile, generateMockData, processCompaniesFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile } from './utils/excelProcessor';
-import { filterData, calculateKPIs, generateCalendarData } from './utils/dataProcessor';
-import { DollarSign, TrendingUp, Pill, ArrowUpDown, ArrowDown, ArrowUp, Calculator, Target, List } from 'lucide-react';
+import { processExcelFile, processCompaniesFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, validateFileFormat } from './utils/excelProcessor';
+import { filterData, calculateKPIs } from './utils/dataProcessor';
+import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List } from 'lucide-react';
 import { supabase } from './lib/supabase';
 
 function App() {
@@ -53,10 +55,6 @@ function App() {
   const [importedFiles, setImportedFiles] = useState<any[]>([
     // Start with empty imported files list
   ]);
-  const [initialBalance, setInitialBalance] = useState({ date: new Date().toISOString().split('T')[0], balance: 0 });
-  const [initialBalanceDate, setInitialBalanceDate] = useState(new Date().toISOString().split('T')[0]);
-  const [isEditingBalance, setIsEditingBalance] = useState(false);
-  const [tempBalance, setTempBalance] = useState({ date: new Date().toISOString().split('T')[0], balance: 0 });
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
     title: string;
@@ -68,6 +66,32 @@ function App() {
     data: [],
     type: 'generic'
   });
+  const [overwriteModal, setOverwriteModal] = useState<{
+    isOpen: boolean;
+    fileName: string;
+    fileType: string;
+    existingImportId: string | null;
+    pendingFile: File | null;
+    pendingType: string | null;
+    pendingIndex?: number;
+    pendingTotal?: number;
+  }>({
+    isOpen: false,
+    fileName: '',
+    fileType: '',
+    existingImportId: null,
+    pendingFile: null,
+    pendingType: null
+  });
+  const [errorModal, setErrorModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+  }>({
+    isOpen: false,
+    title: '',
+    message: ''
+  });
 
   // Helper function to normalize business unit codes (remove leading zeros)
   const normalizeCode = (code: any): string => {
@@ -77,11 +101,48 @@ function App() {
     return isNaN(numCode) ? strCode : String(numCode);
   };
 
+  // Test Supabase connection on mount
+  useEffect(() => {
+    testSupabaseConnection();
+  }, []);
+
   // Load data from Supabase on mount
   useEffect(() => {
     loadDataFromSupabase();
     loadImportsFromSupabase();
   }, []);
+
+  const testSupabaseConnection = async () => {
+    console.log('🔌 Testando conexão com Supabase...');
+    console.log('📍 URL:', import.meta.env.VITE_SUPABASE_URL);
+    console.log('🔑 Chave anônima configurada:', import.meta.env.VITE_SUPABASE_ANON_KEY ? 'Sim' : 'Não');
+    
+    try {
+      // Teste básico: verificar se o cliente foi criado
+      if (!supabase) {
+        throw new Error('Cliente Supabase não foi criado');
+      }
+      console.log('✅ Cliente Supabase criado com sucesso');
+
+      // Teste de conexão: fazer uma query simples (mesmo que retorne vazio, confirma que a conexão funciona)
+      const { error, count } = await supabase
+        .from('companies')
+        .select('*', { count: 'exact', head: true });
+
+      if (error) {
+        console.error('❌ Erro na conexão:', error.message);
+        console.error('Código do erro:', error.code);
+        console.error('Detalhes completos:', error);
+        return;
+      }
+
+      console.log('✅ Conexão com Supabase funcionando perfeitamente!');
+      console.log(`📊 Total de registros na tabela companies: ${count || 0}`);
+    } catch (error: any) {
+      console.error('❌ Erro ao testar conexão:', error.message);
+      console.error('Erro completo:', error);
+    }
+  };
 
   const loadDataFromSupabase = async () => {
     console.log('🔄 Starting to load data from Supabase...');
@@ -106,7 +167,7 @@ function App() {
       // Load accounts payable
       console.log('💰 Loading accounts payable...');
       const { data: apData, error: apError } = await supabase
-        .from('accounts_payable')
+        .from('CONTAS A PAGAR')
         .select('*')
         .order('payment_date', { ascending: false });
 
@@ -148,7 +209,7 @@ function App() {
 
       // Load forecasted entries
       const { data: forecastedData, error: forecastedError } = await supabase
-        .from('forecasted_entries')
+        .from('PREVISTOS')
         .select('*')
         .order('due_date', { ascending: false });
 
@@ -174,10 +235,10 @@ function App() {
         if (revenuesDREData.length > 0) {
           console.log('📋 Sample revenues DRE data (first 3 records):', revenuesDREData.slice(0, 3));
           console.log('📅 Date range in revenues DRE:', {
-            min: revenuesDREData.map(r => r.issue_date).sort()[0],
-            max: revenuesDREData.map(r => r.issue_date).sort().reverse()[0]
+            min: revenuesDREData.map((r: any) => r.issue_date).sort()[0],
+            max: revenuesDREData.map((r: any) => r.issue_date).sort().reverse()[0]
           });
-          console.log('🏢 Business units in revenues DRE:', [...new Set(revenuesDREData.map(r => r.business_unit))]);
+          console.log('🏢 Business units in revenues DRE:', [...new Set(revenuesDREData.map((r: any) => r.business_unit))]);
         } else {
           console.warn('⚠️ No revenues DRE data found in database');
         }
@@ -202,10 +263,10 @@ function App() {
         if (cmvDREData.length > 0) {
           console.log('📋 Sample CMV DRE data (first 3 records):', cmvDREData.slice(0, 3));
           console.log('📅 Date range in CMV DRE:', {
-            min: cmvDREData.map(c => c.issue_date).sort()[0],
-            max: cmvDREData.map(c => c.issue_date).sort().reverse()[0]
+            min: cmvDREData.map((c: any) => c.issue_date).sort()[0],
+            max: cmvDREData.map((c: any) => c.issue_date).sort().reverse()[0]
           });
-          console.log('🏢 Business units in CMV DRE:', [...new Set(cmvDREData.map(c => c.business_unit))]);
+          console.log('🏢 Business units in CMV DRE:', [...new Set(cmvDREData.map((c: any) => c.business_unit))]);
         } else {
           console.warn('⚠️ No CMV DRE data found in database');
         }
@@ -244,7 +305,7 @@ function App() {
       if (error) throw error;
 
       if (importsData) {
-        const formattedImports = importsData.map(imp => ({
+        const formattedImports = importsData.map((imp: any) => ({
           id: imp.id,
           name: imp.file_name,
           type: imp.file_type,
@@ -278,7 +339,145 @@ function App() {
     }
   };
 
-  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances', currentIndex?: number, totalFiles?: number) => {
+  const checkDuplicateFile = async (fileName: string, fileType: string): Promise<string | null> => {
+    try {
+      const { data, error } = await supabase
+        .from('imports')
+        .select('id')
+        .eq('file_name', fileName)
+        .eq('file_type', fileType)
+        .order('imported_at', { ascending: false })
+        .limit(1);
+
+      if (error) {
+        console.error('Error checking duplicate:', error);
+        return null;
+      }
+
+      // Retorna o ID do primeiro arquivo encontrado (o mais recente)
+      return data && data.length > 0 ? data[0].id : null;
+    } catch (error) {
+      console.error('Error checking duplicate file:', error);
+      return null;
+    }
+  };
+
+  const deleteOldImportData = async (importId: string, fileType: string) => {
+    try {
+      console.log(`🗑️ Deletando dados antigos do import ${importId} (tipo: ${fileType})`);
+      
+      // Delete data from the appropriate table based on file type
+      if (fileType === 'accounts_payable') {
+        const { error } = await supabase
+          .from('CONTAS A PAGAR')
+          .delete()
+          .eq('import_id', importId);
+        if (error) throw error;
+        console.log('✅ Dados de contas a pagar deletados');
+      } else if (fileType === 'revenues') {
+        const { error } = await supabase
+          .from('revenues')
+          .delete()
+          .eq('import_id', importId);
+        if (error) throw error;
+        console.log('✅ Dados de receitas deletados');
+      } else if (fileType === 'financial_transactions') {
+        const { error } = await supabase
+          .from('financial_transactions')
+          .delete()
+          .eq('import_id', importId);
+        if (error) throw error;
+        console.log('✅ Dados de transações financeiras deletados');
+      } else if (fileType === 'forecasted_entries') {
+        const { error } = await supabase
+          .from('PREVISTOS')
+          .delete()
+          .eq('import_id', importId);
+        if (error) throw error;
+        console.log('✅ Dados de lançamentos previstos deletados');
+      } else if (fileType === 'revenues_dre') {
+        const { error } = await supabase
+          .from('revenues_dre')
+          .delete()
+          .eq('import_id', importId);
+        if (error) throw error;
+        console.log('✅ Dados de receitas DRE deletados');
+      } else if (fileType === 'cmv_dre') {
+        const { error } = await supabase
+          .from('cmv_dre')
+          .delete()
+          .eq('import_id', importId);
+        if (error) throw error;
+        console.log('✅ Dados de CMV DRE deletados');
+      } else if (fileType === 'initial_balances') {
+        const { error } = await supabase
+          .from('initial_balances')
+          .delete()
+          .eq('import_id', importId);
+        if (error) throw error;
+        console.log('✅ Dados de saldos iniciais deletados');
+      } else if (fileType === 'companies') {
+        // Para companies, não deletamos por import_id pois não há essa coluna
+        // O upsert na função handleDataImport já atualiza os dados existentes
+        console.log('ℹ️ Companies usa upsert, não é necessário deletar dados antigos');
+      }
+
+      // Delete the import record
+      const { error: deleteError } = await supabase
+        .from('imports')
+        .delete()
+        .eq('id', importId);
+
+      if (deleteError) throw deleteError;
+      console.log('✅ Registro de import deletado');
+
+      // Remove from UI
+      setImportedFiles(prev => prev.filter(f => f.id !== importId));
+      console.log('✅ Arquivo removido da UI');
+    } catch (error) {
+      console.error('❌ Erro ao deletar dados antigos:', error);
+      throw error;
+    }
+  };
+
+  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances', currentIndex?: number, totalFiles?: number, shouldOverwrite?: boolean, existingImportId?: string | null) => {
+    // Validar formato do arquivo antes de processar
+    if (type !== 'transactions') {
+      const validation = await validateFileFormat(file, type);
+      if (!validation.isValid) {
+        setErrorModal({
+          isOpen: true,
+          title: 'Arquivo não corresponde ao tipo esperado',
+          message: `${validation.errorMessage}\n\nPor favor, verifique se você está importando o arquivo correto na seção adequada.`
+        });
+        return; // Não processar arquivo inválido
+      }
+    }
+
+    // Verificar duplicatas antes de processar (a menos que seja uma sobreposição confirmada)
+    if (!shouldOverwrite) {
+      const duplicateImportId = await checkDuplicateFile(file.name, type);
+      if (duplicateImportId) {
+        // Mostrar modal de confirmação
+        setOverwriteModal({
+          isOpen: true,
+          fileName: file.name,
+          fileType: type,
+          existingImportId: duplicateImportId,
+          pendingFile: file,
+          pendingType: type,
+          pendingIndex: currentIndex,
+          pendingTotal: totalFiles
+        });
+        return; // Não processar ainda, aguardar confirmação do usuário
+      }
+    }
+
+    // Se deve sobrepor e há um importId existente, deletar os dados antigos
+    if (shouldOverwrite && existingImportId) {
+      await deleteOldImportData(existingImportId, type);
+    }
+
     setLoading({
       isLoading: true,
       currentFile: file.name,
@@ -343,7 +542,7 @@ function App() {
 
         // Save to Supabase
         const { error } = await supabase
-          .from('accounts_payable')
+          .from('CONTAS A PAGAR')
           .insert(recordsWithImportId);
 
         if (error) throw error;
@@ -412,9 +611,9 @@ function App() {
 
         console.log('Records to insert:', recordsWithImportId);
 
-        // Save to Supabase forecasted_entries table
+        // Save to Supabase PREVISTOS table
         const { data: insertedData, error } = await supabase
-          .from('forecasted_entries')
+          .from('PREVISTOS')
           .insert(recordsWithImportId)
           .select();
 
@@ -1627,7 +1826,8 @@ function App() {
     const endDate = new Date(today.getTime() + 90 * 24 * 60 * 60 * 1000); // Today + 90 days
 
     const days: any[] = [];
-    let currentBalance = { forecasted: initialBalance.balance, actual: initialBalance.balance };
+    const initialBalanceValue = kpiData.initialBalance.actual;
+    let currentBalance = { forecasted: initialBalanceValue, actual: initialBalanceValue };
 
     for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
       const dateStr = d.toISOString().split('T')[0];
@@ -1676,7 +1876,7 @@ function App() {
     }
 
     return days;
-  }, [getFilteredRevenues, getFilteredAccountsPayable, getFilteredForecastedEntries, getFilteredTransactions, filters, initialBalance]);
+  }, [getFilteredRevenues, getFilteredAccountsPayable, getFilteredForecastedEntries, getFilteredTransactions, filters, kpiData]);
 
   const calendarData = useMemo(() => {
     const year = calendarDate.year;
@@ -2184,9 +2384,6 @@ function App() {
       if (day.forecastedBalance < 0) {
         // Find what's causing the negative balance
         const previousDay = index > 0 ? dailyCashFlow[index - 1] : null;
-        const dailyChange = previousDay
-          ? day.forecastedBalance - previousDay.forecastedBalance
-          : day.forecastedBalance;
 
         // Analyze the cause
         let reason = '';
@@ -2501,6 +2698,32 @@ function App() {
         title={modalState.title}
         data={modalState.data}
         type={modalState.type}
+      />
+
+      <ConfirmOverwriteModal
+        isOpen={overwriteModal.isOpen}
+        onClose={() => setOverwriteModal({ ...overwriteModal, isOpen: false })}
+        onConfirm={async () => {
+          if (overwriteModal.pendingFile && overwriteModal.pendingType) {
+            setOverwriteModal({ ...overwriteModal, isOpen: false });
+            await handleDataImport(
+              overwriteModal.pendingFile,
+              overwriteModal.pendingType as any,
+              overwriteModal.pendingIndex,
+              overwriteModal.pendingTotal,
+              true, // shouldOverwrite
+              overwriteModal.existingImportId
+            );
+          }
+        }}
+        fileName={overwriteModal.fileName}
+      />
+
+      <ErrorModal
+        isOpen={errorModal.isOpen}
+        onClose={() => setErrorModal({ ...errorModal, isOpen: false })}
+        title={errorModal.title}
+        message={errorModal.message}
       />
     </div>
   );

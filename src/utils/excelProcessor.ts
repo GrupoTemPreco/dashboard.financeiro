@@ -1,6 +1,306 @@
 import * as XLSX from 'xlsx';
 import { FinancialRecord, Company, AccountsPayable, Revenue, FinancialTransaction } from '../types/financial';
 
+export type FileType = 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'revenues_dre' | 'cmv_dre' | 'initial_balances';
+
+export interface ValidationResult {
+  isValid: boolean;
+  errorMessage?: string;
+}
+
+export const validateFileFormat = (file: File, expectedType: FileType): Promise<ValidationResult> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          resolve({
+            isValid: false,
+            errorMessage: 'O arquivo não contém planilhas válidas.'
+          });
+          return;
+        }
+
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        if (jsonData.length < 2) {
+          resolve({
+            isValid: false,
+            errorMessage: 'O arquivo não contém dados suficientes (necessário pelo menos cabeçalho + 1 linha de dados).'
+          });
+          return;
+        }
+
+        // Pegar cabeçalho (primeira linha) e algumas linhas de dados para validação
+        const header = jsonData[0] as any[];
+        const sampleRows = jsonData.slice(1, Math.min(6, jsonData.length)); // Primeiras 5 linhas de dados
+
+        let validationResult: ValidationResult = { isValid: true };
+
+        switch (expectedType) {
+          case 'companies':
+            // Companies: A=Código, B=Grupo, C=Nome
+            // Não deve ter coluna de Status, Credor, Data, Valor
+            if (header.length >= 4) {
+              const hasStatus = String(header[0] || '').toLowerCase().includes('status');
+              const hasCredor = header.some((col: any) => String(col || '').toLowerCase().includes('credor') || String(col || '').toLowerCase().includes('fornecedor'));
+              const hasDate = header.some((col: any) => String(col || '').toLowerCase().includes('data') || String(col || '').toLowerCase().includes('date'));
+              const hasValor = header.some((col: any) => String(col || '').toLowerCase().includes('valor') || String(col || '').toLowerCase().includes('amount'));
+              
+              if (hasStatus || hasCredor || hasDate || hasValor) {
+                validationResult = {
+                  isValid: false,
+                  errorMessage: 'Este arquivo parece ser de Contas a Pagar, Receitas ou outro tipo, não de Cadastro de Empresas. O arquivo de empresas deve ter apenas: Código, Grupo e Nome da Empresa.'
+                };
+              }
+            }
+            break;
+
+          case 'accounts_payable':
+            // Accounts Payable: A=Status, B=Unidade, C=Plano de Contas, D=Credor, E=Data Pagamento, F=Valor
+            // Deve ter Status, Credor, Data, Valor
+            if (header.length < 4) {
+              validationResult = {
+                isValid: false,
+                errorMessage: 'O arquivo de Contas a Pagar deve ter pelo menos 4 colunas: Status, Unidade de Negócio, Plano de Contas, Credor, Data de Pagamento e Valor.'
+              };
+            } else {
+              // Verificar se tem coluna de Banco (típica de Saldos Bancários)
+              const hasBank = header.some((col: any) => String(col || '').toLowerCase().includes('banco') || String(col || '').toLowerCase().includes('bank'));
+              // Verificar se tem apenas 3 colunas principais (típico de Saldos)
+              if (hasBank && header.length <= 4) {
+                validationResult = {
+                  isValid: false,
+                  errorMessage: 'Este arquivo parece ser de Saldos Bancários, não de Contas a Pagar. O arquivo de Contas a Pagar deve ter: Status, Unidade de Negócio, Plano de Contas, Credor, Data de Pagamento e Valor.'
+                };
+              }
+            }
+            break;
+
+          case 'revenues':
+            // Revenues: A=Status, B=Unidade, C=Plano de Contas, D=Data Pagamento, E=Valor
+            // Não deve ter Credor
+            if (header.length < 3) {
+              validationResult = {
+                isValid: false,
+                errorMessage: 'O arquivo de Receitas deve ter pelo menos 3 colunas: Status, Unidade de Negócio, Plano de Contas, Data de Pagamento e Valor.'
+              };
+            } else {
+              const hasCredor = header.some((col: any) => String(col || '').toLowerCase().includes('credor') || String(col || '').toLowerCase().includes('fornecedor'));
+              if (hasCredor && header.length >= 6) {
+                validationResult = {
+                  isValid: false,
+                  errorMessage: 'Este arquivo parece ser de Contas a Pagar (tem coluna Credor), não de Receitas. O arquivo de Receitas não deve ter coluna de Credor.'
+                };
+              }
+            }
+            break;
+
+          case 'financial_transactions':
+            // Financial Transactions: A=Status, B=Unidade, C=Plano de Contas, D=Data, E=Valor
+            // Similar a revenues mas sem data de pagamento específica
+            if (header.length < 3) {
+              validationResult = {
+                isValid: false,
+                errorMessage: 'O arquivo de Lançamentos Financeiros deve ter pelo menos 3 colunas: Status, Unidade de Negócio, Plano de Contas, Data e Valor.'
+              };
+            }
+            break;
+
+          case 'forecasted_entries':
+            // Forecasted Entries: A=Status, B=Unidade, C=Plano de Contas, D=Credor, E=Data Vencimento, F=Valor
+            if (header.length < 4) {
+              validationResult = {
+                isValid: false,
+                errorMessage: 'O arquivo de Lançamentos Previstos deve ter pelo menos 4 colunas: Status, Unidade de Negócio, Plano de Contas, Credor, Data de Vencimento e Valor.'
+              };
+            }
+            break;
+
+          case 'revenues_dre':
+            // Revenues DRE: A=Status (deve ser "Recebida"), B=Unidade, C=Plano de Contas (deve ser "Receita Bruta"), D=Data Emissão, E=Valor
+            if (header.length < 3) {
+              validationResult = {
+                isValid: false,
+                errorMessage: 'O arquivo de Receita DRE deve ter pelo menos 3 colunas: Status, Unidade de Negócio, Plano de Contas, Data de Emissão e Valor.'
+              };
+            } else {
+              // Verificar nas primeiras linhas se o Status é "Recebida" e Plano de Contas é "Receita Bruta"
+              let foundValidRow = false;
+              for (const row of sampleRows) {
+                if (row && row.length >= 3) {
+                  const status = String(row[0] || '').toLowerCase().trim();
+                  const chartOfAccounts = String(row[2] || '').trim();
+                  if (status === 'recebida' && chartOfAccounts.toLowerCase().includes('receita bruta')) {
+                    foundValidRow = true;
+                    break;
+                  }
+                }
+              }
+              
+              // Verificar se tem coluna de Banco (típica de Saldos)
+              const hasBank = header.some((col: any) => String(col || '').toLowerCase().includes('banco') || String(col || '').toLowerCase().includes('bank'));
+              if (hasBank) {
+                validationResult = {
+                  isValid: false,
+                  errorMessage: 'Este arquivo parece ser de Saldos Bancários, não de Receita DRE. O arquivo de Receita DRE deve ter: Status (Recebida), Unidade de Negócio, Plano de Contas (Receita Bruta), Data de Emissão e Valor.'
+                };
+              } else if (!foundValidRow && sampleRows.length > 0) {
+                // Se não encontrou uma linha válida, verificar se tem características de outro tipo
+                const firstRow = sampleRows[0] as any[];
+                if (firstRow && firstRow.length >= 3) {
+                  const status = String(firstRow[0] || '').toLowerCase().trim();
+                  const hasCredor = header.some((col: any) => String(col || '').toLowerCase().includes('credor'));
+                  
+                  if (hasCredor) {
+                    validationResult = {
+                      isValid: false,
+                      errorMessage: 'Este arquivo parece ser de Contas a Pagar ou Lançamentos Previstos (tem coluna Credor), não de Receita DRE. O arquivo de Receita DRE não deve ter coluna de Credor e o Status deve ser "Recebida".'
+                    };
+                  } else if (status === 'pago' || status === 'paga') {
+                    validationResult = {
+                      isValid: false,
+                      errorMessage: 'Este arquivo parece ser de CMV DRE (Status "Pago"), não de Receita DRE. O arquivo de Receita DRE deve ter Status "Recebida" e Plano de Contas "Receita Bruta".'
+                    };
+                  }
+                }
+              }
+            }
+            break;
+
+          case 'cmv_dre':
+            // CMV DRE: A=Status (deve ser "Pago"), B=Unidade, C=Plano de Contas (deve ser "CMV"), D=Data Emissão, E=Valor
+            if (header.length < 3) {
+              validationResult = {
+                isValid: false,
+                errorMessage: 'O arquivo de CMV DRE deve ter pelo menos 3 colunas: Status, Unidade de Negócio, Plano de Contas, Data de Emissão e Valor.'
+              };
+            } else {
+              // Verificar nas primeiras linhas se o Status é "Pago" e Plano de Contas é "CMV"
+              let foundValidRow = false;
+              for (const row of sampleRows) {
+                if (row && row.length >= 3) {
+                  const status = String(row[0] || '').toLowerCase().trim();
+                  const chartOfAccounts = String(row[2] || '').toUpperCase().trim();
+                  if ((status === 'pago' || status === 'paga') && chartOfAccounts === 'CMV') {
+                    foundValidRow = true;
+                    break;
+                  }
+                }
+              }
+              
+              // Verificar se tem coluna de Banco (típica de Saldos)
+              const hasBank = header.some((col: any) => String(col || '').toLowerCase().includes('banco') || String(col || '').toLowerCase().includes('bank'));
+              if (hasBank) {
+                validationResult = {
+                  isValid: false,
+                  errorMessage: 'Este arquivo parece ser de Saldos Bancários, não de CMV DRE. O arquivo de CMV DRE deve ter: Status (Pago), Unidade de Negócio, Plano de Contas (CMV), Data de Emissão e Valor.'
+                };
+              } else if (!foundValidRow && sampleRows.length > 0) {
+                // Se não encontrou uma linha válida, verificar se tem características de outro tipo
+                const firstRow = sampleRows[0] as any[];
+                if (firstRow && firstRow.length >= 3) {
+                  const status = String(firstRow[0] || '').toLowerCase().trim();
+                  const hasCredor = header.some((col: any) => String(col || '').toLowerCase().includes('credor'));
+                  
+                  if (hasCredor) {
+                    validationResult = {
+                      isValid: false,
+                      errorMessage: 'Este arquivo parece ser de Contas a Pagar ou Lançamentos Previstos (tem coluna Credor), não de CMV DRE. O arquivo de CMV DRE não deve ter coluna de Credor e o Status deve ser "Pago".'
+                    };
+                  } else if (status === 'recebida' || status === 'recebido') {
+                    validationResult = {
+                      isValid: false,
+                      errorMessage: 'Este arquivo parece ser de Receita DRE (Status "Recebida"), não de CMV DRE. O arquivo de CMV DRE deve ter Status "Pago" e Plano de Contas "CMV".'
+                    };
+                  }
+                }
+              }
+            }
+            break;
+
+          case 'initial_balances':
+            // Initial Balances: A=Unidade, B=Banco, C=Saldo, D=Data Saldo
+            // Não deve ter Status, Credor, Plano de Contas
+            if (header.length < 3) {
+              validationResult = {
+                isValid: false,
+                errorMessage: 'O arquivo de Saldos Bancários deve ter pelo menos 3 colunas: Unidade de Negócio, Banco, Saldo e Data do Saldo.'
+              };
+            } else {
+              const firstCol = String(header[0] || '').toLowerCase();
+              const hasStatus = firstCol.includes('status');
+              const hasCredor = header.some((col: any) => String(col || '').toLowerCase().includes('credor') || String(col || '').toLowerCase().includes('fornecedor'));
+              const hasChartOfAccounts = header.some((col: any) => String(col || '').toLowerCase().includes('plano') || String(col || '').toLowerCase().includes('chart'));
+              
+              // Verificar nas primeiras linhas se tem Status na primeira coluna (típico de CAP)
+              let hasStatusInData = false;
+              for (const row of sampleRows) {
+                if (row && row.length > 0) {
+                  const firstCell = String(row[0] || '').toLowerCase().trim();
+                  if (firstCell === 'paga' || firstCell === 'pago' || firstCell === 'pendente' || firstCell === 'realizado' || firstCell === 'previsto') {
+                    hasStatusInData = true;
+                    break;
+                  }
+                }
+              }
+              
+              if (hasStatus || hasCredor || hasChartOfAccounts || hasStatusInData) {
+                let detectedType = 'Contas a Pagar';
+                if (hasCredor && hasStatus) {
+                  detectedType = 'Contas a Pagar ou Lançamentos Previstos';
+                } else if (!hasCredor && hasStatus) {
+                  detectedType = 'Receitas ou Lançamentos Financeiros';
+                }
+                
+                validationResult = {
+                  isValid: false,
+                  errorMessage: `Este arquivo parece ser de ${detectedType}, não de Saldos Bancários.\n\nO arquivo de Saldos Bancários deve ter apenas:\n- Coluna A: Unidade de Negócio\n- Coluna B: Banco\n- Coluna C: Saldo\n- Coluna D: Data do Saldo\n\nSem colunas de Status, Credor ou Plano de Contas.`
+                };
+              } else {
+                // Verificar se tem coluna de Banco
+                const hasBank = header.some((col: any) => String(col || '').toLowerCase().includes('banco') || String(col || '').toLowerCase().includes('bank'));
+                if (!hasBank && header.length >= 2) {
+                  // Se não tem "banco" no cabeçalho, verificar se a segunda coluna parece ser um nome de banco
+                  const secondColHeader = String(header[1] || '').toLowerCase();
+                  if (!secondColHeader.includes('banco') && !secondColHeader.includes('bank')) {
+                    validationResult = {
+                      isValid: false,
+                      errorMessage: 'Este arquivo não parece ser de Saldos Bancários. O arquivo de Saldos Bancários deve ter uma coluna "Banco" na segunda coluna (coluna B).'
+                    };
+                  }
+                }
+              }
+            }
+            break;
+        }
+
+        resolve(validationResult);
+      } catch (error) {
+        resolve({
+          isValid: false,
+          errorMessage: `Erro ao validar arquivo: ${error instanceof Error ? error.message : 'Erro desconhecido'}`
+        });
+      }
+    };
+
+    reader.onerror = () => {
+      resolve({
+        isValid: false,
+        errorMessage: 'Falha ao ler o arquivo. Verifique se o arquivo está corrompido.'
+      });
+    };
+
+    reader.readAsBinaryString(file);
+  });
+};
+
 export const processCompaniesFile = (file: File): Promise<Company[]> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
