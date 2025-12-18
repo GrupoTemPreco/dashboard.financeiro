@@ -103,17 +103,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <div className={`${isCollapsed ? 'w-16' : 'w-72'} bg-gradient-to-b from-marsala-700 to-marsala-900 text-white h-full overflow-y-auto shadow-xl transition-all duration-300`}>
-      <div className={`${isCollapsed ? 'p-3' : 'p-6'} border-b border-marsala-700 flex items-center justify-between`}>
+    <div className={`${isCollapsed ? 'w-16' : 'w-72'} bg-gradient-to-b from-slate-950 via-blue-900 to-indigo-900 text-white h-full overflow-y-auto shadow-xl transition-all duration-300`}>
+      <div className={`${isCollapsed ? 'p-3' : 'p-6'} border-b border-sky-700 flex items-center justify-between`}>
         {!isCollapsed && (
           <div>
             <h1 className="text-lg font-bold text-white">Dashboard Financeiro</h1>
-            <p className="text-xs text-marsala-200 mt-1">Rede Tem Preço & X Brother</p>
+            <p className="text-xs text-sky-200 mt-1">Rede Tem Preço & X Brother</p>
           </div>
         )}
         <button
           onClick={onToggleCollapse}
-          className="p-2 rounded-lg bg-marsala-600 hover:bg-marsala-500 transition-colors"
+          className="p-2 rounded-lg bg-sky-500 hover:bg-sky-400 transition-colors"
           title={isCollapsed ? 'Expandir sidebar' : 'Recolher sidebar'}
         >
           {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
@@ -125,7 +125,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div>
           <button
             onClick={onTogglePresentationMode}
-            className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'justify-center'} px-3 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white transition-all duration-200 text-sm`}
+            className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'justify-center'} px-3 py-2 bg-sky-500 hover:bg-sky-400 rounded-lg text-white transition-all duration-200 text-sm`}
             title="Modo Apresentação"
           >
             <Maximize className="w-4 h-4" />
@@ -136,21 +136,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Filters */}
         {!isCollapsed && (
         <div className="space-y-3">
-          <div className="flex items-center text-marsala-100 font-medium mb-3">
+          <div className="flex items-center text-blue-100 font-medium mb-3">
             <Filter className="w-4 h-4 mr-2" />
             Filtros
           </div>
 
           {/* Group Filter */}
           <div>
-            <label className="flex items-center text-xs font-medium text-marsala-200 mb-2">
+            <label className="flex items-center text-xs font-medium text-blue-100 mb-2">
               <Users className="w-4 h-4 mr-2" />
               Grupos
             </label>
             <div className="relative">
               <button
                 onClick={() => setGroupDropdownOpen(!groupDropdownOpen)}
-                className="w-full px-3 py-2 bg-marsala-600 border border-marsala-500 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-marsala-400 focus:border-transparent text-sm text-left flex items-center justify-between"
+                className="w-full px-3 py-2 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm text-left flex items-center justify-between"
               >
                 <span className="truncate">
                   {filters.groups.length === 0 
@@ -158,13 +158,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     : `${filters.groups.length} grupo(s) selecionado(s)`
                   }
                 </span>
-                <ChevronDown className={`w-4 h-4 text-marsala-300 transition-transform ${groupDropdownOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-4 h-4 text-blue-200 transition-transform ${groupDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
               
               {groupDropdownOpen && (
-                <div className="absolute z-10 w-full mt-1 bg-marsala-600 border border-marsala-500 rounded-md shadow-lg max-h-40 overflow-y-auto">
+                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg max-h-40 overflow-y-auto backdrop-blur-sm">
                   {groups.map(group => (
-                    <label key={group} className="flex items-center px-3 py-2 hover:bg-marsala-500 cursor-pointer text-sm">
+                    <label key={group} className="flex items-center px-3 py-2 hover:bg-blue-800 cursor-pointer text-sm">
                       <input
                         type="checkbox"
                         checked={filters.groups.includes(group)}
@@ -183,21 +183,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
               )}
               {groups.length === 0 && (
-                <p className="text-xs text-marsala-300 mt-1">Nenhum grupo disponível</p>
+                <p className="text-xs text-blue-200 mt-1">Nenhum grupo disponível</p>
               )}
             </div>
           </div>
 
           {/* Company Filter */}
           <div>
-            <label className="flex items-center text-xs font-medium text-marsala-200 mb-2">
+            <label className="flex items-center text-xs font-medium text-blue-100 mb-2">
               <Building2 className="w-4 h-4 mr-2" />
               Empresas
             </label>
             <div className="relative">
               <button
                 onClick={() => setCompanyDropdownOpen(!companyDropdownOpen)}
-                className="w-full px-3 py-2 bg-marsala-600 border border-marsala-500 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-marsala-400 focus:border-transparent text-sm text-left flex items-center justify-between"
+                className="w-full px-3 py-2 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm text-left flex items-center justify-between"
               >
                 <span className="truncate">
                   {filters.companies.length === 0 
@@ -205,13 +205,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     : `${filters.companies.length} empresa(s) selecionada(s)`
                   }
                 </span>
-                <ChevronDown className={`w-4 h-4 text-marsala-300 transition-transform ${companyDropdownOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-4 h-4 text-blue-200 transition-transform ${companyDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
               
               {companyDropdownOpen && (
-                <div className="absolute z-10 w-full mt-1 bg-marsala-600 border border-marsala-500 rounded-md shadow-lg max-h-40 overflow-y-auto">
+                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg max-h-40 overflow-y-auto backdrop-blur-sm">
                   {getAvailableCompanies().map((company, index) => (
-                    <label key={`${company.code}-${company.group}-${index}`} className="flex items-center px-3 py-2 hover:bg-marsala-500 cursor-pointer text-sm">
+                    <label key={`${company.code}-${company.group}-${index}`} className="flex items-center px-3 py-2 hover:bg-blue-800 cursor-pointer text-sm">
                       <input
                         type="checkbox"
                         checked={filters.companies.includes(company.name)}
@@ -230,7 +230,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
               )}
               {getAvailableCompanies().length === 0 && (
-                <div className="px-3 py-2 text-xs text-marsala-300">
+                <div className="px-3 py-2 text-xs text-blue-200">
                   {companies.length === 0 ? 'Importe a planilha de empresas primeiro' : 'Nenhuma empresa disponível para os grupos selecionados'}
                 </div>
               )}
@@ -239,14 +239,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Bank Filter */}
           <div>
-            <label className="flex items-center text-xs font-medium text-marsala-200 mb-2">
+            <label className="flex items-center text-xs font-medium text-blue-100 mb-2">
               <Building2 className="w-4 h-4 mr-2" />
               Bancos
             </label>
             <div className="relative">
               <button
                 onClick={() => setBankDropdownOpen(!bankDropdownOpen)}
-                className="w-full px-3 py-2 bg-marsala-600 border border-marsala-500 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-marsala-400 focus:border-transparent text-sm text-left flex items-center justify-between"
+                className="w-full px-3 py-2 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm text-left flex items-center justify-between"
               >
                 <span className="truncate">
                   {filters.banks.length === 0
@@ -254,13 +254,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     : `${filters.banks.length} banco(s) selecionado(s)`
                   }
                 </span>
-                <ChevronDown className={`w-4 h-4 text-marsala-300 transition-transform ${bankDropdownOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-4 h-4 text-blue-200 transition-transform ${bankDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
               {bankDropdownOpen && (
-                <div className="absolute z-10 w-full mt-1 bg-marsala-600 border border-marsala-500 rounded-md shadow-lg max-h-40 overflow-y-auto">
+                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg max-h-40 overflow-y-auto backdrop-blur-sm">
                   {banks.map((bank, index) => (
-                    <label key={`${bank}-${index}`} className="flex items-center px-3 py-2 hover:bg-marsala-500 cursor-pointer text-sm">
+                    <label key={`${bank}-${index}`} className="flex items-center px-3 py-2 hover:bg-blue-800 cursor-pointer text-sm">
                       <input
                         type="checkbox"
                         checked={filters.banks.includes(bank)}
@@ -279,7 +279,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
               )}
               {banks.length === 0 && (
-                <div className="px-3 py-2 text-xs text-marsala-300">
+                <div className="px-3 py-2 text-xs text-blue-200">
                   Importe a planilha de saldos bancários primeiro
                 </div>
               )}
@@ -288,26 +288,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Date Range */}
           <div className="space-y-2">
-            <label className="flex items-center text-xs font-medium text-marsala-200">
+            <label className="flex items-center text-xs font-medium text-blue-100">
               <Calendar className="w-4 h-4 mr-2" />
               Período
             </label>
             <div>
-              <label className="text-xs text-marsala-300 mb-1 block">Início</label>
+              <label className="text-xs text-blue-200 mb-1 block">Início</label>
               <input
                 type="date"
                 value={filters.startDate}
                 onChange={(e) => onFiltersChange({ ...filters, startDate: e.target.value })}
-                className="w-full px-2 py-1 bg-marsala-600 border border-marsala-500 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-marsala-400 focus:border-transparent text-sm"
+                className="w-full px-2 py-1 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm"
               />
             </div>
             <div>
-              <label className="text-xs text-marsala-300 mb-1 block">Fim</label>
+              <label className="text-xs text-blue-200 mb-1 block">Fim</label>
               <input
                 type="date"
                 value={filters.endDate}
                 onChange={(e) => onFiltersChange({ ...filters, endDate: e.target.value })}
-                className="w-full px-2 py-1 bg-marsala-600 border border-marsala-500 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-marsala-400 focus:border-transparent text-sm"
+                className="w-full px-2 py-1 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm"
               />
             </div>
           </div>
@@ -328,7 +328,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Page Navigation */}
         <div className="space-y-2">
           {!isCollapsed && (
-          <div className="flex items-center text-marsala-100 font-medium mb-3">
+          <div className="flex items-center text-blue-100 font-medium mb-3">
             <BarChart3 className="w-4 h-4 mr-2" />
             Páginas
           </div>
@@ -341,8 +341,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => onPageChange(page.id)}
                 className={`w-full flex items-center ${isCollapsed ? 'justify-center px-2' : 'px-3'} py-2 rounded-lg transition-all duration-200 text-sm ${
                   currentPage === page.id
-                    ? 'bg-marsala-500 text-white shadow-md'
-                    : 'text-marsala-200 hover:bg-marsala-600 hover:text-white'
+                    ? 'bg-sky-500 text-white shadow-md'
+                    : 'text-sky-100 hover:bg-sky-700/70 hover:text-white'
                 }`}
                 title={isCollapsed ? page.name : undefined}
               >
@@ -356,7 +356,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {onRefresh && (
             <button
               onClick={onRefresh}
-              className={`w-full flex items-center ${isCollapsed ? 'justify-center px-2' : 'px-3'} py-2 rounded-lg transition-all duration-200 text-sm text-marsala-200 hover:bg-marsala-600 hover:text-white`}
+              className={`w-full flex items-center ${isCollapsed ? 'justify-center px-2' : 'px-3'} py-2 rounded-lg transition-all duration-200 text-sm text-sky-100 hover:bg-sky-700/70 hover:text-white`}
               title="Atualizar Dados"
             >
               <RefreshCw className={`w-4 h-4 ${!isCollapsed ? 'mr-2' : ''}`} />

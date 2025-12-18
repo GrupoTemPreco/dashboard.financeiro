@@ -48,6 +48,7 @@ interface DREPageProps {
     companies: string[];
   };
   companies: any[];
+  darkMode?: boolean;
 }
 
 export const DREPage: React.FC<DREPageProps> = ({
@@ -57,7 +58,8 @@ export const DREPage: React.FC<DREPageProps> = ({
   cmvDRE,
   nonOperationalAccounts,
   filters,
-  companies
+  companies,
+  darkMode = false
 }) => {
   const [selectedMetric, setSelectedMetric] = useState<'revenue' | 'cmv' | 'operatingExpenses' | 'ebitda' | 'netProfit'>('revenue');
   const [selectedMonth, setSelectedMonth] = useState<Date>(new Date());
@@ -531,7 +533,7 @@ export const DREPage: React.FC<DREPageProps> = ({
   const renderBudgetCell = (accountName: string, editable: boolean) => {
     if (!editable) {
       return (
-        <td className="border border-gray-200 px-4 py-3 text-right text-gray-400">
+        <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-500' : 'border-gray-200 text-gray-400'}`}>
           -
         </td>
       );
@@ -542,14 +544,14 @@ export const DREPage: React.FC<DREPageProps> = ({
 
     if (selectedBusinessUnit === 'all') {
       return (
-        <td className="border border-gray-200 px-4 py-3 text-right text-gray-400">
+        <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-500' : 'border-gray-200 text-gray-400'}`}>
           -
         </td>
       );
     }
 
     return (
-      <td className="border border-gray-200 px-4 py-3 text-right">
+      <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}>
         {isEditing ? (
           <div className="flex items-center gap-2 justify-end">
             <input
@@ -600,25 +602,42 @@ export const DREPage: React.FC<DREPageProps> = ({
 
     const paddingClass = account.level === 1 ? 'px-4' : account.level === 2 ? 'pl-8 pr-4' : 'pl-12 pr-4';
     const fontClass = account.bold ? 'font-semibold' : '';
-    const bgClass = account.bg || '';
+    const bgClass =
+      darkMode && account.bg
+        ? account.bg
+            .replace('bg-blue-50', 'bg-slate-900/60')
+            .replace('bg-blue-100', 'bg-slate-900/70')
+            .replace('bg-red-50', 'bg-red-950/30')
+            .replace('bg-green-100', 'bg-emerald-950/30')
+            .replace('bg-green-200', 'bg-emerald-950/40')
+            .replace('bg-purple-50', 'bg-violet-950/30')
+            .replace('bg-purple-100', 'bg-violet-950/40')
+            .replace('bg-orange-50', 'bg-amber-950/30')
+        : account.bg || '';
 
     const isExpanded = account.id && expandedAccounts[account.id];
     const hasExpandIcon = account.expandable;
 
     return (
       <tr key={index} className={bgClass}>
-        <td className={`border border-gray-200 ${paddingClass} py-3 ${fontClass} text-gray-800`}>
+        <td
+          className={`border ${paddingClass} py-3 ${fontClass} ${
+            darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-800'
+          }`}
+        >
           <div className="flex items-center gap-2">
             {hasExpandIcon && (
-              <button
-                onClick={() => toggleExpand(account.id)}
-                className="p-1 hover:bg-gray-200 rounded transition-colors"
-                title={isExpanded ? 'Colapsar' : 'Expandir'}
-              >
+                <button
+                  onClick={() => toggleExpand(account.id)}
+                  className={`p-1 rounded transition-colors ${
+                    darkMode ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-gray-200 text-gray-600'
+                  }`}
+                  title={isExpanded ? 'Colapsar' : 'Expandir'}
+                >
                 {isExpanded ? (
-                  <ChevronDown className="w-4 h-4 text-gray-600" />
+                  <ChevronDown className="w-4 h-4" />
                 ) : (
-                  <ChevronRightIcon className="w-4 h-4 text-gray-600" />
+                  <ChevronRightIcon className="w-4 h-4" />
                 )}
               </button>
             )}
@@ -626,17 +645,17 @@ export const DREPage: React.FC<DREPageProps> = ({
             <span>{account.name}</span>
           </div>
         </td>
-        <td className={`border border-gray-200 px-4 py-3 text-right ${fontClass}`}>
+        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
           {formatCurrency(currentValue)}
         </td>
-        <td className="border border-gray-200 px-4 py-3 text-right">
+        <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
           {formatCurrency(previousValue)}
         </td>
         {renderBudgetCell(account.name, account.editable)}
-        <td className="border border-gray-200 px-4 py-3 text-right">
+        <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
           {formatCurrency(variation)}
         </td>
-        <td className="border border-gray-200 px-4 py-3 text-right">
+        <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
           {percentOfRevenue.toFixed(1)}%
         </td>
       </tr>
@@ -936,8 +955,8 @@ export const DREPage: React.FC<DREPageProps> = ({
     if (active && payload && payload.length) {
       const data = payload[0].payload;
       return (
-        <div className="bg-white p-3 border border-gray-200 rounded-lg shadow-lg">
-          <p className="text-sm font-medium text-gray-700 mb-2">{label}</p>
+        <div className={`${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'} p-3 border rounded-lg shadow-lg`}>
+          <p className={`text-sm font-medium mb-2 ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>{label}</p>
           {payload.map((entry: any, index: number) => (
             <div key={index}>
               <p className="text-sm" style={{ color: entry.color }}>
@@ -945,7 +964,7 @@ export const DREPage: React.FC<DREPageProps> = ({
               </p>
               {/* Show percentage over revenue for specific metrics */}
               {(selectedMetric === 'cmv' || selectedMetric === 'operatingExpenses' || selectedMetric === 'ebitda') && entry.dataKey === 'current' && (
-                <p className="text-xs text-gray-500">
+                <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
                   % sobre Receita: {((entry.value / data.revenue) * 100).toFixed(1)}%
                 </p>
               )}
@@ -961,11 +980,11 @@ export const DREPage: React.FC<DREPageProps> = ({
     if (active && payload && payload.length) {
       const data = payload[0].payload;
       return (
-        <div className="bg-white p-3 border border-gray-200 rounded-lg shadow-lg">
-          <p className="text-sm font-medium text-gray-700 mb-2">{label}</p>
-          <p className="text-sm text-gray-600">Empréstimos: {formatCurrency(data.loanAmount)}</p>
-          <p className="text-sm text-gray-600">% do EBITDA: {data.ebitdaPercentage.toFixed(1)}%</p>
-          <p className="text-sm text-gray-600">% da Receita: {data.revenuePercentage.toFixed(1)}%</p>
+        <div className={`${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'} p-3 border rounded-lg shadow-lg`}>
+          <p className={`text-sm font-medium mb-2 ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>{label}</p>
+          <p className={`text-sm ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Empréstimos: {formatCurrency(data.loanAmount)}</p>
+          <p className={`text-sm ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>% do EBITDA: {data.ebitdaPercentage.toFixed(1)}%</p>
+          <p className={`text-sm ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>% da Receita: {data.revenuePercentage.toFixed(1)}%</p>
         </div>
       );
     }
@@ -978,7 +997,7 @@ export const DREPage: React.FC<DREPageProps> = ({
     <div className="space-y-8">
       {/* KPI Cards */}
       <div>
-        <h2 className="text-2xl font-bold text-gray-800 mb-6">Indicadores de Desempenho</h2>
+        <h2 className={`text-2xl font-bold mb-6 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Indicadores de Desempenho</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           {dreData.map((item, index) => {
             const isPositive = item.variation >= 0;
@@ -986,6 +1005,58 @@ export const DREPage: React.FC<DREPageProps> = ({
             const colors = ['blue', 'red', 'orange', 'green', 'purple'];
             const Icon = icons[index];
             
+            if (darkMode) {
+              const darkBorders = ['border-l-sky-400', 'border-l-rose-400', 'border-l-amber-400', 'border-l-emerald-400', 'border-l-violet-400'];
+              const darkBorder = darkBorders[index] || 'border-l-slate-500';
+              return (
+                <div
+                  key={item.category}
+                  className={`bg-[#0F172A] border border-slate-800 rounded-lg p-4 border-l-4 ${darkBorder} shadow-[0_18px_40px_rgba(15,23,42,0.18)] hover:shadow-[0_0_32px_rgba(59,130,246,0.35)] transition-all duration-300`}
+                >
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center">
+                      <div className="p-1.5 rounded-lg bg-slate-950 shadow-sm text-slate-100">
+                        <Icon className="w-5 h-5" />
+                      </div>
+                      <h3 className="text-xs font-semibold text-slate-100 ml-2">{item.category}</h3>
+                    </div>
+                    {isPositive ? (
+                      <TrendingUp className="w-4 h-4 text-emerald-300" />
+                    ) : (
+                      <TrendingDown className="w-4 h-4 text-rose-300" />
+                    )}
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-slate-400 font-medium">Atual</span>
+                      <span className="text-lg font-bold text-slate-100">
+                        {formatCurrency(item.currentMonth)}
+                      </span>
+                    </div>
+                    
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-slate-400 font-medium">Variação</span>
+                      <span className={`text-sm font-semibold ${isPositive ? 'text-emerald-300' : 'text-rose-300'}`}>
+                        {isPositive ? '+' : ''}{item.variationPercentage.toFixed(1)}%
+                      </span>
+                    </div>
+                    
+                    {item.percentageOfRevenue && (
+                      <div className="pt-2 border-t border-slate-700">
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-slate-400 font-medium">% Receita</span>
+                          <span className="text-sm font-semibold text-slate-100">
+                            {item.percentageOfRevenue.toFixed(1)}%
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
             return (
               <div key={item.category} className={`bg-gradient-to-br from-${colors[index]}-50 to-${colors[index]}-100 border border-${colors[index]}-200 rounded-lg shadow-md p-4 border-l-4 border-l-${colors[index]}-500`}>
                 <div className="flex items-center justify-between mb-4">
@@ -1035,36 +1106,56 @@ export const DREPage: React.FC<DREPageProps> = ({
       </div>
 
       {/* DRE Table */}
-      <div className="bg-white rounded-lg shadow-md p-6">
+      <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
         <div className="mb-6">
-          <h2 className="text-xl font-bold text-gray-800 mb-4">Demonstração do Resultado do Exercício</h2>
+          <h2 className={`text-xl font-bold mb-4 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Demonstração do Resultado do Exercício</h2>
 
           {/* Filters */}
           <div className="flex items-center gap-4 mb-4 flex-wrap">
-            <div className="flex-1 min-w-[200px]">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Unidade de Negócio</label>
-              <select
-                value={selectedBusinessUnit}
-                onChange={(e) => setSelectedBusinessUnit(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            <div className="flex-1 min-w-[220px]">
+              <label className={`block text-sm font-medium mb-1 ${darkMode ? 'text-slate-200' : 'text-gray-700'}`}>
+                Unidade de Negócio
+              </label>
+              <div
+                className={`rounded-lg border px-3 py-1.5 ${
+                  darkMode ? 'bg-slate-950/40 border-slate-700' : 'bg-white border-gray-200 shadow-sm'
+                }`}
               >
-                <option value="all">Todas as Unidades</option>
-                {companies.map(c => (
-                  <option key={c.company_code} value={c.company_code}>
-                    {c.company_name}
-                  </option>
-                ))}
-              </select>
+                <select
+                  value={selectedBusinessUnit}
+                  onChange={(e) => setSelectedBusinessUnit(e.target.value)}
+                  className={`w-full bg-transparent px-0 py-0 border-none focus:outline-none focus:ring-0 text-sm ${
+                    darkMode ? 'text-slate-100' : 'text-gray-900'
+                  }`}
+                >
+                  <option value="all">Todas as Unidades</option>
+                  {companies.map(c => (
+                    <option key={c.company_code} value={c.company_code}>
+                      {c.company_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
-            <div className="flex-1 min-w-[200px]">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Período (Orçamento)</label>
-              <input
-                type="month"
-                value={selectedPeriod}
-                onChange={(e) => setSelectedPeriod(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+            <div className="flex-1 min-w-[220px]">
+              <label className={`block text-sm font-medium mb-1 ${darkMode ? 'text-slate-200' : 'text-gray-700'}`}>
+                Período (Orçamento)
+              </label>
+              <div
+                className={`rounded-lg border px-3 py-1.5 ${
+                  darkMode ? 'bg-slate-950/40 border-slate-700' : 'bg-white border-gray-200 shadow-sm'
+                }`}
+              >
+                <input
+                  type="month"
+                  value={selectedPeriod}
+                  onChange={(e) => setSelectedPeriod(e.target.value)}
+                  className={`w-full bg-transparent px-0 py-0 border-none focus:outline-none focus:ring-0 text-sm ${
+                    darkMode ? 'text-slate-100 dre-month-dark' : 'text-gray-900'
+                  }`}
+                />
+              </div>
             </div>
 
             <div className="flex items-center gap-2 pt-6">
@@ -1077,10 +1168,10 @@ export const DREPage: React.FC<DREPageProps> = ({
               </button>
 
               <div className="text-center min-w-[150px]">
-                <div className="text-sm font-medium text-gray-800">
+                <div className={`text-sm font-medium ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
                   {format(selectedMonth, 'MMMM yyyy', { locale: ptBR })}
                 </div>
-                <div className="text-xs text-gray-500">
+                <div className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
                   vs {format(subMonths(selectedMonth, 1), 'MMM yyyy', { locale: ptBR })}
                 </div>
               </div>
@@ -1099,13 +1190,37 @@ export const DREPage: React.FC<DREPageProps> = ({
         <div className="overflow-x-auto">
           <table className="min-w-full border-collapse">
             <thead>
-              <tr className="bg-gray-50">
-                <th className="border border-gray-200 px-4 py-3 text-left text-sm font-semibold text-gray-700">Conta</th>
-                <th className="border border-gray-200 px-4 py-3 text-right text-sm font-semibold text-gray-700">{format(selectedMonth, 'MMM/yy', { locale: ptBR })}</th>
-                <th className="border border-gray-200 px-4 py-3 text-right text-sm font-semibold text-gray-700">{format(subMonths(selectedMonth, 1), 'MMM/yy', { locale: ptBR })}</th>
-                <th className="border border-gray-200 px-4 py-3 text-right text-sm font-semibold text-gray-700">Orçamento</th>
-                <th className="border border-gray-200 px-4 py-3 text-right text-sm font-semibold text-gray-700">Variação</th>
-                <th className="border border-gray-200 px-4 py-3 text-right text-sm font-semibold text-gray-700">% Receita</th>
+              <tr className={darkMode ? 'bg-slate-800' : 'bg-gray-50'}>
+                <th className={`border px-4 py-3 text-left text-sm font-semibold ${
+                  darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
+                }`}>
+                  Conta
+                </th>
+                <th className={`border px-4 py-3 text-right text-sm font-semibold ${
+                  darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
+                }`}>
+                  {format(selectedMonth, 'MMM/yy', { locale: ptBR })}
+                </th>
+                <th className={`border px-4 py-3 text-right text-sm font-semibold ${
+                  darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
+                }`}>
+                  {format(subMonths(selectedMonth, 1), 'MMM/yy', { locale: ptBR })}
+                </th>
+                <th className={`border px-4 py-3 text-right text-sm font-semibold ${
+                  darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
+                }`}>
+                  Orçamento
+                </th>
+                <th className={`border px-4 py-3 text-right text-sm font-semibold ${
+                  darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
+                }`}>
+                  Variação
+                </th>
+                <th className={`border px-4 py-3 text-right text-sm font-semibold ${
+                  darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
+                }`}>
+                  % Receita
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1116,9 +1231,9 @@ export const DREPage: React.FC<DREPageProps> = ({
       </div>
 
       {/* Monthly Comparison Chart */}
-      <div className="bg-white rounded-lg shadow-md p-6">
+      <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-gray-800">Análise do Período</h2>
+          <h2 className={`text-xl font-bold ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Análise do Período</h2>
         </div>
 
         <div className="flex flex-wrap gap-2 mb-6">
@@ -1134,8 +1249,10 @@ export const DREPage: React.FC<DREPageProps> = ({
               onClick={() => setSelectedMetric(metric.key as any)}
               className={`px-4 py-2 text-sm rounded-lg transition-colors ${
                 selectedMetric === metric.key
-                  ? 'bg-marsala-600 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  ? (darkMode ? 'bg-sky-500 text-white' : 'bg-marsala-600 text-white')
+                  : darkMode
+                    ? 'bg-slate-800 text-slate-200 hover:bg-slate-700'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               }`}
             >
               {metric.label}
@@ -1146,9 +1263,9 @@ export const DREPage: React.FC<DREPageProps> = ({
         <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={getMetricData()} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="month" stroke="#6b7280" fontSize={12} />
-              <YAxis tickFormatter={(value) => formatCurrency(value)} stroke="#6b7280" fontSize={12} />
+              <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#1f2937' : '#f0f0f0'} />
+              <XAxis dataKey="month" stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
+              <YAxis tickFormatter={(value) => formatCurrency(value)} stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
               <Tooltip content={<CustomTooltip />} />
               
               <Bar
@@ -1169,15 +1286,15 @@ export const DREPage: React.FC<DREPageProps> = ({
       </div>
 
       {/* Annual Debt Chart */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-xl font-bold text-gray-800 mb-6">Endividamento Mensal</h2>
+      <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
+        <h2 className={`text-xl font-bold mb-6 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Endividamento Mensal</h2>
         
         <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={debtData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="month" stroke="#6b7280" fontSize={12} />
-              <YAxis tickFormatter={(value) => formatCurrency(value)} stroke="#6b7280" fontSize={12} />
+              <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#1f2937' : '#f0f0f0'} />
+              <XAxis dataKey="month" stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
+              <YAxis tickFormatter={(value) => formatCurrency(value)} stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
               <Tooltip content={<DebtTooltip />} />
               
               <Bar
@@ -1190,7 +1307,7 @@ export const DREPage: React.FC<DREPageProps> = ({
           </ResponsiveContainer>
         </div>
 
-        <div className="mt-4 text-sm text-gray-600 text-center">
+        <div className={`mt-4 text-sm text-center ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>
           Passe o mouse sobre as barras para ver % do EBITDA e % da Receita
         </div>
       </div>

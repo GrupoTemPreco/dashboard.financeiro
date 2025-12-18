@@ -13,11 +13,16 @@ import { DataImport } from './components/DataImport';
 import { DREPage } from './components/DREPage';
 import { ConfirmOverwriteModal } from './components/ConfirmOverwriteModal';
 import { ErrorModal } from './components/ErrorModal';
-import { FinancialRecord, Filters } from './types/financial';
+import { FinancialRecord, Filters, ImportedFile } from './types/financial';
 import { processExcelFile, processCompaniesFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, validateFileFormat } from './utils/excelProcessor';
 import { filterData, calculateKPIs } from './utils/dataProcessor';
-import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List } from 'lucide-react';
+import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List, Moon, Sun, Eye, EyeOff } from 'lucide-react';
 import { supabase } from './lib/supabase';
+
+const IMPORT_ADMIN_CODE =
+  import.meta.env.VITE_IMPORT_ADMIN_CODE || 'admin123';
+const IMPORT_USER_CODE =
+  import.meta.env.VITE_IMPORT_USER_CODE || 'user123';
 
 function App() {
   const [records, setRecords] = useState<FinancialRecord[]>([]);
@@ -32,6 +37,8 @@ function App() {
   const [currentPage, setCurrentPage] = useState('cashflow');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [presentationMode, setPresentationMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
+  const [showAccessCode, setShowAccessCode] = useState(false);
   const [filters, setFilters] = useState<Filters>({
     companies: [],
     groups: [],
@@ -52,9 +59,7 @@ function App() {
   }>({
     isLoading: false
   });
-  const [importedFiles, setImportedFiles] = useState<any[]>([
-    // Start with empty imported files list
-  ]);
+  const [importedFiles, setImportedFiles] = useState<ImportedFile[]>([]);
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
     title: string;
@@ -92,6 +97,16 @@ function App() {
     title: '',
     message: ''
   });
+  const [importRole, setImportRole] = useState<'none' | 'user' | 'admin'>('none');
+  const [importAuthError, setImportAuthError] = useState('');
+
+  // Sempre que sair da página de importação, resetar autenticação
+  useEffect(() => {
+    if (currentPage !== 'import' && importRole !== 'none') {
+      setImportRole('none');
+      setImportAuthError('');
+    }
+  }, [currentPage]);
 
   // Helper function to normalize business unit codes (remove leading zeros)
   const normalizeCode = (code: any): string => {
@@ -114,8 +129,23 @@ function App() {
 
   const testSupabaseConnection = async () => {
     console.log('🔌 Testando conexão com Supabase...');
-    console.log('📍 URL:', import.meta.env.VITE_SUPABASE_URL);
-    console.log('🔑 Chave anônima configurada:', import.meta.env.VITE_SUPABASE_ANON_KEY ? 'Sim' : 'Não');
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    
+    console.log('📍 URL:', supabaseUrl || 'NÃO CONFIGURADA');
+    console.log('🔑 Chave anônima configurada:', supabaseKey ? 'Sim' : 'NÃO CONFIGURADA');
+    
+    // Verificar se as variáveis estão configuradas
+    if (!supabaseUrl || !supabaseKey) {
+      const errorMsg = 'Variáveis de ambiente do Supabase não configuradas!\n\nPor favor, configure na Vercel:\n- Settings > Environment Variables\n- VITE_SUPABASE_URL\n- VITE_SUPABASE_ANON_KEY\n\nVeja VERCEL_SETUP.md para mais detalhes.';
+      console.error('❌', errorMsg);
+      setErrorModal({
+        isOpen: true,
+        title: 'Configuração do Supabase',
+        message: errorMsg
+      });
+      return;
+    }
     
     try {
       // Teste básico: verificar se o cliente foi criado
@@ -133,6 +163,15 @@ function App() {
         console.error('❌ Erro na conexão:', error.message);
         console.error('Código do erro:', error.code);
         console.error('Detalhes completos:', error);
+        
+        // Verificar se é erro de rede
+        if (error.message.includes('Failed to fetch') || error.message.includes('ERR_NAME_NOT_RESOLVED')) {
+          setErrorModal({
+            isOpen: true,
+            title: 'Erro de Conexão com Supabase',
+            message: `Não foi possível conectar ao Supabase.\n\nPossíveis causas:\n1. Variáveis de ambiente não configuradas na Vercel\n2. URL do Supabase incorreta\n3. Problema de rede\n\nVerifique:\n- Settings > Environment Variables na Vercel\n- Se a URL do Supabase está correta\n- Se o projeto Supabase está ativo\n\nVeja VERCEL_SETUP.md para instruções detalhadas.`
+          });
+        }
         return;
       }
 
@@ -141,6 +180,14 @@ function App() {
     } catch (error: any) {
       console.error('❌ Erro ao testar conexão:', error.message);
       console.error('Erro completo:', error);
+      
+      if (error.message.includes('Missing Supabase environment variables')) {
+        setErrorModal({
+          isOpen: true,
+          title: 'Configuração do Supabase',
+          message: error.message + '\n\nPor favor, configure as variáveis de ambiente na Vercel.\nVeja VERCEL_SETUP.md para instruções detalhadas.'
+        });
+      }
     }
   };
 
@@ -164,16 +211,34 @@ function App() {
         setCompanies(companiesData);
       }
 
+      // Buscar imports ativos (não deletados) para filtrar dados por import_id
+      const { data: importsData, error: importsError } = await supabase
+        .from('imports')
+        .select('id, is_deleted');
+
+      if (importsError) throw importsError;
+
+      const activeImportIds = (importsData || [])
+        .filter((imp: any) => !imp.is_deleted)
+        .map((imp: any) => imp.id);
+
+      const hasActiveImports = activeImportIds.length > 0;
+
       // Load accounts payable
       console.log('💰 Loading accounts payable...');
-      const { data: apData, error: apError } = await supabase
-        .from('CONTAS A PAGAR')
-        .select('*')
-        .order('payment_date', { ascending: false });
+      let apData: any[] | null = [];
+      if (hasActiveImports) {
+        const { data, error } = await supabase
+          .from('CONTAS A PAGAR')
+          .select('*')
+          .in('import_id', activeImportIds)
+          .order('payment_date', { ascending: false });
 
-      if (apError) {
-        console.error('❌ Error loading accounts payable:', apError);
-        throw apError;
+        if (error) {
+          console.error('❌ Error loading accounts payable:', error);
+          throw error;
+        }
+        apData = data;
       }
       if (apData) {
         console.log('✅ Loaded accounts payable from Supabase:', apData.length, 'records');
@@ -184,36 +249,51 @@ function App() {
       }
 
       // Load revenues
-      const { data: revenuesData, error: revenuesError } = await supabase
-        .from('revenues')
-        .select('*')
-        .order('payment_date', { ascending: false });
+      let revenuesData: any[] | null = [];
+      if (hasActiveImports) {
+        const { data, error } = await supabase
+          .from('revenues')
+          .select('*')
+          .in('import_id', activeImportIds)
+          .order('payment_date', { ascending: false });
 
-      if (revenuesError) throw revenuesError;
+        if (error) throw error;
+        revenuesData = data;
+      }
       if (revenuesData) {
         console.log('Loaded revenues from Supabase:', revenuesData);
         setRevenues(revenuesData);
       }
 
       // Load financial transactions
-      const { data: transactionsData, error: transactionsError } = await supabase
-        .from('financial_transactions')
-        .select('*')
-        .order('transaction_date', { ascending: false });
+      let transactionsData: any[] | null = [];
+      if (hasActiveImports) {
+        const { data, error } = await supabase
+          .from('financial_transactions')
+          .select('*')
+          .in('import_id', activeImportIds)
+          .order('transaction_date', { ascending: false });
 
-      if (transactionsError) throw transactionsError;
+        if (error) throw error;
+        transactionsData = data;
+      }
       if (transactionsData) {
         console.log('Loaded financial transactions from Supabase:', transactionsData);
         setFinancialTransactions(transactionsData);
       }
 
       // Load forecasted entries
-      const { data: forecastedData, error: forecastedError } = await supabase
-        .from('PREVISTOS')
-        .select('*')
-        .order('due_date', { ascending: false });
+      let forecastedData: any[] | null = [];
+      if (hasActiveImports) {
+        const { data, error } = await supabase
+          .from('PREVISTOS')
+          .select('*')
+          .in('import_id', activeImportIds)
+          .order('due_date', { ascending: false });
 
-      if (forecastedError) throw forecastedError;
+        if (error) throw error;
+        forecastedData = data;
+      }
       if (forecastedData) {
         console.log('Loaded forecasted entries from Supabase:', forecastedData);
         setForecastedEntries(forecastedData);
@@ -221,14 +301,19 @@ function App() {
 
       // Load revenues DRE
       console.log('📊 Loading revenues DRE...');
-      const { data: revenuesDREData, error: revenuesDREError } = await supabase
-        .from('revenues_dre')
-        .select('*')
-        .order('issue_date', { ascending: false });
+      let revenuesDREData: any[] | null = [];
+      if (hasActiveImports) {
+        const { data, error } = await supabase
+          .from('revenues_dre')
+          .select('*')
+          .in('import_id', activeImportIds)
+          .order('issue_date', { ascending: false });
 
-      if (revenuesDREError) {
-        console.error('❌ Error loading revenues DRE:', revenuesDREError);
-        throw revenuesDREError;
+        if (error) {
+          console.error('❌ Error loading revenues DRE:', error);
+          throw error;
+        }
+        revenuesDREData = data;
       }
       if (revenuesDREData) {
         console.log('✅ Loaded revenues DRE from Supabase:', revenuesDREData.length, 'records');
@@ -249,14 +334,19 @@ function App() {
 
       // Load CMV DRE
       console.log('📊 Loading CMV DRE...');
-      const { data: cmvDREData, error: cmvDREError } = await supabase
-        .from('cmv_dre')
-        .select('*')
-        .order('issue_date', { ascending: false});
+      let cmvDREData: any[] | null = [];
+      if (hasActiveImports) {
+        const { data, error } = await supabase
+          .from('cmv_dre')
+          .select('*')
+          .in('import_id', activeImportIds)
+          .order('issue_date', { ascending: false});
 
-      if (cmvDREError) {
-        console.error('❌ Error loading CMV DRE:', cmvDREError);
-        throw cmvDREError;
+        if (error) {
+          console.error('❌ Error loading CMV DRE:', error);
+          throw error;
+        }
+        cmvDREData = data;
       }
       if (cmvDREData) {
         console.log('✅ Loaded CMV DRE from Supabase:', cmvDREData.length, 'records');
@@ -277,13 +367,18 @@ function App() {
 
       // Load initial_balances
       console.log('📊 Loading initial balances...');
-      const { data: initialBalancesData, error: initialBalancesError } = await supabase
-        .from('initial_balances')
-        .select('*');
+      let initialBalancesData: any[] | null = [];
+      if (hasActiveImports) {
+        const { data, error } = await supabase
+          .from('initial_balances')
+          .select('*')
+          .in('import_id', activeImportIds);
 
-      if (initialBalancesError) {
-        console.error('❌ Error loading initial balances:', initialBalancesError);
-        throw initialBalancesError;
+        if (error) {
+          console.error('❌ Error loading initial balances:', error);
+          throw error;
+        }
+        initialBalancesData = data;
       }
       if (initialBalancesData) {
         console.log('✅ Loaded initial balances from Supabase:', initialBalancesData.length, 'records');
@@ -305,13 +400,14 @@ function App() {
       if (error) throw error;
 
       if (importsData) {
-        const formattedImports = importsData.map((imp: any) => ({
+        const formattedImports: ImportedFile[] = importsData.map((imp: any) => ({
           id: imp.id,
           name: imp.file_name,
           type: imp.file_type,
           uploadDate: imp.imported_at,
           recordCount: imp.record_count,
-          status: 'success' as const
+          status: 'success',
+          isDeleted: imp.is_deleted === true
         }));
         setImportedFiles(formattedImports);
       }
@@ -790,24 +886,93 @@ function App() {
     }
   };
 
+  // Envia arquivo para a lixeira (soft delete)
   const handleDeleteFile = async (fileId: string) => {
     try {
-      // Delete the import record (CASCADE will delete related data)
       const { error } = await supabase
         .from('imports')
-        .delete()
+        .update({
+          is_deleted: true,
+          deleted_at: new Date().toISOString()
+        })
         .eq('id', fileId);
 
       if (error) throw error;
 
-      // Remove from UI
-      setImportedFiles(prev => prev.filter(f => f.id !== fileId));
+      // Atualiza UI localmente
+      setImportedFiles(prev =>
+        prev.map(f => (f.id === fileId ? { ...f, isDeleted: true } : f))
+      );
 
-      // Reload data from Supabase after deletion
+      // Recarrega dados ignorando imports deletados
       await loadDataFromSupabase();
     } catch (error) {
-      console.error('Error deleting import:', error);
-      alert('Erro ao excluir importação');
+      console.error('Error moving import to trash:', error);
+      alert('Erro ao mover importação para a lixeira');
+    }
+  };
+
+  const handleRestoreFile = async (fileId: string) => {
+    try {
+      const { error } = await supabase
+        .from('imports')
+        .update({
+          is_deleted: false,
+          deleted_at: null
+        })
+        .eq('id', fileId);
+
+      if (error) throw error;
+
+      setImportedFiles(prev =>
+        prev.map(f => (f.id === fileId ? { ...f, isDeleted: false } : f))
+      );
+
+      await loadDataFromSupabase();
+    } catch (error) {
+      console.error('Error restoring import from trash:', error);
+      alert('Erro ao restaurar importação');
+    }
+  };
+
+  const handlePermanentDeleteFile = async (fileId: string) => {
+    try {
+      const file = importedFiles.find(f => f.id === fileId);
+      const fileType = file?.type;
+
+      if (fileType) {
+        // Usa a função existente que deleta dados relacionados + registro de import
+        await deleteOldImportData(fileId, fileType);
+      } else {
+        const { error } = await supabase
+          .from('imports')
+          .delete()
+          .eq('id', fileId);
+        if (error) throw error;
+        setImportedFiles(prev => prev.filter(f => f.id !== fileId));
+      }
+
+      await loadDataFromSupabase();
+      await loadImportsFromSupabase();
+    } catch (error) {
+      console.error('Error permanently deleting import:', error);
+      alert('Erro ao excluir importação permanentemente');
+    }
+  };
+
+  const handleEmptyTrash = async () => {
+    const trashedFiles = importedFiles.filter(f => f.isDeleted);
+    if (trashedFiles.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Tem certeza de que deseja esvaziar a lixeira? ${trashedFiles.length} arquivo(s) serão excluídos permanentemente.`
+    );
+
+    if (!confirmed) return;
+
+    for (const file of trashedFiles) {
+      // eslint-disable-next-line no-await-in-loop
+      await handlePermanentDeleteFile(file.id);
     }
   };
 
@@ -2434,7 +2599,7 @@ function App() {
   }, [dailyCashFlow, getFilteredAccountsPayable, getFilteredForecastedEntries, getFilteredTransactions]);
 
   return (
-    <div className={`flex h-screen bg-gray-50 ${presentationMode ? 'fixed inset-0 z-50' : ''}`}>
+    <div className={`flex h-screen ${darkMode ? 'bg-slate-950 text-slate-50' : 'bg-[#ECF7FA] text-slate-900'} ${presentationMode ? 'fixed inset-0 z-50' : ''}`}>
       {!presentationMode && (
       <Sidebar
         filters={filters}
@@ -2452,25 +2617,79 @@ function App() {
       />
       )}
       
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto scrollbar-vertical">
         <div className={`${presentationMode ? 'p-4' : 'p-8'}`}>
           {presentationMode && (
             <div className="flex justify-between items-center mb-4">
-              <h1 className="text-2xl font-bold text-gray-900">Dashboard Financeiro - Rede Tem Preço & X Brother</h1>
-              <button
-                onClick={togglePresentationMode}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-              >
-                Sair do Modo Apresentação
-              </button>
+              <h1 className={`text-2xl font-bold ${darkMode ? 'text-slate-100' : 'text-gray-900'}`}>Dashboard Financeiro - Rede Tem Preço & X Brother</h1>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDarkMode(prev => !prev)}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/80 hover:bg-white shadow-sm border border-slate-200 text-xs font-medium text-gray-700 transition-colors"
+                  title={darkMode ? 'Usar tema claro' : 'Usar tema escuro'}
+                >
+                  {darkMode ? (
+                    <>
+                      <Sun className="w-4 h-4 text-amber-500" />
+                      <span>Tema claro</span>
+                    </>
+                  ) : (
+                    <>
+                      <Moon className="w-4 h-4 text-slate-700" />
+                      <span>Tema escuro</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={togglePresentationMode}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                >
+                  Sair do Modo Apresentação
+                </button>
+              </div>
             </div>
           )}
           
           {!presentationMode && (
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold text-gray-900">Dashboard de Fluxo de Caixa</h1>
-            <p className="text-gray-600 mt-2">Visão geral financeira e métricas de desempenho</p>
-          </div>
+            <div className="mb-8 flex items-center justify-between">
+              <div>
+                <h1 className={`text-3xl font-bold ${darkMode ? 'text-slate-100' : 'text-gray-900'}`}>Dashboard de Fluxo de Caixa</h1>
+                <p className={`${darkMode ? 'text-slate-400' : 'text-gray-600'} mt-2`}>Visão geral financeira e métricas de desempenho</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDarkMode(prev => !prev)}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/80 hover:bg-white shadow-sm border border-slate-200 text-xs font-medium text-gray-700 transition-colors"
+                  title={darkMode ? 'Usar tema claro' : 'Usar tema escuro'}
+                >
+                  {darkMode ? (
+                    <>
+                      <Sun className="w-4 h-4 text-amber-500" />
+                      <span>Tema claro</span>
+                    </>
+                  ) : (
+                    <>
+                      <Moon className="w-4 h-4 text-slate-700" />
+                      <span>Tema escuro</span>
+                    </>
+                  )}
+                </button>
+                {currentPage === 'import' && importRole !== 'none' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportRole('none');
+                      setImportAuthError('');
+                    }}
+                    className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 shadow-sm"
+                  >
+                    Sair
+                  </button>
+                )}
+              </div>
+            </div>
           )}
 
           {loading.isLoading && (
@@ -2508,20 +2727,28 @@ function App() {
             <>
               {/* Cash Flow Variation Cards */}
               <div className="mb-6">
-                <h2 className="text-lg font-bold text-gray-800 mb-4">Variação do Fluxo de Caixa</h2>
+                <h2 className={`text-lg font-bold mb-4 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Variação do Fluxo de Caixa</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                   {/* Initial Balance from Database */}
-                  <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-lg shadow-md p-6 border-l-4 border-l-blue-500 hover:shadow-lg transition-all duration-200">
+                  <div
+                    className={`rounded-lg p-6 border-l-4 shadow-[0_18px_40px_rgba(15,23,42,0.18)] transition-all duration-300 ${
+                      darkMode
+                        ? 'bg-[#0F172A] border border-slate-800 border-l-sky-400 hover:shadow-[0_0_32px_rgba(59,130,246,0.45)]'
+                        : 'bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 border-l-blue-500 hover:shadow-[0_22px_55px_rgba(15,23,42,0.28)]'
+                    }`}
+                  >
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center flex-1">
-                        <div className="p-1.5 rounded-lg bg-white shadow-sm text-blue-600">
+                        <div className={`p-1.5 rounded-lg shadow-sm ${darkMode ? 'bg-slate-950 text-sky-300' : 'bg-white text-blue-600'}`}>
                           <DollarSign className="w-5 h-5" />
                         </div>
-                        <h3 className="text-xs font-semibold text-gray-700 ml-2">Saldo Inicial</h3>
+                        <h3 className={`text-xs font-semibold ml-2 ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>Saldo Inicial</h3>
                       </div>
                       <button
                         onClick={() => openKPIDetail('Detalhes: Saldo Inicial', getFilteredInitialBalances, 'mixed')}
-                        className="p-1.5 rounded-lg bg-white hover:bg-gray-100 shadow-sm transition-colors"
+                        className={`p-1.5 rounded-lg shadow-sm transition-colors ${
+                          darkMode ? 'bg-slate-900 hover:bg-slate-800' : 'bg-white hover:bg-gray-100'
+                        }`}
                         title="Ver detalhes"
                       >
                         <List className="w-4 h-4 text-gray-600" />
@@ -2529,16 +2756,16 @@ function App() {
                     </div>
                     <div className="space-y-3">
                       <div>
-                        <label className="text-xs text-gray-500 block mb-1">Data do Saldo</label>
-                        <p className="text-sm font-medium text-gray-700">
+                        <label className={`text-xs block mb-1 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Data do Saldo</label>
+                        <p className={`text-sm font-medium ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
                           {kpiData.initialBalance.date
                             ? new Date(kpiData.initialBalance.date).toLocaleDateString('pt-BR')
                             : new Date().toLocaleDateString('pt-BR')}
                         </p>
                       </div>
                       <div>
-                        <label className="text-xs text-gray-500 block mb-1">Saldo Inicial</label>
-                        <p className="text-xl font-bold text-blue-700">
+                        <label className={`text-xs block mb-1 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Saldo Inicial</label>
+                        <p className={`text-xl font-bold ${darkMode ? 'text-sky-300' : 'text-blue-700'}`}>
                           {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(kpiData.initialBalance.actual)}
                         </p>
                       </div>
@@ -2556,6 +2783,7 @@ function App() {
                     icon={<ArrowDown className="w-5 h-5" />}
                     color="green"
                     section="cashflow"
+                    darkMode={darkMode}
                     onViewDetails={() => openKPIDetail('Detalhes: Total de Recebimentos', getFilteredTotalInflows, 'mixed')}
                   />
                   <KPICard
@@ -2565,6 +2793,7 @@ function App() {
                     icon={<ArrowUp className="w-5 h-5" />}
                     color="red"
                     section="cashflow"
+                    darkMode={darkMode}
                     onViewDetails={() => openKPIDetail('Detalhes: Total de Pagamentos', getFilteredTotalOutflows, 'mixed')}
                   />
                   <KPICard
@@ -2574,6 +2803,7 @@ function App() {
                     icon={<DollarSign className="w-5 h-5" />}
                     color="purple"
                     section="cashflow"
+                    darkMode={darkMode}
                     onViewDetails={() => openKPIDetail('Detalhes: Saldo Final', getFilteredFinalBalance, 'mixed')}
                   />
                 </div>
@@ -2581,7 +2811,7 @@ function App() {
 
               {/* Result Delivery Cards */}
               <div className="mb-8">
-                <h2 className="text-lg font-bold text-gray-800 mb-4">Entrega de Resultado</h2>
+                <h2 className={`text-lg font-bold mb-4 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Entrega de Resultado</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                   <KPICard
                     title="Receita Direta"
@@ -2590,6 +2820,7 @@ function App() {
                     icon={<TrendingUp className="w-5 h-5" />}
                     color="yellow"
                     section="result"
+                    darkMode={darkMode}
                     onViewDetails={() => openKPIDetail('Detalhes: Receita Direta', getFilteredRevenues, 'revenues')}
                   />
                   <KPICard
@@ -2600,6 +2831,7 @@ function App() {
                     icon={<Pill className="w-5 h-5" />}
                     color="orange"
                     section="result"
+                    darkMode={darkMode}
                     onViewDetails={() => openKPIDetail('Detalhes: CMV', getFilteredCMV, 'accounts_payable')}
                   />
                   <KPICard
@@ -2609,6 +2841,7 @@ function App() {
                     icon={<Calculator className="w-5 h-5" />}
                     color="red"
                     section="result"
+                    darkMode={darkMode}
                     onViewDetails={() => openKPIDetail('Detalhes: Total de Despesas', getFilteredExpenses, 'mixed')}
                   />
                   <KPICard
@@ -2619,6 +2852,7 @@ function App() {
                     icon={<Target className="w-5 h-5" />}
                     color="indigo"
                     section="result"
+                    darkMode={darkMode}
                     onViewDetails={() => openKPIDetail('Detalhes: Resultado Operacional', getFilteredOperationalResult, 'mixed')}
                   />
                 </div>
@@ -2632,23 +2866,24 @@ function App() {
                     year={calendarDate.year}
                     month={calendarDate.month}
                     onMonthChange={(year, month) => setCalendarDate({ year, month })}
+                    darkMode={darkMode}
                   />
                 </div>
                 <div className="space-y-4">
-                  <CashFlowChart data={cashFlowData} />
-                  <CashFlowAlerts data={alertsData} />
+                  <CashFlowChart data={cashFlowData} darkMode={darkMode} />
+                  <CashFlowAlerts data={alertsData} darkMode={darkMode} />
                 </div>
               </div>
 
               {/* Monthly Comparison */}
-              <MonthlyComparison data={monthlyComparisonData} />
+              <MonthlyComparison data={monthlyComparisonData} darkMode={darkMode} />
             </>
           )}
 
           {currentPage === 'analytical' && (
             <div className="space-y-8">
               {/* Cash Flow Table */}
-              <CashFlowTable data={cashFlowTableData} />
+              <CashFlowTable data={cashFlowTableData} darkMode={darkMode} />
 
               {/* Analytical Insights */}
               <div>
@@ -2677,16 +2912,132 @@ function App() {
               nonOperationalAccounts={nonOperationalAccounts}
               filters={filters}
               companies={companies}
+              darkMode={darkMode}
             />
           )}
 
           {currentPage === 'import' && (
-            <div>
-              <DataImport
-                onFileUpload={handleDataImport}
-                importedFiles={importedFiles}
-                onDeleteFile={handleDeleteFile}
-              />
+            <div className="space-y-4">
+              {importRole === 'none' ? (
+                <div className="flex items-center justify-center min-h-[400px]">
+                  <div className={`max-w-md w-full shadow-lg rounded-xl border p-6 ${
+                    darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
+                  }`}>
+                    <h2 className={`text-lg font-semibold mb-2 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
+                      Área restrita de importação
+                    </h2>
+                    <p className={`text-xs mb-4 ${darkMode ? 'text-slate-400' : 'text-gray-600'}`}>
+                      Para acessar a importação de dados, escolha o tipo de
+                      acesso e informe o código correspondente.
+                    </p>
+                    <form
+                      className="space-y-4"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const formData = new FormData(e.currentTarget as HTMLFormElement);
+                        const code = String(formData.get('accessCode') || '').trim();
+                        const role = String(formData.get('role') || 'user') as
+                          | 'user'
+                          | 'admin';
+                        if (!code) {
+                          setImportAuthError('Informe o código de acesso.');
+                          return;
+                        }
+                        const expectedCode =
+                          role === 'admin' ? IMPORT_ADMIN_CODE : IMPORT_USER_CODE;
+                        if (code !== expectedCode) {
+                          setImportAuthError('Código inválido para o tipo selecionado.');
+                          return;
+                        }
+                        setImportRole(role);
+                        setImportAuthError('');
+                      }}
+                    >
+                      <div>
+                        <span className={`block text-xs font-medium mb-1 ${darkMode ? 'text-slate-200' : 'text-gray-700'}`}>
+                          Tipo de acesso
+                        </span>
+                        <div className="flex items-center gap-4 text-xs">
+                          <label className="inline-flex items-center gap-1">
+                            <input
+                              type="radio"
+                              name="role"
+                              value="user"
+                              defaultChecked
+                              className={`h-3 w-3 text-blue-500 ${darkMode ? 'border-slate-600' : 'border-gray-300'}`}
+                            />
+                            <span>Usuário (visualização / importação)</span>
+                          </label>
+                          <label className="inline-flex items-center gap-1">
+                            <input
+                              type="radio"
+                              name="role"
+                              value="admin"
+                              className={`h-3 w-3 text-blue-500 ${darkMode ? 'border-slate-600' : 'border-gray-300'}`}
+                            />
+                            <span>Admin (todas as ações)</span>
+                          </label>
+                        </div>
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="accessCode"
+                          className={`block text-xs font-medium mb-1 ${darkMode ? 'text-slate-200' : 'text-gray-700'}`}
+                        >
+                          Código de acesso
+                        </label>
+                        <div className="relative">
+                          <input
+                            id="accessCode"
+                            name="accessCode"
+                            type={showAccessCode ? 'text' : 'password'}
+                            className={`w-full rounded-md px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                              darkMode ? 'border-slate-600 bg-slate-900 text-slate-100' : 'border-gray-300'
+                            }`}
+                            placeholder="Digite o código"
+                            autoComplete="off"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowAccessCode(prev => !prev)}
+                            className="absolute inset-y-0 right-2 flex items-center text-slate-400 hover:text-slate-600"
+                            title={showAccessCode ? 'Ocultar código' : 'Mostrar código'}
+                            tabIndex={-1}
+                          >
+                            {showAccessCode ? (
+                              <EyeOff className="w-4 h-4" />
+                            ) : (
+                              <Eye className="w-4 h-4" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                      {importAuthError && (
+                        <p className="text-xs text-red-600">{importAuthError}</p>
+                      )}
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="submit"
+                          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
+                        >
+                          Entrar
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              ) : (
+                <DataImport
+                  onFileUpload={handleDataImport}
+                  importedFiles={importedFiles}
+                  onDeleteFile={handleDeleteFile}
+                  onRestoreFile={handleRestoreFile}
+                  onPermanentDeleteFile={handlePermanentDeleteFile}
+                  onEmptyTrash={handleEmptyTrash}
+                  isAdmin={importRole === 'admin'}
+                  darkMode={darkMode}
+                />
+              )}
             </div>
           )}
         </div>

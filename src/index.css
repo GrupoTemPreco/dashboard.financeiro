@@ -1,3 +1,57 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer utilities {
+  /* Scrollbar vertical principal */
+  .scrollbar-vertical {
+    scrollbar-width: thin;
+    scrollbar-color: #64748b transparent;
+  }
+
+  .scrollbar-vertical::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .scrollbar-vertical::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-vertical::-webkit-scrollbar-thumb {
+    background: #64748b; /* slate-500 */
+    border-radius: 999px;
+  }
+
+  .scrollbar-vertical::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8; /* slate-400 */
+  }
+
+  /* Scrollbar horizontal do gráfico */
+  .scrollbar-horizontal {
+    scrollbar-width: thin;
+    scrollbar-color: #64748b transparent;
+  }
+
+  .scrollbar-horizontal::-webkit-scrollbar {
+    height: 8px;
+  }
+
+  .scrollbar-horizontal::-webkit-scrollbar-track {
+    background: rgba(148, 163, 184, 0.15); /* slate-400/15 */
+    border-radius: 999px;
+  }
+
+  .scrollbar-horizontal::-webkit-scrollbar-thumb {
+    background: #6b7280; /* gray-500 */
+    border-radius: 999px;
+  }
+
+  .scrollbar-horizontal::-webkit-scrollbar-thumb:hover {
+    background: #9ca3af; /* gray-400 */
+  }
+
+  /* Ícone do input month na DRE em modo dark */
+  .dre-month-dark::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+  }
+}

@@ -15,9 +15,10 @@ interface CalendarViewProps {
   year: number;
   data: DayData[];
   onMonthChange: (year: number, month: number) => void;
+  darkMode?: boolean;
 }
 
-export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, onMonthChange }) => {
+export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, onMonthChange, darkMode = false }) => {
   const monthNames = [
     'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
     'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
@@ -68,7 +69,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
 
   const renderDayCell = (day: number | null, index: number) => {
     if (!day) {
-      return <div key={index} className="h-24 border border-gray-200 bg-gray-50"></div>;
+      return <div key={index} className={`h-24 border ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-gray-200 bg-gray-50'}`}></div>;
     }
 
     const dayData = getDayData(day);
@@ -77,12 +78,27 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
                    new Date().getFullYear() === year;
 
     const isNegativeBalance = dayData && dayData.forecastedBalance < 0;
-    const balanceColorClass = dayData ? (isNegativeBalance ? 'bg-red-100 border-red-400 shadow-md' : 'bg-white') : 'bg-white';
+    const balanceColorClass = dayData
+      ? isNegativeBalance
+        ? darkMode
+          ? 'bg-red-950/40 border-red-500 shadow-md'
+          : 'bg-red-100 border-red-400 shadow-md'
+        : darkMode
+          ? 'bg-slate-900/80 border-slate-700'
+          : 'bg-white'
+      : darkMode
+        ? 'bg-slate-900/80 border-slate-700'
+        : 'bg-white';
 
     return (
-      <div key={index} className={`h-32 border p-2 ${balanceColorClass} ${isToday ? 'ring-2 ring-marsala-500' : ''} ${isNegativeBalance ? 'border-red-400' : 'border-gray-200'}`}>
+      <div
+        key={index}
+        className={`h-32 border p-2 ${balanceColorClass} ${
+          isToday ? (darkMode ? 'ring-2 ring-sky-500' : 'ring-2 ring-marsala-500') : ''
+        }`}
+      >
         <div className="flex justify-center items-center mb-2">
-          <span className={`text-sm font-medium ${isToday ? 'text-marsala-600' : 'text-gray-700'}`}>
+          <span className={`text-sm font-medium ${isToday ? (darkMode ? 'text-sky-300' : 'text-marsala-600') : darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
             {day}
           </span>
           {isNegativeBalance && (
@@ -94,16 +110,36 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
           <div className="space-y-1 text-center">
             {dayData.actualBalance !== undefined && dayData.actualBalance !== 0 && (
               <div className="pb-0.5">
-                <span className="text-[9px] text-gray-500 block">R</span>
-                <span className={`font-bold text-xs block leading-tight ${dayData.actualBalance < 0 ? 'text-red-700' : 'text-blue-600'}`}>
+                <span className={`text-[9px] block ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>R</span>
+                <span
+                  className={`font-bold text-xs block leading-tight ${
+                    dayData.actualBalance < 0
+                      ? darkMode
+                        ? 'text-red-300'
+                        : 'text-red-700'
+                      : darkMode
+                        ? 'text-sky-300'
+                        : 'text-blue-600'
+                  }`}
+                >
                   {formatCurrency(dayData.actualBalance)}
                 </span>
               </div>
             )}
 
             <div className={dayData.actualBalance !== undefined && dayData.actualBalance !== 0 ? 'border-t pt-0.5' : ''}>
-              <span className="text-[9px] text-gray-500 block">P</span>
-              <span className={`font-bold text-xs block leading-tight ${isNegativeBalance ? 'text-red-700' : 'text-green-600'}`}>
+              <span className={`text-[9px] block ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>P</span>
+              <span
+                className={`font-bold text-xs block leading-tight ${
+                  isNegativeBalance
+                    ? darkMode
+                      ? 'text-red-300'
+                      : 'text-red-700'
+                    : darkMode
+                      ? 'text-emerald-300'
+                      : 'text-green-600'
+                }`}
+              >
                 {formatCurrency(dayData.forecastedBalance)}
               </span>
             </div>
@@ -113,22 +149,26 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
     );
   };
 
-  return (
-    <div className="bg-white rounded-lg shadow-md p-6">
+    return (
+      <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center space-x-4">
           <button
             onClick={() => navigateMonth('prev')}
-            className="p-2 rounded-lg bg-marsala-100 text-marsala-600 hover:bg-marsala-200 transition-colors"
+            className={`p-2 rounded-lg transition-colors ${
+              darkMode ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-marsala-100 text-marsala-600 hover:bg-marsala-200'
+            }`}
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
-          <h2 className="text-xl font-bold text-gray-800">
+          <h2 className={`text-xl font-bold ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             {monthNames[month]} {year}
           </h2>
           <button
             onClick={() => navigateMonth('next')}
-            className="p-2 rounded-lg bg-marsala-100 text-marsala-600 hover:bg-marsala-200 transition-colors"
+            className={`p-2 rounded-lg transition-colors ${
+              darkMode ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-marsala-100 text-marsala-600 hover:bg-marsala-200'
+            }`}
           >
             <ChevronRight className="w-5 h-5" />
           </button>
@@ -137,22 +177,27 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
         <div className="flex items-center space-x-4 text-sm">
           <div className="flex items-center">
             <div className="w-3 h-3 bg-blue-600 rounded-full mr-2"></div>
-            <span className="text-gray-600">Saldo Real</span>
+            <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Saldo Real</span>
           </div>
           <div className="flex items-center">
             <div className="w-3 h-3 bg-green-600 rounded-full mr-2"></div>
-            <span className="text-gray-600">Saldo Previsto</span>
+            <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Saldo Previsto</span>
           </div>
           <div className="flex items-center">
             <div className="w-3 h-3 bg-red-600 rounded-full mr-2"></div>
-            <span className="text-gray-600">Negativo</span>
+            <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Negativo</span>
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-7 gap-0">
         {weekDays.map((day, index) => (
-          <div key={index} className="h-7 bg-marsala-600 text-white flex items-center justify-center font-medium text-sm">
+          <div
+            key={index}
+            className={`h-7 flex items-center justify-center font-medium text-sm ${
+              darkMode ? 'bg-slate-800 text-slate-100' : 'bg-marsala-600 text-white'
+            }`}
+          >
             {day}
           </div>
         ))}

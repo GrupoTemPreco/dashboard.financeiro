@@ -7,17 +7,34 @@ interface DataImportProps {
   onFileUpload: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances', currentIndex?: number, totalFiles?: number) => Promise<void>;
   importedFiles: ImportedFile[];
   onDeleteFile: (fileId: string) => void;
+  onRestoreFile: (fileId: string) => void;
+  onPermanentDeleteFile: (fileId: string) => void;
+  onEmptyTrash: () => void;
+  isAdmin: boolean;
+  darkMode?: boolean;
 }
 
 export const DataImport: React.FC<DataImportProps> = ({
   onFileUpload,
   importedFiles,
-  onDeleteFile
+  onDeleteFile,
+  onRestoreFile,
+  onPermanentDeleteFile,
+  onEmptyTrash,
+  isAdmin,
+  darkMode = false
 }) => {
   const [dragOver, setDragOver] = useState<string | null>(null);
-  const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
   const [instructionsOpen, setInstructionsOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [importedFilesOpen, setImportedFilesOpen] = useState(false);
+  const [selectedImportDate, setSelectedImportDate] = useState<string>('');
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    all: true,
+    trash: false
+  });
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
   const companiesInputRef = useRef<HTMLInputElement>(null);
   const accountsPayableInputRef = useRef<HTMLInputElement>(null);
   const revenuesInputRef = useRef<HTMLInputElement>(null);
@@ -90,6 +107,41 @@ export const DataImport: React.FC<DataImportProps> = ({
       default:
         return 'Processando...';
     }
+  };
+
+  const handleSingleDelete = (fileId: string, fileName: string) => {
+    if (!isAdmin) return;
+    const confirmed = window.confirm(
+      `Tem certeza de que deseja excluir o arquivo "${fileName}"?`
+    );
+    if (confirmed) {
+      onDeleteFile(fileId);
+      setSelectedFileIds((prev) => prev.filter((id) => id !== fileId));
+    }
+  };
+
+  const handleToggleSelection = (fileId: string) => {
+    if (!isAdmin) return;
+    setSelectedFileIds((prev) =>
+      prev.includes(fileId)
+        ? prev.filter((id) => id !== fileId)
+        : [...prev, fileId]
+    );
+  };
+
+  const handleDeleteSelected = () => {
+    if (!isAdmin) return;
+    if (selectedFileIds.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Tem certeza de que deseja excluir ${selectedFileIds.length} arquivo(s) selecionado(s)?`
+    );
+
+    if (!confirmed) return;
+
+    selectedFileIds.forEach((id) => onDeleteFile(id));
+    setSelectedFileIds([]);
+    setSelectionMode(false);
   };
 
   const downloadCompaniesTemplate = () => {
@@ -177,17 +229,6 @@ export const DataImport: React.FC<DataImportProps> = ({
     XLSX.writeFile(wb, 'modelo_cmv_dre.xlsx');
   };
 
-  const getFilesByType = (type: string) => {
-    return importedFiles.filter(file => file.type === type);
-  };
-
-  const toggleCard = (type: string) => {
-    setExpandedCards(prev => ({
-      ...prev,
-      [type]: !prev[type]
-    }));
-  };
-
   const renderFormatTooltip = (type: 'revenues_dre' | 'cmv_dre' | 'initial_balances') => {
     const formatInfo = {
       revenues_dre: {
@@ -259,57 +300,454 @@ export const DataImport: React.FC<DataImportProps> = ({
     );
   };
 
-  const renderImportedFiles = (type: string) => {
-    const files = getFilesByType(type);
-    if (files.length === 0) return null;
+  const getTypeLabel = (type: string) => {
+    const map: Record<string, string> = {
+      companies: 'Cadastro de Empresas',
+      accounts_payable: 'Contas a Pagar',
+      revenues: 'Receitas',
+      financial_transactions: 'Lançamentos Financeiros',
+      forecasted_entries: 'Lançamentos Previstos',
+      revenues_dre: 'Receita DRE',
+      cmv_dre: 'CMV DRE',
+      initial_balances: 'Saldos Bancários'
+    };
+    return map[type] || type;
+  };
 
-    const isExpanded = expandedCards[type] || false;
+  const renderImportedFilesDropdown = () => {
+    const activeFiles = importedFiles.filter(file => !file.isDeleted);
+    const trashedFiles = importedFiles.filter(file => file.isDeleted);
+    const hasFiles = activeFiles.length > 0;
+
+    // Aplica filtro de data (data de importação)
+    const dateFilteredFiles = selectedImportDate
+      ? activeFiles.filter((file) => {
+          const fileDate = new Date(file.uploadDate);
+          const isoDate = fileDate.toISOString().slice(0, 10); // yyyy-mm-dd
+          return isoDate === selectedImportDate;
+        })
+      : activeFiles;
+
+    const typeOrder = [
+      'all',
+      'companies',
+      'accounts_payable',
+      'revenues',
+      'financial_transactions',
+      'forecasted_entries',
+      'revenues_dre',
+      'cmv_dre',
+      'initial_balances'
+    ];
+
+    const toggleSection = (key: string) => {
+      setExpandedSections((prev) => ({
+        ...prev,
+        [key]: !prev[key]
+      }));
+    };
 
     return (
-      <div className="mt-4 border-t border-gray-200 pt-4 relative">
-        <button
-          onClick={() => toggleCard(type)}
-          className="w-full flex items-center justify-between text-sm text-gray-600 hover:text-gray-800 transition-colors"
-        >
-          <span className="font-medium">
-            Arquivos importados ({files.length})
-          </span>
-          {isExpanded ? (
-            <ChevronUp className="w-4 h-4" />
-          ) : (
-            <ChevronDown className="w-4 h-4" />
-          )}
-        </button>
-        
-        {isExpanded && (
-          <div className="absolute left-0 right-0 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-96 overflow-y-auto">
-            <div className="p-3 space-y-2">
-              {files.map((file) => (
-                <div key={file.id} className="flex items-center justify-between p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                  <div className="flex items-center flex-1 min-w-0">
-                    {getStatusIcon(file.status)}
-                    <div className="ml-3 flex-1 min-w-0">
-                      <p className="font-medium text-gray-800 truncate">{file.name}</p>
-                      <div className="flex items-center space-x-3 text-xs text-gray-600 mt-1">
-                        <span>{formatDate(file.uploadDate)}</span>
-                        <span>{file.recordCount} registros</span>
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">{getStatusText(file.status)}</p>
-                    </div>
-                  </div>
-                  
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        {/* Backdrop */}
+        <div
+          className="absolute inset-0 bg-black bg-opacity-40"
+          onClick={() => setImportedFilesOpen(false)}
+        />
+
+        {/* Modal */}
+        <div className="relative bg-white rounded-2xl shadow-2xl max-w-5xl w-full mx-4 max-h-[80vh] overflow-hidden border border-gray-200">
+          <div className="px-6 pt-4 pb-3 border-b border-gray-200 bg-gray-50">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-semibold text-gray-900">
+                Arquivos importados
+              </h3>
+              <button
+                onClick={() => setImportedFilesOpen(false)}
+                className="text-xs font-medium text-gray-500 hover:text-gray-700 uppercase tracking-wide"
+              >
+                Fechar
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-gray-600">
+                  Filtrar por data de importação:
+                </span>
+                <input
+                  type="date"
+                  value={selectedImportDate}
+                  onChange={(e) => setSelectedImportDate(e.target.value)}
+                  className="border border-gray-300 rounded-md px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                />
+                {selectedImportDate && (
                   <button
-                    onClick={() => onDeleteFile(file.id)}
-                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors ml-2 flex-shrink-0"
-                    title="Excluir arquivo"
+                    onClick={() => setSelectedImportDate('')}
+                    className="text-xs text-blue-600 hover:underline"
                   >
-                    <Trash2 className="w-4 h-4" />
+                    Limpar
                   </button>
-                </div>
-              ))}
+                )}
+              </div>
+
+              <div className="hidden sm:flex text-[11px] text-gray-500">
+                <span>
+                  Clique em cada linha para expandir os arquivos por tipo e data.
+                </span>
+              </div>
             </div>
           </div>
-        )}
+
+          <div className="p-6 overflow-y-auto max-h-[calc(80vh-80px)] bg-white">
+            {!hasFiles && (
+              <p className="text-sm text-gray-500">
+                Nenhum arquivo foi importado ainda.
+              </p>
+            )}
+
+            {hasFiles && dateFilteredFiles.length === 0 && (
+              <p className="text-sm text-gray-500">
+                Nenhum arquivo encontrado para a data selecionada.
+              </p>
+            )}
+
+            {typeOrder.map((typeKey) => {
+              const filesForType =
+                typeKey === 'all'
+                  ? dateFilteredFiles
+                  : dateFilteredFiles.filter((file) => file.type === typeKey);
+
+              if (!hasFiles && filesForType.length === 0) {
+                return null;
+              }
+
+              // Agrupa por data dentro do tipo
+              const filesByDate: Record<string, ImportedFile[]> = {};
+              filesForType.forEach((file) => {
+                const dateLabel = new Date(file.uploadDate).toLocaleDateString('pt-BR');
+                if (!filesByDate[dateLabel]) {
+                  filesByDate[dateLabel] = [];
+                }
+                filesByDate[dateLabel].push(file);
+              });
+
+              const dateKeys = Object.keys(filesByDate);
+              const isExpanded = expandedSections[typeKey] ?? typeKey === 'all';
+
+              const headerLabel =
+                typeKey === 'all' ? 'Todos' : getTypeLabel(typeKey);
+
+              const totalCount = filesForType.length;
+
+              return (
+                <div key={typeKey} className="mb-4 border border-gray-200 rounded-lg overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => toggleSection(typeKey)}
+                    className={`w-full flex items-center justify-between px-4 py-2 text-sm font-medium ${
+                      typeKey === 'all'
+                        ? 'bg-gray-100'
+                        : 'bg-white'
+                    } hover:bg-gray-50 transition-colors`}
+                  >
+                    <div className="flex items-center">
+                      <span className="mr-2">
+                        {isExpanded ? (
+                          <ChevronUp className="w-4 h-4" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4" />
+                        )}
+                      </span>
+                      <span className="text-gray-800">{headerLabel}</span>
+                    </div>
+                    <span className="text-xs text-gray-600">
+                      {totalCount} arquivo{totalCount === 1 ? '' : 's'}
+                    </span>
+                  </button>
+
+                  {isExpanded && totalCount > 0 && (
+                    <div className="px-4 py-3 bg-gray-50 border-t border-gray-200">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-[11px] text-gray-600">
+                          {totalCount} arquivo{totalCount === 1 ? '' : 's'} neste grupo
+                        </span>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectionMode((prev) => !prev);
+                              if (selectionMode) {
+                                setSelectedFileIds([]);
+                              }
+                            }}
+                            className="inline-flex items-center px-3 py-1 rounded-md text-[11px] font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                          >
+                            {selectionMode ? 'Cancelar seleção' : 'Selecionar arquivos'}
+                          </button>
+                        )}
+                      </div>
+                      {selectionMode && isAdmin && (
+                        <div className="flex flex-wrap items-center justify-between mb-3 gap-2 text-[11px] text-gray-600">
+                          <div className="flex items-center gap-3">
+                            <span>
+                              {selectedFileIds.length} arquivo
+                              {selectedFileIds.length === 1 ? '' : 's'} selecionado
+                              {selectedFileIds.length === 1 ? '' : 's'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                // seleciona todos os arquivos deste grupo
+                                const allIdsInGroup = filesForType.map((f) => f.id);
+                                const allSelected = allIdsInGroup.every((id) =>
+                                  selectedFileIds.includes(id)
+                                );
+                                if (allSelected) {
+                                  // desmarca todos deste grupo
+                                  setSelectedFileIds((prev) =>
+                                    prev.filter((id) => !allIdsInGroup.includes(id))
+                                  );
+                                } else {
+                                  // adiciona os que faltam
+                                  setSelectedFileIds((prev) => [
+                                    ...prev,
+                                    ...allIdsInGroup.filter((id) => !prev.includes(id))
+                                  ]);
+                                }
+                              }}
+                              className="px-2 py-1 rounded-md border border-blue-600 text-blue-600 hover:bg-blue-50 font-medium"
+                            >
+                              Selecionar todos
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleDeleteSelected}
+                            disabled={selectedFileIds.length === 0}
+                            className={`px-2 py-1 rounded-md border text-[11px] font-medium ${
+                              selectedFileIds.length === 0
+                                ? 'border-gray-200 text-gray-300 cursor-not-allowed bg-gray-100'
+                                : 'border-red-600 text-red-600 hover:bg-red-50'
+                            }`}
+                          >
+                            Excluir selecionados
+                          </button>
+                        </div>
+                      )}
+                      {dateKeys.map((date) => {
+                        const files = filesByDate[date];
+
+                        return (
+                          <div key={date} className="mb-4 last:mb-0">
+                            <h4 className="text-xs font-semibold text-gray-700 mb-2">
+                              {date} ({files.length})
+                            </h4>
+                            <div className="space-y-2">
+                              {files.map((file) => (
+                                <div
+                                  key={file.id}
+                                  className={`flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg ${
+                                    selectionMode && selectedFileIds.includes(file.id)
+                                      ? 'ring-1 ring-blue-400'
+                                      : ''
+                                  }`}
+                                >
+                                  <div className="flex items-center flex-1 min-w-0">
+                                    {selectionMode && isAdmin && (
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedFileIds.includes(file.id)}
+                                        onChange={() => handleToggleSelection(file.id)}
+                                        className="h-3.5 w-3.5 text-blue-600 border-gray-300 rounded mr-2"
+                                      />
+                                    )}
+                                    {getStatusIcon(file.status)}
+                                    <div className="ml-3 flex-1 min-w-0">
+                                      <div className="flex items-center justify-between">
+                                        <p className="font-medium text-gray-800 truncate">
+                                          {file.name}
+                                        </p>
+                                        <span className="ml-3 inline-flex items-center px-2 py-0.5 rounded-full bg-blue-50 text-[10px] font-medium text-blue-700 border border-blue-100 flex-shrink-0">
+                                          {getTypeLabel(file.type)}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center space-x-3 text-xs text-gray-600 mt-1">
+                                        <span>{formatDate(file.uploadDate)}</span>
+                                        <span>{file.recordCount} registros</span>
+                                      </div>
+                                      <p className="text-xs text-gray-500 mt-1">
+                                        {getStatusText(file.status)}
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  {isAdmin && (
+                                    <button
+                                      onClick={() => handleSingleDelete(file.id, file.name)}
+                                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors ml-2 flex-shrink-0"
+                                      title="Excluir arquivo"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Lixeira */}
+            {isAdmin && (
+            <div className="mt-6 border-t border-gray-200 pt-4">
+              <button
+                type="button"
+                onClick={() =>
+                  setExpandedSections(prev => ({
+                    ...prev,
+                    trash: !prev.trash
+                  }))
+                }
+                className="w-full flex items-center justify-between px-4 py-2 text-sm font-medium bg-white hover:bg-gray-50 transition-colors rounded-lg border border-gray-200"
+              >
+                <div className="flex items-center">
+                  <span className="mr-2">
+                    {expandedSections.trash ? (
+                      <ChevronUp className="w-4 h-4" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4" />
+                    )}
+                  </span>
+                  <span className="text-gray-800">Lixeira</span>
+                </div>
+                <span className="text-xs text-gray-600">
+                  {trashedFiles.length} arquivo
+                  {trashedFiles.length === 1 ? '' : 's'} na lixeira
+                </span>
+              </button>
+
+              {expandedSections.trash && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-[11px] text-gray-600">
+                      Arquivos apagados recentemente (não utilizados no sistema)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (trashedFiles.length === 0) return;
+                        const confirmed = window.confirm(
+                          `Tem certeza de que deseja esvaziar a lixeira? ${trashedFiles.length} arquivo(s) serão excluídos permanentemente.`
+                        );
+                        if (!confirmed) return;
+                        onEmptyTrash();
+                      }}
+                      disabled={trashedFiles.length === 0}
+                      className={`inline-flex items-center px-3 py-1 rounded-md text-[11px] font-medium border ${
+                        trashedFiles.length === 0
+                          ? 'border-gray-200 text-gray-300 bg-gray-100 cursor-not-allowed'
+                          : 'border-red-600 text-red-600 hover:bg-red-50'
+                      }`}
+                    >
+                      Esvaziar lixeira
+                    </button>
+                  </div>
+
+                  {trashedFiles.length === 0 && (
+                    <p className="text-xs text-gray-500">
+                      Nenhum arquivo na lixeira no momento.
+                    </p>
+                  )}
+
+                  {trashedFiles.length > 0 && (
+                    <div className="mt-2 space-y-4">
+                      {Object.entries(
+                        trashedFiles.reduce<Record<string, ImportedFile[]>>(
+                          (acc, file) => {
+                            const dateLabel = new Date(
+                              file.uploadDate
+                            ).toLocaleDateString('pt-BR');
+                            if (!acc[dateLabel]) acc[dateLabel] = [];
+                            acc[dateLabel].push(file);
+                            return acc;
+                          },
+                          {}
+                        )
+                      ).map(([date, files]) => (
+                        <div key={date}>
+                          <h5 className="text-xs font-semibold text-gray-700 mb-2">
+                            {date} ({files.length})
+                          </h5>
+                          <div className="space-y-2">
+                            {files.map((file) => (
+                              <div
+                                key={file.id}
+                                className="flex items-center justify-between p-3 bg-gray-50 border border-gray-200 rounded-lg"
+                              >
+                                <div className="flex items-center flex-1 min-w-0">
+                                  {getStatusIcon(file.status)}
+                                  <div className="ml-3 flex-1 min-w-0">
+                                    <div className="flex items-center justify-between">
+                                      <p className="font-medium text-gray-800 truncate">
+                                        {file.name}
+                                      </p>
+                                      <span className="ml-3 inline-flex items-center px-2 py-0.5 rounded-full bg-gray-200 text-[10px] font-medium text-gray-800 border border-gray-300 flex-shrink-0">
+                                        {getTypeLabel(file.type)}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center space-x-3 text-xs text-gray-600 mt-1">
+                                      <span>{formatDate(file.uploadDate)}</span>
+                                      <span>{file.recordCount} registros</span>
+                                    </div>
+                                    <p className="text-xs text-gray-500 mt-1">
+                                      Arquivo na lixeira (não utilizado no sistema)
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {isAdmin && (
+                                  <div className="flex items-center gap-2 ml-2 flex-shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => onRestoreFile(file.id)}
+                                      className="px-2 py-1 rounded-md text-[11px] font-medium border border-emerald-600 text-emerald-600 hover:bg-emerald-50"
+                                    >
+                                      Restaurar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const confirmed = window.confirm(
+                                          `Tem certeza de que deseja excluir permanentemente o arquivo "${file.name}"? Esta ação não pode ser desfeita.`
+                                        );
+                                        if (!confirmed) return;
+                                        onPermanentDeleteFile(file.id);
+                                      }}
+                                      className="px-2 py-1 rounded-md text-[11px] font-medium border border-red-600 text-red-600 hover:bg-red-50"
+                                    >
+                                      Excluir permanentemente
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            )}
+          </div>
+        </div>
       </div>
     );
   };
@@ -561,13 +999,31 @@ export const DataImport: React.FC<DataImportProps> = ({
             </div>
           )}
         </div>
+
+        {/* Imported Files Dropdown */}
+        <div className="relative flex-1 min-w-[200px]">
+          <button
+            onClick={() => setImportedFilesOpen(!importedFilesOpen)}
+            className="w-full flex items-center justify-center px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900 transition-colors"
+          >
+            <FileText className="w-5 h-5 mr-2" />
+            <span className="font-medium">Arquivos importados</span>
+            {importedFilesOpen ? (
+              <ChevronUp className="w-4 h-4 ml-2" />
+            ) : (
+              <ChevronDown className="w-4 h-4 ml-2" />
+            )}
+          </button>
+
+          {importedFilesOpen && renderImportedFilesDropdown()}
+        </div>
       </div>
 
       {/* Upload Areas */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {/* Companies Upload */}
-        <div className="bg-white rounded-lg shadow-md p-4 relative">
-          <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center">
+        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
+          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-green-600" />
             1. Cadastro de Empresas
           </h3>
@@ -575,22 +1031,26 @@ export const DataImport: React.FC<DataImportProps> = ({
           <div
             className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
               dragOver === 'companies'
-                ? 'border-green-400 bg-green-50'
-                : 'border-gray-300 hover:border-green-400'
+                ? darkMode
+                  ? 'border-green-400 bg-emerald-950/20'
+                  : 'border-green-400 bg-green-50'
+                : darkMode
+                  ? 'border-slate-600 hover:border-green-400'
+                  : 'border-gray-300 hover:border-green-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'companies')}
             onDragLeave={handleDragLeave}
             onDrop={(e) => handleDrop(e, 'companies')}
           >
-            <Upload className="w-10 h-10 text-gray-400 mx-auto mb-3" />
-            <p className="text-sm text-gray-600 mb-2">Arraste os arquivos aqui ou</p>
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
+            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
             <button
               onClick={() => companiesInputRef.current?.click()}
               className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
             >
               Selecionar Arquivos
             </button>
-            <p className="text-xs text-gray-500 mt-2">Excel (.xlsx, .xls) - Múltiplos arquivos</p>
+            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
           </div>
           
           <input
@@ -601,13 +1061,11 @@ export const DataImport: React.FC<DataImportProps> = ({
             onChange={(e) => handleFileSelect(e, 'companies')}
             className="hidden"
           />
-          
-          {renderImportedFiles('companies')}
         </div>
 
         {/* Accounts Payable Upload */}
-        <div className="bg-white rounded-lg shadow-md p-4 relative">
-          <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center">
+        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
+          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-orange-600" />
             2. Contas a Pagar
           </h3>
@@ -615,22 +1073,26 @@ export const DataImport: React.FC<DataImportProps> = ({
           <div
             className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
               dragOver === 'accounts_payable'
-                ? 'border-orange-400 bg-orange-50'
-                : 'border-gray-300 hover:border-orange-400'
+                ? darkMode
+                  ? 'border-orange-400 bg-amber-950/20'
+                  : 'border-orange-400 bg-orange-50'
+                : darkMode
+                  ? 'border-slate-600 hover:border-orange-400'
+                  : 'border-gray-300 hover:border-orange-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'accounts_payable')}
             onDragLeave={handleDragLeave}
             onDrop={(e) => handleDrop(e, 'accounts_payable')}
           >
-            <Upload className="w-10 h-10 text-gray-400 mx-auto mb-3" />
-            <p className="text-sm text-gray-600 mb-2">Arraste os arquivos aqui ou</p>
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
+            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
             <button
               onClick={() => accountsPayableInputRef.current?.click()}
               className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
             >
               Selecionar Arquivos
             </button>
-            <p className="text-xs text-gray-500 mt-2">Excel (.xlsx, .xls) - Múltiplos arquivos</p>
+            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
           </div>
 
           <input
@@ -641,13 +1103,11 @@ export const DataImport: React.FC<DataImportProps> = ({
             onChange={(e) => handleFileSelect(e, 'accounts_payable')}
             className="hidden"
           />
-          
-          {renderImportedFiles('accounts_payable')}
         </div>
 
         {/* Revenues Upload */}
-        <div className="bg-white rounded-lg shadow-md p-4 relative">
-          <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center">
+        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
+          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-blue-600" />
             3. Receitas
           </h3>
@@ -655,22 +1115,26 @@ export const DataImport: React.FC<DataImportProps> = ({
           <div
             className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
               dragOver === 'revenues'
-                ? 'border-blue-400 bg-blue-50'
-                : 'border-gray-300 hover:border-blue-400'
+                ? darkMode
+                  ? 'border-blue-400 bg-sky-950/20'
+                  : 'border-blue-400 bg-blue-50'
+                : darkMode
+                  ? 'border-slate-600 hover:border-blue-400'
+                  : 'border-gray-300 hover:border-blue-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'revenues')}
             onDragLeave={handleDragLeave}
             onDrop={(e) => handleDrop(e, 'revenues')}
           >
-            <Upload className="w-10 h-10 text-gray-400 mx-auto mb-3" />
-            <p className="text-sm text-gray-600 mb-2">Arraste os arquivos aqui ou</p>
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
+            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
             <button
               onClick={() => revenuesInputRef.current?.click()}
               className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
             >
               Selecionar Arquivos
             </button>
-            <p className="text-xs text-gray-500 mt-2">Excel (.xlsx, .xls) - Múltiplos arquivos</p>
+            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
           </div>
 
           <input
@@ -681,13 +1145,11 @@ export const DataImport: React.FC<DataImportProps> = ({
             onChange={(e) => handleFileSelect(e, 'revenues')}
             className="hidden"
           />
-          
-          {renderImportedFiles('revenues')}
         </div>
 
         {/* Financial Transactions Upload */}
-        <div className="bg-white rounded-lg shadow-md p-4 relative">
-          <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center">
+        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
+          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-purple-600" />
             4. Lançamentos Financeiros
           </h3>
@@ -695,22 +1157,26 @@ export const DataImport: React.FC<DataImportProps> = ({
           <div
             className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
               dragOver === 'financial_transactions'
-                ? 'border-purple-400 bg-purple-50'
-                : 'border-gray-300 hover:border-purple-400'
+                ? darkMode
+                  ? 'border-purple-400 bg-violet-950/20'
+                  : 'border-purple-400 bg-purple-50'
+                : darkMode
+                  ? 'border-slate-600 hover:border-purple-400'
+                  : 'border-gray-300 hover:border-purple-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'financial_transactions')}
             onDragLeave={handleDragLeave}
             onDrop={(e) => handleDrop(e, 'financial_transactions')}
           >
-            <Upload className="w-10 h-10 text-gray-400 mx-auto mb-3" />
-            <p className="text-sm text-gray-600 mb-2">Arraste os arquivos aqui ou</p>
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
+            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
             <button
               onClick={() => financialTransactionsInputRef.current?.click()}
               className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
             >
               Selecionar Arquivos
             </button>
-            <p className="text-xs text-gray-500 mt-2">Excel (.xlsx, .xls) - Múltiplos arquivos</p>
+            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
           </div>
 
           <input
@@ -721,13 +1187,11 @@ export const DataImport: React.FC<DataImportProps> = ({
             onChange={(e) => handleFileSelect(e, 'financial_transactions')}
             className="hidden"
           />
-          
-          {renderImportedFiles('financial_transactions')}
         </div>
 
         {/* Forecasted Entries Upload */}
-        <div className="bg-white rounded-lg shadow-md p-4 relative">
-          <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center">
+        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
+          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-teal-600" />
             5. Lançamentos Previstos
           </h3>
@@ -735,22 +1199,26 @@ export const DataImport: React.FC<DataImportProps> = ({
           <div
             className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
               dragOver === 'forecasted_entries'
-                ? 'border-teal-400 bg-teal-50'
-                : 'border-gray-300 hover:border-teal-400'
+                ? darkMode
+                  ? 'border-teal-400 bg-teal-950/20'
+                  : 'border-teal-400 bg-teal-50'
+                : darkMode
+                  ? 'border-slate-600 hover:border-teal-400'
+                  : 'border-gray-300 hover:border-teal-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'forecasted_entries')}
             onDragLeave={handleDragLeave}
             onDrop={(e) => handleDrop(e, 'forecasted_entries')}
           >
-            <Upload className="w-10 h-10 text-gray-400 mx-auto mb-3" />
-            <p className="text-sm text-gray-600 mb-2">Arraste os arquivos aqui ou</p>
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
+            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
             <button
               onClick={() => forecastedEntriesInputRef.current?.click()}
               className="px-3 py-1.5 text-sm bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors"
             >
               Selecionar Arquivos
             </button>
-            <p className="text-xs text-gray-500 mt-2">Excel (.xlsx, .xls) - Múltiplos arquivos</p>
+            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
           </div>
 
           <input
@@ -761,13 +1229,11 @@ export const DataImport: React.FC<DataImportProps> = ({
             onChange={(e) => handleFileSelect(e, 'forecasted_entries')}
             className="hidden"
           />
-          
-          {renderImportedFiles('forecasted_entries')}
         </div>
 
         {/* Revenues DRE Upload */}
-        <div className="bg-white rounded-lg shadow-md p-4 relative">
-          <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center">
+        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
+          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-cyan-600" />
             6. Receita DRE
             {renderFormatTooltip('revenues_dre')}
@@ -776,22 +1242,26 @@ export const DataImport: React.FC<DataImportProps> = ({
           <div
             className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
               dragOver === 'revenues_dre'
-                ? 'border-cyan-400 bg-cyan-50'
-                : 'border-gray-300 hover:border-cyan-400'
+                ? darkMode
+                  ? 'border-cyan-400 bg-cyan-950/20'
+                  : 'border-cyan-400 bg-cyan-50'
+                : darkMode
+                  ? 'border-slate-600 hover:border-cyan-400'
+                  : 'border-gray-300 hover:border-cyan-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'revenues_dre')}
             onDragLeave={handleDragLeave}
             onDrop={(e) => handleDrop(e, 'revenues_dre')}
           >
-            <Upload className="w-10 h-10 text-gray-400 mx-auto mb-3" />
-            <p className="text-sm text-gray-600 mb-2">Arraste os arquivos aqui ou</p>
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
+            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
             <button
               onClick={() => revenuesDREInputRef.current?.click()}
               className="px-3 py-1.5 text-sm bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors"
             >
               Selecionar Arquivos
             </button>
-            <p className="text-xs text-gray-500 mt-2">Excel (.xlsx, .xls) - Múltiplos arquivos</p>
+            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
           </div>
 
           <input
@@ -802,13 +1272,11 @@ export const DataImport: React.FC<DataImportProps> = ({
             onChange={(e) => handleFileSelect(e, 'revenues_dre')}
             className="hidden"
           />
-          
-          {renderImportedFiles('revenues_dre')}
         </div>
 
         {/* CMV DRE Upload */}
-        <div className="bg-white rounded-lg shadow-md p-4 relative">
-          <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center">
+        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
+          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-rose-600" />
             7. CMV DRE
             {renderFormatTooltip('cmv_dre')}
@@ -817,22 +1285,26 @@ export const DataImport: React.FC<DataImportProps> = ({
           <div
             className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
               dragOver === 'cmv_dre'
-                ? 'border-rose-400 bg-rose-50'
-                : 'border-gray-300 hover:border-rose-400'
+                ? darkMode
+                  ? 'border-rose-400 bg-rose-950/20'
+                  : 'border-rose-400 bg-rose-50'
+                : darkMode
+                  ? 'border-slate-600 hover:border-rose-400'
+                  : 'border-gray-300 hover:border-rose-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'cmv_dre')}
             onDragLeave={handleDragLeave}
             onDrop={(e) => handleDrop(e, 'cmv_dre')}
           >
-            <Upload className="w-10 h-10 text-gray-400 mx-auto mb-3" />
-            <p className="text-sm text-gray-600 mb-2">Arraste os arquivos aqui ou</p>
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
+            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
             <button
               onClick={() => cmvDREInputRef.current?.click()}
               className="px-3 py-1.5 text-sm bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors"
             >
               Selecionar Arquivos
             </button>
-            <p className="text-xs text-gray-500 mt-2">Excel (.xlsx, .xls) - Múltiplos arquivos</p>
+            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
           </div>
 
           <input
@@ -843,13 +1315,11 @@ export const DataImport: React.FC<DataImportProps> = ({
             onChange={(e) => handleFileSelect(e, 'cmv_dre')}
             className="hidden"
           />
-          
-          {renderImportedFiles('cmv_dre')}
         </div>
 
         {/* Initial Balances Upload */}
-        <div className="bg-white rounded-lg shadow-md p-4 relative">
-          <h3 className="text-base font-semibold text-gray-800 mb-3 flex items-center">
+        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
+          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-emerald-600" />
             8. Saldos Bancários
             {renderFormatTooltip('initial_balances')}
@@ -858,22 +1328,26 @@ export const DataImport: React.FC<DataImportProps> = ({
           <div
             className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
               dragOver === 'initial_balances'
-                ? 'border-emerald-400 bg-emerald-50'
-                : 'border-gray-300 hover:border-emerald-400'
+                ? darkMode
+                  ? 'border-emerald-400 bg-emerald-950/20'
+                  : 'border-emerald-400 bg-emerald-50'
+                : darkMode
+                  ? 'border-slate-600 hover:border-emerald-400'
+                  : 'border-gray-300 hover:border-emerald-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'initial_balances')}
             onDragLeave={handleDragLeave}
             onDrop={(e) => handleDrop(e, 'initial_balances')}
           >
-            <Upload className="w-10 h-10 text-gray-400 mx-auto mb-3" />
-            <p className="text-sm text-gray-600 mb-2">Arraste os arquivos aqui ou</p>
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
+            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
             <button
               onClick={() => initialBalancesInputRef.current?.click()}
               className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
             >
               Selecionar Arquivos
             </button>
-            <p className="text-xs text-gray-500 mt-2">Excel (.xlsx, .xls) - Múltiplos arquivos</p>
+            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
           </div>
 
           <input
@@ -884,8 +1358,6 @@ export const DataImport: React.FC<DataImportProps> = ({
             onChange={(e) => handleFileSelect(e, 'initial_balances')}
             className="hidden"
           />
-          
-          {renderImportedFiles('initial_balances')}
         </div>
       </div>
 

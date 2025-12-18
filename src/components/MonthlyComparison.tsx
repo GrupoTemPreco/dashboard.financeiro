@@ -23,9 +23,10 @@ interface MonthlyData {
 
 interface MonthlyComparisonProps {
   data: MonthlyData[];
+  darkMode?: boolean;
 }
 
-export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data }) => {
+export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data, darkMode = false }) => {
   const [viewMode, setViewMode] = useState<'3months' | 'year'>('3months');
   const [selectedMetric, setSelectedMetric] = useState<'revenue' | 'cogs' | 'loans'>('revenue');
 
@@ -104,8 +105,8 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data }) =>
       const originalData = payload[0]?.payload?.originalData;
 
       return (
-        <div className="bg-white p-4 border border-gray-200 rounded-lg shadow-lg max-w-sm">
-          <p className="text-sm font-medium text-gray-700 mb-3 border-b pb-2">{label}</p>
+        <div className={`${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'} p-4 border rounded-lg shadow-lg max-w-sm`}>
+          <p className={`text-sm font-medium mb-3 border-b pb-2 ${darkMode ? 'text-slate-100 border-slate-700' : 'text-gray-700 border-gray-200'}`}>{label}</p>
 
           {payload.map((entry: any, index: number) => {
             if (entry.dataKey === 'debtRatioCurrent' || entry.dataKey === 'debtRatioPrevious') {
@@ -129,7 +130,7 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data }) =>
                 {selectedMetric === 'revenue' && originalData?.[year]?.revenuesByUnit && (
                   <div className="ml-3 mt-1 space-y-0.5">
                     {Object.entries(originalData[year].revenuesByUnit).map(([unit, value]: [string, any]) => (
-                      <p key={unit} className="text-xs text-gray-600">
+                      <p key={unit} className={`text-xs ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>
                         {unit}: {formatCurrency(value)}
                       </p>
                     ))}
@@ -139,7 +140,7 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data }) =>
                 {selectedMetric === 'cogs' && originalData?.[year]?.cmvByUnit && (
                   <div className="ml-3 mt-1 space-y-0.5">
                     {Object.entries(originalData[year].cmvByUnit).map(([unit, value]: [string, any]) => (
-                      <p key={unit} className="text-xs text-gray-600">
+                      <p key={unit} className={`text-xs ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>
                         {unit}: {formatCurrency(value)}
                       </p>
                     ))}
@@ -157,18 +158,22 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data }) =>
   const colors = getMetricColor();
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-6">
+    <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-gray-800">Análise Mês a Mês & Ano a Ano</h2>
+        <h2 className={`text-xl font-bold ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Análise Mês a Mês & Ano a Ano</h2>
         
         <div className="flex items-center space-x-4">
-          <div className="flex bg-gray-100 rounded-lg p-1">
+          <div className={`flex rounded-lg p-1 ${darkMode ? 'bg-slate-800' : 'bg-gray-100'}`}>
             <button
               onClick={() => setViewMode('3months')}
               className={`px-3 py-1 text-sm rounded-md transition-colors ${
                 viewMode === '3months'
-                  ? 'bg-marsala-600 text-white'
-                  : 'text-gray-600 hover:text-gray-800'
+                  ? darkMode
+                    ? 'bg-sky-500 text-white'
+                    : 'bg-marsala-600 text-white'
+                  : darkMode
+                    ? 'text-slate-300 hover:text-slate-100'
+                    : 'text-gray-600 hover:text-gray-800'
               }`}
             >
               Últimos 3 Meses
@@ -177,8 +182,12 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data }) =>
               onClick={() => setViewMode('year')}
               className={`px-3 py-1 text-sm rounded-md transition-colors ${
                 viewMode === 'year'
-                  ? 'bg-marsala-600 text-white'
-                  : 'text-gray-600 hover:text-gray-800'
+                  ? darkMode
+                    ? 'bg-sky-500 text-white'
+                    : 'bg-marsala-600 text-white'
+                  : darkMode
+                    ? 'text-slate-300 hover:text-slate-100'
+                    : 'text-gray-600 hover:text-gray-800'
               }`}
             >
               Ano
@@ -198,8 +207,10 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data }) =>
             onClick={() => setSelectedMetric(metric.key as any)}
             className={`px-4 py-2 text-sm rounded-lg transition-colors ${
               selectedMetric === metric.key
-                ? 'bg-marsala-600 text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                ? (darkMode ? 'bg-sky-500 text-white' : 'bg-marsala-600 text-white')
+                : darkMode
+                  ? 'bg-slate-800 text-slate-200 hover:bg-slate-700'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
           >
             {metric.label}
@@ -210,16 +221,16 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data }) =>
       <div className="h-80">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={getMetricData()} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-            <XAxis 
-              dataKey="month" 
-              stroke="#6b7280"
+            <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#1f2937' : '#f0f0f0'} />
+            <XAxis
+              dataKey="month"
+              stroke={darkMode ? '#9ca3af' : '#6b7280'}
               fontSize={12}
             />
-            <YAxis 
+            <YAxis
               yAxisId="left"
               tickFormatter={(value) => formatCurrency(value)}
-              stroke="#6b7280"
+              stroke={darkMode ? '#9ca3af' : '#6b7280'}
               fontSize={12}
             />
             {selectedMetric === 'loans' && (
@@ -227,7 +238,7 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data }) =>
                 yAxisId="right"
                 orientation="right"
                 tickFormatter={(value) => `${value}%`}
-                stroke="#6b7280"
+                stroke={darkMode ? '#9ca3af' : '#6b7280'}
                 fontSize={12}
               />
             )}
@@ -275,19 +286,19 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data }) =>
         </ResponsiveContainer>
       </div>
 
-      <div className="mt-4 flex items-center justify-center space-x-6 text-sm">
+      <div className={`mt-4 flex items-center justify-center space-x-6 text-sm ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>
         <div className="flex items-center">
           <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: colors.current }}></div>
-          <span className="text-gray-600">Ano Atual</span>
+          <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano Atual</span>
         </div>
         <div className="flex items-center">
           <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: colors.previous }}></div>
-          <span className="text-gray-600">Ano Anterior</span>
+          <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano Anterior</span>
         </div>
         {selectedMetric === 'loans' && (
           <div className="flex items-center">
             <div className="w-3 h-3 bg-marsala-600 rounded-full mr-2"></div>
-            <span className="text-gray-600">% Empréstimos/Receita</span>
+            <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>% Empréstimos/Receita</span>
           </div>
         )}
       </div>

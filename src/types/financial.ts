@@ -56,10 +56,21 @@ export interface Company {
 export interface ImportedFile {
   id: string;
   name: string;
-  type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'transactions';
+  type:
+    | 'companies'
+    | 'accounts_payable'
+    | 'revenues'
+    | 'financial_transactions'
+    | 'forecasted_entries'
+    | 'transactions'
+    | 'revenues_dre'
+    | 'cmv_dre'
+    | 'initial_balances';
   uploadDate: string;
   recordCount: number;
   status: 'success' | 'error' | 'processing';
+  // Indica se o arquivo está na lixeira (soft delete)
+  isDeleted?: boolean;
 }
 
 export interface AccountsPayable {

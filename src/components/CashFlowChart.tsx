@@ -10,9 +10,10 @@ interface CashFlowData {
 
 interface CashFlowChartProps {
   data: CashFlowData[];
+  darkMode?: boolean;
 }
 
-export const CashFlowChart: React.FC<CashFlowChartProps> = ({ data }) => {
+export const CashFlowChart: React.FC<CashFlowChartProps> = ({ data, darkMode = false }) => {
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
@@ -33,8 +34,8 @@ export const CashFlowChart: React.FC<CashFlowChartProps> = ({ data }) => {
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       return (
-        <div className="bg-white p-3 border border-gray-200 rounded-lg shadow-lg">
-          <p className="text-sm font-medium text-gray-700 mb-2">
+        <div className={`${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'} p-3 border rounded-lg shadow-lg`}>
+          <p className={`text-sm font-medium mb-2 ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
             {formatDate(label)}
           </p>
           {payload.map((entry: any, index: number) => (
@@ -49,22 +50,22 @@ export const CashFlowChart: React.FC<CashFlowChartProps> = ({ data }) => {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-4 h-full">
+    <div className={`${darkMode ? 'bg-slate-900 border border-slate-800 text-slate-100' : 'bg-white'} rounded-lg shadow-md p-4 h-full`}>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-lg font-bold text-gray-800">Fluxo de Caixa Diário</h2>
+        <h2 className={`text-lg font-bold ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Fluxo de Caixa Diário</h2>
         <div className="flex items-center space-x-4 text-sm">
           <div className="flex items-center">
             <div className="w-3 h-3 bg-blue-500 rounded-full mr-2"></div>
-            <span className="text-gray-600">Saldo Real</span>
+            <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Saldo Real</span>
           </div>
           <div className="flex items-center">
             <div className="w-3 h-3 bg-yellow-500 rounded-full mr-2"></div>
-            <span className="text-gray-600">Projeção</span>
+            <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Projeção</span>
           </div>
         </div>
       </div>
 
-      <div className="h-56 overflow-x-auto">
+      <div className="h-56 overflow-x-auto scrollbar-horizontal">
         <div style={{ minWidth: '800px', height: '100%' }}>
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
@@ -78,16 +79,16 @@ export const CashFlowChart: React.FC<CashFlowChartProps> = ({ data }) => {
                   <stop offset="95%" stopColor="#eab308" stopOpacity={0}/>
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#1f2937' : '#f0f0f0'} />
               <XAxis 
                 dataKey="date" 
                 tickFormatter={formatDate}
-                stroke="#6b7280"
+                stroke={darkMode ? '#9ca3af' : '#6b7280'}
                 fontSize={12}
               />
               <YAxis 
                 tickFormatter={(value) => formatCurrency(value)}
-                stroke="#6b7280"
+                stroke={darkMode ? '#9ca3af' : '#6b7280'}
                 fontSize={12}
               />
               <Tooltip content={<CustomTooltip />} />
@@ -117,7 +118,7 @@ export const CashFlowChart: React.FC<CashFlowChartProps> = ({ data }) => {
         </div>
       </div>
 
-      <div className="mt-4 text-xs text-gray-500 text-center">
+      <div className={`mt-4 text-xs text-center ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
         Arraste horizontalmente para visualizar até 6 meses à frente
       </div>
     </div>
