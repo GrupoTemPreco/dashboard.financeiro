@@ -149,7 +149,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
     );
   };
 
-    return (
+  return (
       <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center space-x-4">

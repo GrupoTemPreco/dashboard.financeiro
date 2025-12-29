@@ -78,26 +78,26 @@ export const CashFlowAlerts: React.FC<CashFlowAlertsProps> = ({ data, darkMode =
         <div
           key={index}
           className={`border rounded-lg p-4 ${
-            alert.type === 'shortage'
+            alert.type === 'shortage' 
               ? darkMode
                 ? 'bg-red-950/40 border-red-700'
                 : 'bg-red-50 border-red-200'
               : darkMode
                 ? 'bg-amber-950/40 border-amber-700'
-                : 'bg-yellow-50 border-yellow-200'
+              : 'bg-yellow-50 border-yellow-200'
           }`}
         >
           <div className="flex items-start">
             <div className="flex-shrink-0">
               <div
                 className={`w-6 h-6 rounded-full flex items-center justify-center ${
-                  alert.type === 'shortage'
+                alert.type === 'shortage' 
                     ? darkMode
                       ? 'bg-red-900'
                       : 'bg-red-100'
                     : darkMode
                       ? 'bg-amber-900'
-                      : 'bg-yellow-100'
+                  : 'bg-yellow-100'
                 }`}
               >
                 {alert.type === 'shortage' ? (

@@ -26,6 +26,34 @@
     background: #94a3b8; /* slate-400 */
   }
 
+  /* Scrollbar vertical para modo noturno */
+  .dark .scrollbar-vertical,
+  .scrollbar-vertical-dark {
+    scrollbar-width: thin;
+    scrollbar-color: #64748b transparent;
+  }
+
+  .dark .scrollbar-vertical::-webkit-scrollbar,
+  .scrollbar-vertical-dark::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .dark .scrollbar-vertical::-webkit-scrollbar-track,
+  .scrollbar-vertical-dark::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .dark .scrollbar-vertical::-webkit-scrollbar-thumb,
+  .scrollbar-vertical-dark::-webkit-scrollbar-thumb {
+    background: #64748b; /* slate-500 - mesmo estilo da página */
+    border-radius: 999px;
+  }
+
+  .dark .scrollbar-vertical::-webkit-scrollbar-thumb:hover,
+  .scrollbar-vertical-dark::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8; /* slate-400 */
+  }
+
   /* Scrollbar horizontal do gráfico */
   .scrollbar-horizontal {
     scrollbar-width: thin;

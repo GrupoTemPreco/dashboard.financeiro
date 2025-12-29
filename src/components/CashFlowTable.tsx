@@ -87,7 +87,7 @@ export const CashFlowTable: React.FC<CashFlowTableProps> = ({ data, darkMode = f
                     : 'bg-marsala-600 text-white'
                   : darkMode
                     ? 'text-slate-300 hover:text-slate-100'
-                    : 'text-gray-600 hover:text-gray-800'
+                  : 'text-gray-600 hover:text-gray-800'
               }`}
             >
               <Calendar className="w-4 h-4 mr-1 inline" />
@@ -102,7 +102,7 @@ export const CashFlowTable: React.FC<CashFlowTableProps> = ({ data, darkMode = f
                     : 'bg-marsala-600 text-white'
                   : darkMode
                     ? 'text-slate-300 hover:text-slate-100'
-                    : 'text-gray-600 hover:text-gray-800'
+                  : 'text-gray-600 hover:text-gray-800'
               }`}
             >
               <BarChart3 className="w-4 h-4 mr-1 inline" />

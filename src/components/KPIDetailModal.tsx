@@ -73,7 +73,11 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
   }, [data, searchTerm, statusFilter, businessUnitFilter, startDate, endDate]);
 
   const totalAmount = useMemo(() => {
-    return filteredData.reduce((sum, item) => sum + (item.amount || 0), 0);
+    return filteredData.reduce((sum, item) => {
+      // Para saldos iniciais, usar balance se amount não estiver disponível
+      const amount = item.amount !== undefined ? item.amount : (item.balance || 0);
+      return sum + amount;
+    }, 0);
   }, [filteredData]);
 
   if (!isOpen) return null;
@@ -221,8 +225,13 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
         return '-';
       };
 
+      const getAmount = () => {
+        // Para saldos iniciais, usar balance se amount não estiver disponível
+        return item.amount !== undefined ? item.amount : (item.balance || 0);
+      };
+
       const getAmountColor = () => {
-        const amount = item.amount || 0;
+        const amount = getAmount();
         if (amount < 0) return 'text-red-600';
         if (amount > 0) return 'text-green-600';
         return 'text-gray-900';
@@ -253,7 +262,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
           <td className="px-4 py-3 text-sm text-gray-700">{getSupplierOrDescription()}</td>
           <td className="px-4 py-3 text-sm text-gray-700">{getDate()}</td>
           <td className={`px-4 py-3 text-sm font-semibold text-right ${getAmountColor()}`}>
-            {formatCurrency(item.amount || 0)}
+            {formatCurrency(getAmount())}
           </td>
         </tr>
       );

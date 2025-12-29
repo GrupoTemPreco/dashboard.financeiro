@@ -1036,7 +1036,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                   : 'border-green-400 bg-green-50'
                 : darkMode
                   ? 'border-slate-600 hover:border-green-400'
-                  : 'border-gray-300 hover:border-green-400'
+                : 'border-gray-300 hover:border-green-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'companies')}
             onDragLeave={handleDragLeave}
@@ -1078,7 +1078,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                   : 'border-orange-400 bg-orange-50'
                 : darkMode
                   ? 'border-slate-600 hover:border-orange-400'
-                  : 'border-gray-300 hover:border-orange-400'
+                : 'border-gray-300 hover:border-orange-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'accounts_payable')}
             onDragLeave={handleDragLeave}
@@ -1120,7 +1120,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                   : 'border-blue-400 bg-blue-50'
                 : darkMode
                   ? 'border-slate-600 hover:border-blue-400'
-                  : 'border-gray-300 hover:border-blue-400'
+                : 'border-gray-300 hover:border-blue-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'revenues')}
             onDragLeave={handleDragLeave}
@@ -1162,7 +1162,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                   : 'border-purple-400 bg-purple-50'
                 : darkMode
                   ? 'border-slate-600 hover:border-purple-400'
-                  : 'border-gray-300 hover:border-purple-400'
+                : 'border-gray-300 hover:border-purple-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'financial_transactions')}
             onDragLeave={handleDragLeave}
@@ -1204,7 +1204,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                   : 'border-teal-400 bg-teal-50'
                 : darkMode
                   ? 'border-slate-600 hover:border-teal-400'
-                  : 'border-gray-300 hover:border-teal-400'
+                : 'border-gray-300 hover:border-teal-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'forecasted_entries')}
             onDragLeave={handleDragLeave}
@@ -1247,7 +1247,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                   : 'border-cyan-400 bg-cyan-50'
                 : darkMode
                   ? 'border-slate-600 hover:border-cyan-400'
-                  : 'border-gray-300 hover:border-cyan-400'
+                : 'border-gray-300 hover:border-cyan-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'revenues_dre')}
             onDragLeave={handleDragLeave}
@@ -1290,7 +1290,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                   : 'border-rose-400 bg-rose-50'
                 : darkMode
                   ? 'border-slate-600 hover:border-rose-400'
-                  : 'border-gray-300 hover:border-rose-400'
+                : 'border-gray-300 hover:border-rose-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'cmv_dre')}
             onDragLeave={handleDragLeave}
@@ -1333,7 +1333,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                   : 'border-emerald-400 bg-emerald-50'
                 : darkMode
                   ? 'border-slate-600 hover:border-emerald-400'
-                  : 'border-gray-300 hover:border-emerald-400'
+                : 'border-gray-300 hover:border-emerald-400'
             }`}
             onDragOver={(e) => handleDragOver(e, 'initial_balances')}
             onDragLeave={handleDragLeave}

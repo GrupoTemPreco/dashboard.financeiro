@@ -11,6 +11,7 @@ interface KPICardProps {
   section?: 'cashflow' | 'result';
   onViewDetails?: () => void;
   darkMode?: boolean;
+  dataSource?: string;
 }
 
 export const KPICard: React.FC<KPICardProps> = ({
@@ -22,7 +23,8 @@ export const KPICard: React.FC<KPICardProps> = ({
   color,
   section,
   onViewDetails,
-  darkMode = false
+  darkMode = false,
+  dataSource
 }) => {
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -243,6 +245,14 @@ export const KPICard: React.FC<KPICardProps> = ({
             </span>
           </div>
         </div>
+        
+        {dataSource && (
+          <div className="pt-2">
+            <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
+              {dataSource}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

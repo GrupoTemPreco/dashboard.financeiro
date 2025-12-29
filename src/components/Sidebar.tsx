@@ -103,7 +103,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <div className={`${isCollapsed ? 'w-16' : 'w-72'} bg-gradient-to-b from-slate-950 via-blue-900 to-indigo-900 text-white h-full overflow-y-auto shadow-xl transition-all duration-300`}>
+    <div className={`${isCollapsed ? 'w-16' : 'w-72'} bg-gradient-to-b from-slate-950 via-blue-900 to-indigo-900 text-white h-full overflow-y-auto scrollbar-vertical shadow-xl transition-all duration-300`}>
       <div className={`${isCollapsed ? 'p-3' : 'p-6'} border-b border-sky-700 flex items-center justify-between`}>
         {!isCollapsed && (
           <div>
@@ -162,7 +162,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
               
               {groupDropdownOpen && (
-                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg max-h-40 overflow-y-auto backdrop-blur-sm">
+                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg max-h-40 overflow-y-auto scrollbar-vertical backdrop-blur-sm">
                   {groups.map(group => (
                     <label key={group} className="flex items-center px-3 py-2 hover:bg-blue-800 cursor-pointer text-sm">
                       <input
@@ -209,7 +209,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
               
               {companyDropdownOpen && (
-                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg max-h-40 overflow-y-auto backdrop-blur-sm">
+                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg max-h-40 overflow-y-auto scrollbar-vertical backdrop-blur-sm">
                   {getAvailableCompanies().map((company, index) => (
                     <label key={`${company.code}-${company.group}-${index}`} className="flex items-center px-3 py-2 hover:bg-blue-800 cursor-pointer text-sm">
                       <input
@@ -258,7 +258,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
 
               {bankDropdownOpen && (
-                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg max-h-40 overflow-y-auto backdrop-blur-sm">
+                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg max-h-40 overflow-y-auto scrollbar-vertical backdrop-blur-sm">
                   {banks.map((bank, index) => (
                     <label key={`${bank}-${index}`} className="flex items-center px-3 py-2 hover:bg-blue-800 cursor-pointer text-sm">
                       <input

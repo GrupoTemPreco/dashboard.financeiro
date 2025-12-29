@@ -204,7 +204,7 @@ export const DREPage: React.FC<DREPageProps> = ({
     const loadBudgets = async () => {
       try {
         const { data, error } = await supabase
-          .from('dre_budget')
+          .from('orcamento_dre')
           .select('*')
           .eq('business_unit', selectedBusinessUnit === 'all' ? selectedBusinessUnit : selectedBusinessUnit)
           .eq('period_date', `${selectedPeriod}-01`);
@@ -237,7 +237,7 @@ export const DREPage: React.FC<DREPageProps> = ({
 
     try {
       const { data, error } = await supabase
-        .from('dre_budget')
+        .from('orcamento_dre')
         .upsert({
           business_unit: selectedBusinessUnit,
           account_name: accountName,

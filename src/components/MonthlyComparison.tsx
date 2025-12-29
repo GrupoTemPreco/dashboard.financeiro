@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line, ComposedChart } from 'recharts';
+import { Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line, ComposedChart } from 'recharts';
 
 interface MonthlyData {
   month: string;
@@ -27,7 +27,7 @@ interface MonthlyComparisonProps {
 }
 
 export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data, darkMode = false }) => {
-  const [viewMode, setViewMode] = useState<'3months' | 'year'>('3months');
+  const [viewMode, setViewMode] = useState<'3months' | 'year' | 'weekly'>('3months');
   const [selectedMetric, setSelectedMetric] = useState<'revenue' | 'cogs' | 'loans'>('revenue');
 
   const formatCurrency = (value: number) => {
@@ -39,7 +39,105 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data, dark
     }).format(value);
   };
 
+  const getMonthIndexFromName = (monthName: string): number => {
+    const monthMap: { [key: string]: number } = {
+      'Jan': 0, 'Fev': 1, 'Mar': 2, 'Abr': 3, 'Mai': 4, 'Jun': 5,
+      'Jul': 6, 'Ago': 7, 'Set': 8, 'Out': 9, 'Nov': 10, 'Dez': 11
+    };
+    return monthMap[monthName] ?? new Date().getMonth();
+  };
+
+  const getWeekDates = (monthName: string, weekInMonth: number): { start: Date; end: Date } => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const month = getMonthIndexFromName(monthName);
+    
+    // Primeiro dia do mês
+    const firstDay = new Date(currentYear, month, 1);
+    // Último dia do mês
+    const lastDay = new Date(currentYear, month + 1, 0);
+    
+    // Calcular a primeira segunda-feira do mês (ou primeiro dia se for segunda)
+    const firstDayOfWeek = firstDay.getDay();
+    const daysToFirstMonday = firstDayOfWeek === 0 ? 1 : (8 - firstDayOfWeek) % 7;
+    const firstMonday = new Date(currentYear, month, 1 + daysToFirstMonday);
+    
+    // Calcular início e fim da semana
+    const weekStart = new Date(firstMonday);
+    weekStart.setDate(firstMonday.getDate() + (weekInMonth - 1) * 7);
+    
+    // Garantir que não ultrapasse o início do mês
+    if (weekStart < firstDay) {
+      weekStart.setTime(firstDay.getTime());
+    }
+    
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    
+    // Garantir que não ultrapasse o fim do mês
+    if (weekEnd > lastDay) {
+      weekEnd.setTime(lastDay.getTime());
+    }
+    
+    return { start: weekStart, end: weekEnd };
+  };
+
+  const formatWeekLabel = (start: Date, end: Date): string => {
+    const formatDate = (date: Date) => {
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = (date.getMonth() + 1).toString().padStart(2, '0');
+      return `${day}/${month}`;
+    };
+    
+    return `${formatDate(start)} - ${formatDate(end)}`;
+  };
+
   const getMetricData = () => {
+    if (viewMode === 'weekly') {
+      // Agrupar dados dos últimos 3 meses por semana
+      const weeklyData: Array<{ month: string; current: number; previous: number; debtRatioCurrent: number; debtRatioPrevious: number; originalData: any }> = [];
+      
+      // Processar cada mês e dividir em semanas reais
+      data.forEach((item) => {
+        const monthName = item.month;
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const month = getMonthIndexFromName(monthName);
+        
+        const firstDay = new Date(currentYear, month, 1);
+        const lastDay = new Date(currentYear, month + 1, 0);
+        const firstDayOfWeek = firstDay.getDay();
+        const daysToFirstMonday = firstDayOfWeek === 0 ? 1 : (8 - firstDayOfWeek) % 7;
+        const firstMonday = new Date(currentYear, month, 1 + daysToFirstMonday);
+        
+        // Calcular número de semanas no mês
+        const daysInMonth = lastDay.getDate();
+        const daysFromFirstMonday = daysInMonth - (firstMonday.getDate() - 1);
+        const weeksInMonth = Math.ceil(daysFromFirstMonday / 7);
+        
+        const weekValue = item.currentYear[selectedMetric] / weeksInMonth;
+        const previousWeekValue = item.previousYear[selectedMetric] / weeksInMonth;
+        
+        // Criar semanas para cada mês
+        for (let w = 1; w <= weeksInMonth; w++) {
+          const { start, end } = getWeekDates(monthName, w);
+          const weekLabel = formatWeekLabel(start, end);
+          
+          weeklyData.push({
+            month: weekLabel,
+            current: weekValue,
+            previous: previousWeekValue,
+            debtRatioCurrent: item.currentYear.debtRatio,
+            debtRatioPrevious: item.previousYear.debtRatio,
+            originalData: item
+          });
+        }
+      });
+      
+      // Retornar as últimas 12 semanas
+      return weeklyData.slice(-12);
+    }
+
     if (viewMode === 'year') {
       // Extended data for full year view
       const yearData = [
@@ -173,10 +271,24 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data, dark
                     : 'bg-marsala-600 text-white'
                   : darkMode
                     ? 'text-slate-300 hover:text-slate-100'
-                    : 'text-gray-600 hover:text-gray-800'
+                  : 'text-gray-600 hover:text-gray-800'
               }`}
             >
               Últimos 3 Meses
+            </button>
+            <button
+              onClick={() => setViewMode('weekly')}
+              className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                viewMode === 'weekly'
+                  ? darkMode
+                    ? 'bg-sky-500 text-white'
+                    : 'bg-marsala-600 text-white'
+                  : darkMode
+                    ? 'text-slate-300 hover:text-slate-100'
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              Semanal
             </button>
             <button
               onClick={() => setViewMode('year')}
@@ -187,7 +299,7 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data, dark
                     : 'bg-marsala-600 text-white'
                   : darkMode
                     ? 'text-slate-300 hover:text-slate-100'
-                    : 'text-gray-600 hover:text-gray-800'
+                  : 'text-gray-600 hover:text-gray-800'
               }`}
             >
               Ano
@@ -210,7 +322,7 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data, dark
                 ? (darkMode ? 'bg-sky-500 text-white' : 'bg-marsala-600 text-white')
                 : darkMode
                   ? 'bg-slate-800 text-slate-200 hover:bg-slate-700'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
           >
             {metric.label}
@@ -222,12 +334,12 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ data, dark
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={getMetricData()} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#1f2937' : '#f0f0f0'} />
-            <XAxis
-              dataKey="month"
+            <XAxis 
+              dataKey="month" 
               stroke={darkMode ? '#9ca3af' : '#6b7280'}
               fontSize={12}
             />
-            <YAxis
+            <YAxis 
               yAxisId="left"
               tickFormatter={(value) => formatCurrency(value)}
               stroke={darkMode ? '#9ca3af' : '#6b7280'}
