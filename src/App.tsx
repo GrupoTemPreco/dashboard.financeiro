@@ -1256,10 +1256,54 @@ function App() {
     ];
   }, [getFilteredAccountsPayable, getFilteredForecastedEntries, getFilteredTransactions]);
 
-  // Dados detalhados para Saldo Inicial (saldos bancários) - mostra TODOS os dados agrupados por banco
+  // Saldos iniciais filtrados por empresas/grupos e período (sem agrupar, para cálculos)
+  const getFilteredInitialBalancesRaw = useMemo(() => {
+    let filtered = initialBalances;
+
+    // Filtrar por data do saldo (balance_date) - considera saldos dentro ou antes do período
+    // Se há filtro de data inicial, considera apenas saldos com balance_date <= endDate
+    // (ou seja, saldos válidos até o final do período)
+    if (filters.endDate) {
+      filtered = filtered.filter(bal => {
+        const balanceDate = bal.balance_date;
+        if (!balanceDate) return true; // Se não tem data, mantém
+        return balanceDate <= filters.endDate;
+      });
+    }
+
+    // Se não há empresas cadastradas, retorna apenas com filtro de data
+    if (companies.length === 0) {
+      return filtered;
+    }
+
+    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
+
+    // Se não há filtros de empresa/grupo ativos, retorna apenas com filtro de data
+    if (!hasActiveFilters) {
+      return filtered;
+    }
+
+    // Filtra saldos baseado em grupos e empresas selecionados
+    const filteredCompanyCodes = companies
+      .filter(c => {
+        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
+        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
+        return groupMatch && companyMatch;
+      })
+      .map(c => c.company_code);
+
+    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
+
+    return filtered.filter(bal => {
+      const normalizedBU = normalizeCode(bal.business_unit);
+      return normalizedCompanyCodes.includes(normalizedBU);
+    });
+  }, [initialBalances, companies, filters.groups, filters.companies, filters.endDate]);
+
+  // Dados detalhados para Saldo Inicial (saldos bancários) - agrupados por banco e filtrados por empresas/grupos
   const getFilteredInitialBalances = useMemo(() => {
-    // Agrupar por bank_name e somar os valores - sem aplicar filtros, mostra tudo
-    const groupedByBank = initialBalances.reduce((acc, bal) => {
+    // Agrupar por bank_name e somar os valores dos saldos filtrados
+    const groupedByBank = getFilteredInitialBalancesRaw.reduce((acc, bal) => {
       const bankName = bal.bank_name || '-';
       const balanceValue = bal.balance;
       let balance = 0;
@@ -1291,7 +1335,7 @@ function App() {
       amount: item.balance, // Mapear balance para amount para o modal
       source: 'initial_balance'
     }));
-  }, [initialBalances]);
+  }, [getFilteredInitialBalancesRaw]);
 
   // Dados detalhados para Total de Recebimentos (receitas + transações positivas)
   const getFilteredTotalInflows = useMemo(() => {
@@ -1379,18 +1423,18 @@ function App() {
     });
   };
 
-  // Calculate totals from accounts payable
+  // Calculate totals from accounts payable (usando dados filtrados por empresas/grupos)
   const accountsPayableTotals = useMemo(() => {
-    // Realizado: soma TODOS os valores da coluna amount onde status === 'realizado', sem nenhum filtro
-    const actual = accountsPayable
+    // Realizado: soma os valores filtrados por empresas/grupos
+    const actual = getFilteredAccountsPayable
       .filter(ap => ap.status?.toLowerCase() === 'realizado')
       .reduce((sum, ap) => {
         const amount = parseFloat(ap.amount || 0);
         return sum + (isNaN(amount) ? 0 : amount);
       }, 0);
 
-    // Previsto: soma TODOS os valores da coluna amount onde status === 'previsto', sem nenhum filtro
-    const forecasted = accountsPayable
+    // Previsto: soma os valores filtrados por empresas/grupos
+    const forecasted = getFilteredAccountsPayable
       .filter(ap => ap.status?.toLowerCase() === 'previsto')
       .reduce((sum, ap) => {
         const amount = parseFloat(ap.amount || 0);
@@ -1398,7 +1442,7 @@ function App() {
       }, 0);
 
     return { forecasted, actual };
-  }, [accountsPayable]);
+  }, [getFilteredAccountsPayable]);
 
   // Calculate totals from forecasted entries
   const forecastedEntriesTotals = useMemo(() => {
@@ -1852,8 +1896,8 @@ function App() {
       }
     };
 
-    // Calculate initial balance from database - soma TODOS os valores da tabela para o card
-    const calculatedInitialBalance = (initialBalances || [])
+    // Calculate initial balance from database - soma os valores filtrados por empresas/grupos
+    const calculatedInitialBalance = (getFilteredInitialBalancesRaw || [])
       .reduce((sum, bal) => {
         const balanceValue = bal?.balance;
         if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
@@ -1863,8 +1907,8 @@ function App() {
         return sum + (isNaN(parsed) ? 0 : parsed);
       }, 0);
 
-    // Get the earliest balance date for display - pega a data mais antiga de todos os registros
-    const balanceDates = initialBalances
+    // Get the earliest balance date for display - pega a data mais antiga dos registros filtrados
+    const balanceDates = getFilteredInitialBalancesRaw
       .map(bal => bal.balance_date)
       .filter(date => date) // Remove datas vazias
       .sort();
@@ -1876,15 +1920,138 @@ function App() {
       actual: calculatedInitialBalance || 0,
       date: calculatedInitialBalanceDate
     };
+    
+    // Saldo Final = Saldo Inicial + Total de Recebimentos - Total de Pagamentos
+    // Usa os valores exatos dos cards para garantir consistência
     result.finalBalance = {
-      forecasted: calculatedInitialBalance + totalInflowsForecasted - totalOutflowsForecasted,
-      actual: calculatedInitialBalance + totalInflowsActual - totalOutflowsActual
+      forecasted: result.initialBalance.forecasted + result.totalInflows.forecasted - result.totalOutflows.forecasted,
+      actual: result.initialBalance.actual + result.totalInflows.actual - result.totalOutflows.actual
     };
 
     return result;
-  }, [filteredData, accountsPayableTotals, forecastedEntriesTotals, revenueTotals, transactionTotals, cmvTotals, initialBalances, companies, filters]);
+  }, [filteredData, accountsPayableTotals, forecastedEntriesTotals, revenueTotals, transactionTotals, cmvTotals, getFilteredInitialBalancesRaw, companies, filters]);
 
-  // Calculate daily cash flow based on actual data from database
+  // Dados filtrados apenas por empresas/grupos (SEM filtro de período) - para o calendário
+  const getCalendarRevenues = useMemo(() => {
+    if (companies.length === 0) {
+      return revenues;
+    }
+    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
+    if (!hasActiveFilters) {
+      return revenues;
+    }
+    const filteredCompanyCodes = companies
+      .filter(c => {
+        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
+        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
+        return groupMatch && companyMatch;
+      })
+      .map(c => c.company_code);
+    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
+    return revenues.filter(rev => {
+      const normalizedBU = normalizeCode(rev.business_unit);
+      return normalizedCompanyCodes.includes(normalizedBU);
+    });
+  }, [revenues, companies, filters.groups, filters.companies]);
+
+  const getCalendarAccountsPayable = useMemo(() => {
+    if (companies.length === 0) {
+      return accountsPayable;
+    }
+    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
+    if (!hasActiveFilters) {
+      return accountsPayable;
+    }
+    const filteredCompanyCodes = companies
+      .filter(c => {
+        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
+        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
+        return groupMatch && companyMatch;
+      })
+      .map(c => c.company_code);
+    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
+    return accountsPayable.filter(ap => {
+      const normalizedBU = normalizeCode(ap.business_unit);
+      return normalizedCompanyCodes.includes(normalizedBU);
+    });
+  }, [accountsPayable, companies, filters.groups, filters.companies]);
+
+  const getCalendarForecastedEntries = useMemo(() => {
+    if (companies.length === 0) {
+      return forecastedEntries;
+    }
+    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
+    if (!hasActiveFilters) {
+      return forecastedEntries;
+    }
+    const filteredCompanyCodes = companies
+      .filter(c => {
+        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
+        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
+        return groupMatch && companyMatch;
+      })
+      .map(c => c.company_code);
+    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
+    return forecastedEntries.filter(entry => {
+      const normalizedBU = normalizeCode(entry.business_unit);
+      return normalizedCompanyCodes.includes(normalizedBU);
+    });
+  }, [forecastedEntries, companies, filters.groups, filters.companies]);
+
+  const getCalendarTransactions = useMemo(() => {
+    if (companies.length === 0) {
+      return financialTransactions;
+    }
+    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
+    if (!hasActiveFilters) {
+      return financialTransactions;
+    }
+    const filteredCompanyCodes = companies
+      .filter(c => {
+        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
+        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
+        return groupMatch && companyMatch;
+      })
+      .map(c => c.company_code);
+    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
+    return financialTransactions.filter(t => {
+      const normalizedBU = normalizeCode(t.business_unit);
+      return normalizedCompanyCodes.includes(normalizedBU);
+    });
+  }, [financialTransactions, companies, filters.groups, filters.companies]);
+
+  // Saldo inicial para o calendário (SEM filtro de período, apenas empresas/grupos)
+  const getCalendarInitialBalances = useMemo(() => {
+    // Se não há empresas cadastradas, mostra todos os saldos
+    if (companies.length === 0) {
+      return initialBalances;
+    }
+
+    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
+
+    // Se não há filtros ativos, mostra todos os saldos
+    if (!hasActiveFilters) {
+      return initialBalances;
+    }
+
+    // Filtra saldos baseado em grupos e empresas selecionados (SEM filtro de data)
+    const filteredCompanyCodes = companies
+      .filter(c => {
+        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
+        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
+        return groupMatch && companyMatch;
+      })
+      .map(c => c.company_code);
+
+    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
+
+    return initialBalances.filter(bal => {
+      const normalizedBU = normalizeCode(bal.business_unit);
+      return normalizedCompanyCodes.includes(normalizedBU);
+    });
+  }, [initialBalances, companies, filters.groups, filters.companies]);
+
+  // Calculate daily cash flow based on actual data from database (SEM filtro de período)
   const dailyCashFlow = useMemo(() => {
     // Start from current month (November) and go 90 days forward
     const today = new Date();
@@ -1892,57 +2059,65 @@ function App() {
     const endDate = new Date(today.getTime() + 90 * 24 * 60 * 60 * 1000); // Today + 90 days
 
     const days: any[] = [];
-    const initialBalanceValue = kpiData.initialBalance.actual;
-    let currentBalance = { forecasted: initialBalanceValue, actual: initialBalanceValue };
+    
+    // Calcula o saldo inicial para o calendário (SEM filtro de período)
+    const calendarInitialBalance = (getCalendarInitialBalances || [])
+      .reduce((sum, bal) => {
+        const balanceValue = bal?.balance;
+        if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
+          return sum;
+        }
+        const parsed = parseFloat(String(balanceValue));
+        return sum + (isNaN(parsed) ? 0 : parsed);
+      }, 0);
 
     for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
       const dateStr = d.toISOString().split('T')[0];
 
-      // Calculate forecasted inflows for this day (FILTERED)
+      // Calculate forecasted inflows for this day (SEM filtro de período, apenas empresas/grupos)
       const forecastedInflows = [
-        ...getFilteredRevenues.filter(r => r.payment_date === dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente')),
-        ...getFilteredForecastedEntries.filter(e => e.payment_date === dateStr && e.chart_of_accounts === 'Movimento em Dinheiro' && e.status?.toLowerCase() === 'pendente' && e.creditor === 'Orçado'),
-        ...getFilteredTransactions.filter(t => t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
+        ...getCalendarRevenues.filter(r => r.payment_date === dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente')),
+        ...getCalendarForecastedEntries.filter(e => (e.due_date === dateStr || e.payment_date === dateStr) && e.chart_of_accounts === 'Movimento em Dinheiro' && e.status?.toLowerCase() === 'pendente' && e.creditor === 'Orçado'),
+        ...getCalendarTransactions.filter(t => t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
       ].reduce((sum, item) => sum + Math.abs(item.amount || 0), 0);
 
-      // Calculate actual inflows for this day (FILTERED)
+      // Calculate actual inflows for this day (SEM filtro de período, apenas empresas/grupos)
       const actualInflows = [
-        ...getFilteredRevenues.filter(r => r.payment_date === dateStr && r.status?.toLowerCase() === 'realizado'),
-        ...getFilteredTransactions.filter(t => t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'realizado')
+        ...getCalendarRevenues.filter(r => r.payment_date === dateStr && r.status?.toLowerCase() === 'realizado'),
+        ...getCalendarForecastedEntries.filter(e => (e.due_date === dateStr || e.payment_date === dateStr) && e.chart_of_accounts === 'Movimento em Dinheiro' && e.status?.toLowerCase() === 'paga'),
+        ...getCalendarTransactions.filter(t => t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'realizado')
       ].reduce((sum, item) => sum + Math.abs(item.amount || 0), 0);
 
-      // Calculate forecasted outflows for this day (FILTERED)
+      // Calculate forecasted outflows for this day (SEM filtro de período, apenas empresas/grupos)
       const forecastedOutflows = [
-        ...getFilteredAccountsPayable.filter(ap => ap.payment_date === dateStr && ap.status?.toLowerCase() === 'previsto'),
-        ...getFilteredForecastedEntries.filter(e => e.payment_date === dateStr && e.chart_of_accounts !== 'Movimento em Dinheiro'),
-        ...getFilteredTransactions.filter(t => t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'previsto')
+        ...getCalendarAccountsPayable.filter(ap => ap.payment_date === dateStr && ap.status?.toLowerCase() === 'previsto'),
+        ...getCalendarForecastedEntries.filter(e => (e.due_date === dateStr || e.payment_date === dateStr) && e.chart_of_accounts !== 'Movimento em Dinheiro' && e.status?.toLowerCase() !== 'paga'),
+        ...getCalendarTransactions.filter(t => t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'previsto')
       ].reduce((sum, item) => sum + Math.abs(item.amount || 0), 0);
 
-      // Calculate actual outflows for this day (FILTERED)
+      // Calculate actual outflows for this day (SEM filtro de período, apenas empresas/grupos)
       const actualOutflows = [
-        ...getFilteredAccountsPayable.filter(ap => ap.payment_date === dateStr && ap.status?.toLowerCase() === 'realizado'),
-        ...getFilteredTransactions.filter(t => t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'realizado')
+        ...getCalendarAccountsPayable.filter(ap => ap.payment_date === dateStr && ap.status?.toLowerCase() === 'realizado'),
+        ...getCalendarForecastedEntries.filter(e => (e.due_date === dateStr || e.payment_date === dateStr) && e.chart_of_accounts !== 'Movimento em Dinheiro' && e.status?.toLowerCase() === 'paga'),
+        ...getCalendarTransactions.filter(t => t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'realizado')
       ].reduce((sum, item) => sum + Math.abs(item.amount || 0), 0);
 
+      // Cada dia calcula seu saldo final INDEPENDENTEMENTE:
+      // Saldo Final = Saldo Inicial + Recebimentos do dia - Pagamentos do dia
+      // Não acumula dias anteriores, cada dia parte sempre do mesmo saldo inicial
       days.push({
         date: dateStr,
         forecastedInflows,
         actualInflows,
         forecastedOutflows,
         actualOutflows,
-        forecastedBalance: currentBalance.forecasted + forecastedInflows - forecastedOutflows,
-        actualBalance: currentBalance.actual + actualInflows - actualOutflows
+        forecastedBalance: calendarInitialBalance + forecastedInflows - forecastedOutflows,
+        actualBalance: calendarInitialBalance + actualInflows - actualOutflows
       });
-
-      // Update running balance for next day
-      currentBalance = {
-        forecasted: currentBalance.forecasted + forecastedInflows - forecastedOutflows,
-        actual: currentBalance.actual + actualInflows - actualOutflows
-      };
     }
 
     return days;
-  }, [getFilteredRevenues, getFilteredAccountsPayable, getFilteredForecastedEntries, getFilteredTransactions, filters, kpiData]);
+  }, [getCalendarRevenues, getCalendarAccountsPayable, getCalendarForecastedEntries, getCalendarTransactions, getCalendarInitialBalances]);
 
   const calendarData = useMemo(() => {
     const year = calendarDate.year;
@@ -1951,36 +2126,45 @@ function App() {
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const calendarDays = [];
 
-    // Use the final forecasted balance from KPI (considering all 90 days)
-    const finalForecastedBalance = kpiData.finalBalance.forecasted;
-
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const dayData = dailyCashFlow.find(d => d.date === dateStr);
 
       if (dayData) {
+        // Usa o saldo final de cada dia (previsto e realizado)
         calendarDays.push({
           date: day,
           openingBalance: 0,
           forecastedRevenue: dayData.forecastedInflows,
           forecastedOutflows: dayData.forecastedOutflows,
-          forecastedBalance: finalForecastedBalance,
-          actualBalance: dayData.actualBalance
+          forecastedBalance: dayData.forecastedBalance, // Saldo final previsto do dia
+          actualBalance: dayData.actualBalance // Saldo final realizado do dia
         });
       } else {
+        // Se não há dados para o dia, mostra apenas o saldo inicial (sem recebimentos/pagamentos)
+        const calendarInitialBalance = (getCalendarInitialBalances || [])
+          .reduce((sum, bal) => {
+            const balanceValue = bal?.balance;
+            if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
+              return sum;
+            }
+            const parsed = parseFloat(String(balanceValue));
+            return sum + (isNaN(parsed) ? 0 : parsed);
+          }, 0);
+
         calendarDays.push({
           date: day,
           openingBalance: 0,
           forecastedRevenue: 0,
           forecastedOutflows: 0,
-          forecastedBalance: finalForecastedBalance,
-          actualBalance: 0
+          forecastedBalance: calendarInitialBalance, // Saldo inicial (sem recebimentos/pagamentos do dia)
+          actualBalance: calendarInitialBalance // Saldo inicial (sem recebimentos/pagamentos do dia)
         });
       }
     }
 
     return calendarDays;
-  }, [dailyCashFlow, calendarDate.year, calendarDate.month, kpiData.finalBalance.forecasted]);
+  }, [dailyCashFlow, calendarDate.year, calendarDate.month, getCalendarInitialBalances]);
 
   const uniqueGroups = useMemo(() => [...new Set(companies.map(c => c.group_name))], [companies]);
   const companiesForSidebar = useMemo(() =>

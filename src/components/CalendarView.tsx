@@ -108,7 +108,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
 
         {dayData && (
           <div className="space-y-1 text-center">
-            {dayData.actualBalance !== undefined && dayData.actualBalance !== 0 && (
+            {dayData.actualBalance !== undefined && (
               <div className="pb-0.5">
                 <span className={`text-[9px] block ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>R</span>
                 <span
@@ -127,7 +127,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
               </div>
             )}
 
-            <div className={dayData.actualBalance !== undefined && dayData.actualBalance !== 0 ? 'border-t pt-0.5' : ''}>
+            <div className={dayData.actualBalance !== undefined ? 'border-t pt-0.5' : ''}>
               <span className={`text-[9px] block ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>P</span>
               <span
                 className={`font-bold text-xs block leading-tight ${
