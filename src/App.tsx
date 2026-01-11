@@ -2053,71 +2053,172 @@ function App() {
 
   // Calculate daily cash flow based on actual data from database (SEM filtro de período)
   const dailyCashFlow = useMemo(() => {
-    // Start from current month (November) and go 90 days forward
+    // Calcula para um range amplo que cubra qualquer mês que o calendário possa mostrar
+    // Vai de 6 meses atrás até 18 meses à frente para garantir que cubra qualquer navegação
     const today = new Date();
-    const startDate = new Date(today.getFullYear(), today.getMonth(), 1); // First day of current month
-    const endDate = new Date(today.getTime() + 90 * 24 * 60 * 60 * 1000); // Today + 90 days
+    const startDate = new Date(today.getFullYear(), today.getMonth() - 6, 1); // 6 meses atrás
+    const endDate = new Date(today.getFullYear(), today.getMonth() + 18, 0); // 18 meses à frente (último dia do mês)
 
     const days: any[] = [];
+
+    // Filtro de empresas/grupos (mesmo usado no calendário)
+    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
+    const filteredCompanyCodes = companies
+      .filter(c => {
+        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
+        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
+        return groupMatch && companyMatch;
+      })
+      .map(c => c.company_code);
+    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
     
-    // Calcula o saldo inicial para o calendário (SEM filtro de período)
-    const calendarInitialBalance = (getCalendarInitialBalances || [])
-      .reduce((sum, bal) => {
-        const balanceValue = bal?.balance;
-        if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
-          return sum;
-        }
-        const parsed = parseFloat(String(balanceValue));
-        return sum + (isNaN(parsed) ? 0 : parsed);
-      }, 0);
+    const filterByCompany = (item: any) => {
+      if (companies.length === 0 || !hasActiveFilters) return true;
+      const normalizedBU = normalizeCode(item.business_unit);
+      return normalizedCompanyCodes.includes(normalizedBU);
+    };
 
     for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
       const dateStr = d.toISOString().split('T')[0];
 
-      // Calculate forecasted inflows for this day (SEM filtro de período, apenas empresas/grupos)
-      const forecastedInflows = [
-        ...getCalendarRevenues.filter(r => r.payment_date === dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente')),
-        ...getCalendarForecastedEntries.filter(e => (e.due_date === dateStr || e.payment_date === dateStr) && e.chart_of_accounts === 'Movimento em Dinheiro' && e.status?.toLowerCase() === 'pendente' && e.creditor === 'Orçado'),
-        ...getCalendarTransactions.filter(t => t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
-      ].reduce((sum, item) => sum + Math.abs(item.amount || 0), 0);
+      // Cada dia calcula apenas os MOVIMENTOS DAQUELE DIA específico (não acumulado)
+      // Saldo Inicial: saldos com balance_date <= dateStr (mantém acumulado para calcular saldo final)
+      const dayInitialBalance = initialBalances
+        .filter(bal => {
+          if (!filterByCompany(bal)) return false;
+          const balanceDate = bal?.balance_date;
+          if (!balanceDate) return true;
+          return balanceDate <= dateStr;
+        })
+        .reduce((sum, bal) => {
+          const balanceValue = bal?.balance;
+          if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
+            return sum;
+          }
+          const parsed = parseFloat(String(balanceValue));
+          return sum + (isNaN(parsed) ? 0 : parsed);
+        }, 0);
 
-      // Calculate actual inflows for this day (SEM filtro de período, apenas empresas/grupos)
-      const actualInflows = [
-        ...getCalendarRevenues.filter(r => r.payment_date === dateStr && r.status?.toLowerCase() === 'realizado'),
-        ...getCalendarForecastedEntries.filter(e => (e.due_date === dateStr || e.payment_date === dateStr) && e.chart_of_accounts === 'Movimento em Dinheiro' && e.status?.toLowerCase() === 'paga'),
-        ...getCalendarTransactions.filter(t => t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'realizado')
-      ].reduce((sum, item) => sum + Math.abs(item.amount || 0), 0);
+      // Movimentos DO dia específico (apenas === dateStr, não acumulado)
+      const dayForecastedInflows = revenues
+        .filter(r => filterByCompany(r) && r.payment_date === dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente'))
+        .reduce((sum, r) => sum + (r.amount || 0), 0) +
+        forecastedEntries
+          .filter(e => filterByCompany(e) && e.due_date === dateStr && e.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro'))
+          .reduce((sum, e) => sum + (e.amount || 0), 0) +
+        financialTransactions
+          .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
+          .reduce((sum, t) => sum + (t.amount || 0), 0);
 
-      // Calculate forecasted outflows for this day (SEM filtro de período, apenas empresas/grupos)
-      const forecastedOutflows = [
-        ...getCalendarAccountsPayable.filter(ap => ap.payment_date === dateStr && ap.status?.toLowerCase() === 'previsto'),
-        ...getCalendarForecastedEntries.filter(e => (e.due_date === dateStr || e.payment_date === dateStr) && e.chart_of_accounts !== 'Movimento em Dinheiro' && e.status?.toLowerCase() !== 'paga'),
-        ...getCalendarTransactions.filter(t => t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'previsto')
-      ].reduce((sum, item) => sum + Math.abs(item.amount || 0), 0);
+      const dayActualInflows = revenues
+        .filter(r => filterByCompany(r) && r.payment_date === dateStr && r.status?.toLowerCase() === 'realizado')
+        .reduce((sum, r) => sum + (r.amount || 0), 0) +
+        financialTransactions
+          .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'realizado')
+          .reduce((sum, t) => sum + (t.amount || 0), 0);
 
-      // Calculate actual outflows for this day (SEM filtro de período, apenas empresas/grupos)
-      const actualOutflows = [
-        ...getCalendarAccountsPayable.filter(ap => ap.payment_date === dateStr && ap.status?.toLowerCase() === 'realizado'),
-        ...getCalendarForecastedEntries.filter(e => (e.due_date === dateStr || e.payment_date === dateStr) && e.chart_of_accounts !== 'Movimento em Dinheiro' && e.status?.toLowerCase() === 'paga'),
-        ...getCalendarTransactions.filter(t => t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'realizado')
-      ].reduce((sum, item) => sum + Math.abs(item.amount || 0), 0);
+      const dayForecastedOutflows = accountsPayable
+        .filter(ap => filterByCompany(ap) && ap.payment_date === dateStr && ap.status?.toLowerCase() === 'previsto')
+        .reduce((sum, ap) => {
+          const amount = parseFloat(ap.amount || 0);
+          return sum + (isNaN(amount) ? 0 : amount);
+        }, 0) +
+        financialTransactions
+          .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'previsto')
+          .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
 
-      // Cada dia calcula seu saldo final INDEPENDENTEMENTE:
-      // Saldo Final = Saldo Inicial + Recebimentos do dia - Pagamentos do dia
-      // Não acumula dias anteriores, cada dia parte sempre do mesmo saldo inicial
+      const dayActualOutflows = accountsPayable
+        .filter(ap => filterByCompany(ap) && ap.payment_date === dateStr && ap.status?.toLowerCase() === 'realizado')
+        .reduce((sum, ap) => {
+          const amount = parseFloat(ap.amount || 0);
+          return sum + (isNaN(amount) ? 0 : amount);
+        }, 0) +
+        financialTransactions
+          .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'realizado')
+          .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
+
+      // Para o saldo final, precisa calcular acumulado até aquele dia (como o card faz)
+      // Recebimentos acumulados até dateStr
+      const forecastedRevenues = revenues
+        .filter(r => filterByCompany(r) && r.payment_date <= dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente'))
+        .reduce((sum, r) => sum + (r.amount || 0), 0);
+
+      const forecastedFromEntries = forecastedEntries
+        .filter(e => filterByCompany(e) && e.due_date <= dateStr && e.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro'))
+        .reduce((sum, e) => sum + (e.amount || 0), 0);
+
+      const forecastedTransactionsInflows = financialTransactions
+        .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
+        .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+      const forecastedInflows = forecastedRevenues + forecastedFromEntries + forecastedTransactionsInflows;
+
+      const actualRevenues = revenues
+        .filter(r => filterByCompany(r) && r.payment_date <= dateStr && r.status?.toLowerCase() === 'realizado')
+        .reduce((sum, r) => sum + (r.amount || 0), 0);
+
+      const actualTransactionsInflows = financialTransactions
+        .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount > 0 && t.status?.toLowerCase() === 'realizado')
+        .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+      const actualInflows = actualRevenues + actualTransactionsInflows;
+
+      // Pagamentos acumulados até dateStr
+      const forecastedOutflowsAccountsPayable = accountsPayable
+        .filter(ap => filterByCompany(ap) && ap.payment_date <= dateStr && ap.status?.toLowerCase() === 'previsto')
+        .reduce((sum, ap) => {
+          const amount = parseFloat(ap.amount || 0);
+          return sum + (isNaN(amount) ? 0 : amount);
+        }, 0);
+
+      const forecastedTransactionsOutflows = financialTransactions
+        .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount < 0 && t.status?.toLowerCase() === 'previsto')
+        .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
+
+      const forecastedOutflows = forecastedOutflowsAccountsPayable + forecastedTransactionsOutflows;
+
+      const actualOutflowsAccountsPayable = accountsPayable
+        .filter(ap => filterByCompany(ap) && ap.payment_date <= dateStr && ap.status?.toLowerCase() === 'realizado')
+        .reduce((sum, ap) => {
+          const amount = parseFloat(ap.amount || 0);
+          return sum + (isNaN(amount) ? 0 : amount);
+        }, 0);
+
+      const actualTransactionsOutflows = financialTransactions
+        .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount < 0 && t.status?.toLowerCase() === 'realizado')
+        .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
+
+      const actualOutflows = actualOutflowsAccountsPayable + actualTransactionsOutflows;
+
+      // Saldo Final = Saldo Inicial (acumulado até dateStr) + Recebimentos (acumulados até dateStr) - Pagamentos (acumulados até dateStr)
+      // Isso replica o comportamento do card quando você filtra aquela data
+      const forecastedBalance = dayInitialBalance + forecastedInflows - forecastedOutflows;
+      const actualBalance = dayInitialBalance + actualInflows - actualOutflows;
+
       days.push({
         date: dateStr,
-        forecastedInflows,
-        actualInflows,
-        forecastedOutflows,
-        actualOutflows,
-        forecastedBalance: calendarInitialBalance + forecastedInflows - forecastedOutflows,
-        actualBalance: calendarInitialBalance + actualInflows - actualOutflows
+        forecastedInflows: dayForecastedInflows,
+        actualInflows: dayActualInflows,
+        forecastedOutflows: dayForecastedOutflows,
+        actualOutflows: dayActualOutflows,
+        forecastedBalance: forecastedBalance,
+        actualBalance: actualBalance
+      });
+    }
+
+    // Debug: mostra algumas datas geradas e valores
+    if (days.length > 0) {
+      console.log('📅 Debug dailyCashFlow:', {
+        totalDias: days.length,
+        primeiraData: days[0]?.date,
+        ultimaData: days[days.length - 1]?.date,
+        primeiros3: days.slice(0, 3).map(d => ({ date: d.date, forecasted: d.forecastedBalance, actual: d.actualBalance })),
+        ultimos3: days.slice(-3).map(d => ({ date: d.date, forecasted: d.forecastedBalance, actual: d.actualBalance }))
       });
     }
 
     return days;
-  }, [getCalendarRevenues, getCalendarAccountsPayable, getCalendarForecastedEntries, getCalendarTransactions, getCalendarInitialBalances]);
+  }, [revenues, accountsPayable, forecastedEntries, financialTransactions, initialBalances, companies, filters.groups, filters.companies]);
 
   const calendarData = useMemo(() => {
     const year = calendarDate.year;
