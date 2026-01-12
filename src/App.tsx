@@ -50,6 +50,7 @@ function App() {
     year: new Date().getFullYear(),
     month: new Date().getMonth()
   });
+  const [calendarAccumulatedMode, setCalendarAccumulatedMode] = useState(false); // false = diário, true = acumulado
   const [loading, setLoading] = useState<{
     isLoading: boolean;
     currentFile?: string;
@@ -1695,29 +1696,42 @@ function App() {
     '04.8 Medicamentos Multiplos'
   ];
 
-  const getFilteredCMV = useMemo(() => {
-    return getFilteredAccountsPayable.filter(ap =>
-      cmvChartOfAccounts.some(chartName =>
-        ap.chart_of_accounts?.toLowerCase().includes(chartName.toLowerCase())
-      )
-    );
-  }, [getFilteredAccountsPayable]);
+  // Filtro de CMV DRE (somente dados da planilha de CMV DRE)
+  const getFilteredCMVDRE = useMemo(() => {
+    if (companies.length === 0) {
+      return cmvDRE.filter(cmv => {
+        const dateMatch = (!filters.startDate || cmv.issue_date >= filters.startDate) &&
+                         (!filters.endDate || cmv.issue_date <= filters.endDate);
+        return dateMatch;
+      });
+    }
 
-  const getFilteredCMVFromForecasted = useMemo(() => {
-    return getFilteredForecastedEntries.filter(entry =>
-      cmvChartOfAccounts.some(chartName =>
-        entry.chart_of_accounts?.toLowerCase().includes(chartName.toLowerCase())
-      )
-    );
-  }, [getFilteredForecastedEntries]);
+    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
 
-  const getFilteredCMVFromTransactions = useMemo(() => {
-    return getFilteredTransactions.filter(t =>
-      cmvChartOfAccounts.some(chartName =>
-        t.chart_of_accounts?.toLowerCase().includes(chartName.toLowerCase())
-      )
-    );
-  }, [getFilteredTransactions]);
+    return cmvDRE.filter(cmv => {
+      const dateMatch = (!filters.startDate || cmv.issue_date >= filters.startDate) &&
+                       (!filters.endDate || cmv.issue_date <= filters.endDate);
+
+      if (!hasActiveFilters) {
+        return dateMatch;
+      }
+
+      const filteredCompanyCodes = companies
+        .filter(c => {
+          const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
+          const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
+          return groupMatch && companyMatch;
+        })
+        .map(c => c.company_code);
+
+      const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
+      const normalizedBU = normalizeCode(cmv.business_unit);
+      const companyMatch = normalizedCompanyCodes.includes(normalizedBU);
+
+      return companyMatch && dateMatch;
+    });
+  }, [cmvDRE, companies, filters]);
+
 
   // Dados detalhados para Resultado Operacional (receita - CMV - despesas)
   const getFilteredOperationalResult = useMemo(() => {
@@ -1728,29 +1742,14 @@ function App() {
       category: 'Receita Direta'
     }));
 
-    const cmvData = [
-      ...getFilteredCMV.map(item => ({
-        ...item,
-        source: 'accounts_payable',
-        type: 'CMV',
-        category: 'Custo de Mercadoria Vendida',
-        amount: -Math.abs(item.amount || 0) // Negativo para custo
-      })),
-      ...getFilteredCMVFromForecasted.map(item => ({
-        ...item,
-        source: 'forecasted_entries',
-        type: 'CMV',
-        category: 'Custo de Mercadoria Vendida',
-        amount: -Math.abs(item.amount || 0)
-      })),
-      ...getFilteredCMVFromTransactions.map(item => ({
-        ...item,
-        source: 'transactions',
-        type: 'CMV',
-        category: 'Custo de Mercadoria Vendida',
-        amount: -Math.abs(item.amount || 0)
-      }))
-    ];
+    // CMV somente da planilha de CMV DRE
+    const cmvData = getFilteredCMVDRE.map(item => ({
+      ...item,
+      source: 'cmv_dre',
+      type: 'CMV',
+      category: 'Custo de Mercadoria Vendida',
+      amount: -Math.abs(item.amount || 0) // Negativo para custo
+    }));
 
     const expensesData = getFilteredExpenses.map(item => ({
       ...item,
@@ -1760,48 +1759,40 @@ function App() {
     }));
 
     return [...revenueData, ...cmvData, ...expensesData];
-  }, [getFilteredRevenues, getFilteredCMV, getFilteredCMVFromForecasted, getFilteredCMVFromTransactions, getFilteredExpenses]);
+  }, [getFilteredRevenues, getFilteredCMVDRE, getFilteredExpenses]);
 
+  // CMV calculado somente da planilha de CMV DRE
   const cmvTotals = useMemo(() => {
-    const forecastedFromAP = getFilteredCMV
-      .filter(ap => ap.status?.toLowerCase() === 'previsto')
-      .reduce((sum, ap) => sum + (ap.amount || 0), 0);
-
-    const forecastedFromEntries = getFilteredCMVFromForecasted
-      .reduce((sum, entry) => sum + (entry.amount || 0), 0);
-
-    const forecastedFromTransactions = getFilteredCMVFromTransactions
-      .filter(t => t.status?.toLowerCase() === 'previsto')
-      .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
-
-    const actualFromAP = getFilteredCMV
-      .filter(ap => ap.status?.toLowerCase() === 'realizado')
-      .reduce((sum, ap) => sum + (ap.amount || 0), 0);
-
-    const actualFromTransactions = getFilteredCMVFromTransactions
-      .filter(t => t.status?.toLowerCase() === 'realizado')
-      .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
+    // A planilha de CMV DRE contém apenas registros com status 'pago' (realizado)
+    // Não há dados previstos na planilha de CMV DRE
+    const actual = getFilteredCMVDRE
+      .reduce((sum, cmv) => sum + Math.abs(cmv.amount || 0), 0);
 
     return {
-      forecasted: forecastedFromAP + forecastedFromEntries + forecastedFromTransactions,
-      actual: actualFromAP + actualFromTransactions
+      forecasted: 0, // Não há dados previstos na planilha de CMV DRE
+      actual: actual
     };
-  }, [getFilteredCMV, getFilteredCMVFromForecasted, getFilteredCMVFromTransactions]);
+  }, [getFilteredCMVDRE]);
 
   const kpiData = useMemo(() => {
     const baseKpis = calculateKPIs(filteredData);
 
-    const totalRevenueForecasted = baseKpis.directRevenue.forecasted + revenueTotals.forecasted;
-    const totalRevenueActual = baseKpis.directRevenue.actual + revenueTotals.actual;
+    // Receita Direta = apenas receitas (sem baseKpis que vem de records antigos)
+    // Deve corresponder a getFilteredRevenues
+    const totalRevenueForecasted = revenueTotals.forecasted;
+    const totalRevenueActual = revenueTotals.actual;
 
     // Add accounts payable to forecasted and actual outflows
     // Add revenues to forecasted and actual inflows
     // Add financial transactions (positive to inflows, negative to outflows)
-    const totalInflowsForecasted = baseKpis.totalInflows.forecasted + revenueTotals.forecasted + transactionTotals.inflows.forecasted;
-    const totalInflowsActual = baseKpis.totalInflows.actual + revenueTotals.actual + transactionTotals.inflows.actual;
-    // Previsto e Realizado: apenas contas_a_pagar (sem outras fontes)
-    const totalOutflowsForecasted = accountsPayableTotals.forecasted;
-    const totalOutflowsActual = accountsPayableTotals.actual;
+    // Total de Recebimentos = Receitas + Transações positivas
+    const totalInflowsForecasted = revenueTotals.forecasted + transactionTotals.inflows.forecasted;
+    const totalInflowsActual = revenueTotals.actual + transactionTotals.inflows.actual;
+    
+    // Total de Pagamentos = Contas a Pagar + Transações negativas
+    // Deve corresponder a getFilteredTotalOutflows (getFilteredOperationalPayments + transações negativas)
+    const totalOutflowsForecasted = accountsPayableTotals.forecasted + transactionTotals.outflows.forecasted;
+    const totalOutflowsActual = accountsPayableTotals.actual + transactionTotals.outflows.actual;
 
     // Calculate Total Expenses (excluding specific accounts)
     const expensesExclusionList = [
@@ -1896,9 +1887,38 @@ function App() {
       }
     };
 
-    // Calculate initial balance from database - soma os valores filtrados por empresas/grupos
-    const calculatedInitialBalance = (getFilteredInitialBalancesRaw || [])
-      .reduce((sum, bal) => {
+    // Calculate initial balance from database - pega o saldo inicial mais recente até a data de início do período
+    // Como o saldo inicial é atualizado manualmente todos os dias, devemos pegar o mais recente <= startDate
+    const balancesUpToStartDate = (getFilteredInitialBalancesRaw || [])
+      .filter(bal => {
+        const balanceDate = bal.balance_date;
+        if (!balanceDate) return false;
+        // Pega saldos até a data de início do período (ou todos se não houver filtro)
+        return !filters.startDate || balanceDate <= filters.startDate;
+      });
+
+    // Agrupar por bank_name + business_unit e pegar o mais recente de cada grupo
+    const latestBalancesByBankAndUnit = balancesUpToStartDate.reduce((acc, bal) => {
+      const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
+      const existing = acc[key];
+      
+      if (!existing) {
+        acc[key] = bal;
+      } else {
+        // Se já existe, compara as datas e pega o mais recente
+        const existingDate = existing.balance_date || '';
+        const currentDate = bal.balance_date || '';
+        if (currentDate > existingDate) {
+          acc[key] = bal;
+        }
+      }
+      
+      return acc;
+    }, {} as Record<string, any>);
+
+    // Somar os valores dos saldos mais recentes de cada banco/empresa
+    const calculatedInitialBalance = Object.values(latestBalancesByBankAndUnit)
+      .reduce((sum: number, bal: any) => {
         const balanceValue = bal?.balance;
         if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
           return sum;
@@ -1907,13 +1927,14 @@ function App() {
         return sum + (isNaN(parsed) ? 0 : parsed);
       }, 0);
 
-    // Get the earliest balance date for display - pega a data mais antiga dos registros filtrados
-    const balanceDates = getFilteredInitialBalancesRaw
-      .map(bal => bal.balance_date)
+    // Get the latest balance date for display - pega a data mais recente dos saldos usados
+    const balanceDates = Object.values(latestBalancesByBankAndUnit)
+      .map((bal: any) => bal.balance_date)
       .filter(date => date) // Remove datas vazias
-      .sort();
+      .sort()
+      .reverse(); // Ordena do mais recente para o mais antigo
 
-    const calculatedInitialBalanceDate = balanceDates.length > 0 ? balanceDates[0] : new Date().toISOString().split('T')[0];
+    const calculatedInitialBalanceDate = balanceDates.length > 0 ? balanceDates[0] : (filters.startDate || new Date().toISOString().split('T')[0]);
 
     result.initialBalance = {
       forecasted: calculatedInitialBalance || 0,
@@ -1931,94 +1952,6 @@ function App() {
     return result;
   }, [filteredData, accountsPayableTotals, forecastedEntriesTotals, revenueTotals, transactionTotals, cmvTotals, getFilteredInitialBalancesRaw, companies, filters]);
 
-  // Dados filtrados apenas por empresas/grupos (SEM filtro de período) - para o calendário
-  const getCalendarRevenues = useMemo(() => {
-    if (companies.length === 0) {
-      return revenues;
-    }
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-    if (!hasActiveFilters) {
-      return revenues;
-    }
-    const filteredCompanyCodes = companies
-      .filter(c => {
-        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-        return groupMatch && companyMatch;
-      })
-      .map(c => c.company_code);
-    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-    return revenues.filter(rev => {
-      const normalizedBU = normalizeCode(rev.business_unit);
-      return normalizedCompanyCodes.includes(normalizedBU);
-    });
-  }, [revenues, companies, filters.groups, filters.companies]);
-
-  const getCalendarAccountsPayable = useMemo(() => {
-    if (companies.length === 0) {
-      return accountsPayable;
-    }
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-    if (!hasActiveFilters) {
-      return accountsPayable;
-    }
-    const filteredCompanyCodes = companies
-      .filter(c => {
-        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-        return groupMatch && companyMatch;
-      })
-      .map(c => c.company_code);
-    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-    return accountsPayable.filter(ap => {
-      const normalizedBU = normalizeCode(ap.business_unit);
-      return normalizedCompanyCodes.includes(normalizedBU);
-    });
-  }, [accountsPayable, companies, filters.groups, filters.companies]);
-
-  const getCalendarForecastedEntries = useMemo(() => {
-    if (companies.length === 0) {
-      return forecastedEntries;
-    }
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-    if (!hasActiveFilters) {
-      return forecastedEntries;
-    }
-    const filteredCompanyCodes = companies
-      .filter(c => {
-        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-        return groupMatch && companyMatch;
-      })
-      .map(c => c.company_code);
-    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-    return forecastedEntries.filter(entry => {
-      const normalizedBU = normalizeCode(entry.business_unit);
-      return normalizedCompanyCodes.includes(normalizedBU);
-    });
-  }, [forecastedEntries, companies, filters.groups, filters.companies]);
-
-  const getCalendarTransactions = useMemo(() => {
-    if (companies.length === 0) {
-      return financialTransactions;
-    }
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-    if (!hasActiveFilters) {
-      return financialTransactions;
-    }
-    const filteredCompanyCodes = companies
-      .filter(c => {
-        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-        return groupMatch && companyMatch;
-      })
-      .map(c => c.company_code);
-    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-    return financialTransactions.filter(t => {
-      const normalizedBU = normalizeCode(t.business_unit);
-      return normalizedCompanyCodes.includes(normalizedBU);
-    });
-  }, [financialTransactions, companies, filters.groups, filters.companies]);
 
   // Saldo inicial para o calendário (SEM filtro de período, apenas empresas/grupos)
   const getCalendarInitialBalances = useMemo(() => {
@@ -2060,7 +1993,7 @@ function App() {
     const endDate = new Date(today.getFullYear(), today.getMonth() + 18, 0); // 18 meses à frente (último dia do mês)
 
     const days: any[] = [];
-
+    
     // Filtro de empresas/grupos (mesmo usado no calendário)
     const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
     const filteredCompanyCodes = companies
@@ -2081,119 +2014,177 @@ function App() {
     for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
       const dateStr = d.toISOString().split('T')[0];
 
-      // Cada dia calcula apenas os MOVIMENTOS DAQUELE DIA específico (não acumulado)
-      // Saldo Inicial: saldos com balance_date <= dateStr (mantém acumulado para calcular saldo final)
-      const dayInitialBalance = initialBalances
-        .filter(bal => {
-          if (!filterByCompany(bal)) return false;
-          const balanceDate = bal?.balance_date;
-          if (!balanceDate) return true;
-          return balanceDate <= dateStr;
-        })
-        .reduce((sum, bal) => {
-          const balanceValue = bal?.balance;
-          if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
-            return sum;
+      let dayInitialBalance: number;
+      let dayForecastedInflows: number;
+      let dayActualInflows: number;
+      let dayForecastedOutflows: number;
+      let dayActualOutflows: number;
+      let forecastedBalance: number;
+      let actualBalance: number;
+
+      if (calendarAccumulatedMode) {
+        // MODO ACUMULADO: calcula saldo final acumulado até aquele dia (como o card faz)
+        // Saldo Inicial: pega o saldo inicial mais recente até dateStr (atualizado manualmente diariamente)
+        const balancesUpToDate = initialBalances
+          .filter(bal => {
+            if (!filterByCompany(bal)) return false;
+            const balanceDate = bal?.balance_date;
+            if (!balanceDate) return false;
+            return balanceDate <= dateStr;
+          });
+
+        // Agrupar por bank_name + business_unit e pegar o mais recente de cada grupo
+        const latestBalancesByBankAndUnit = balancesUpToDate.reduce((acc, bal) => {
+          const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
+          const existing = acc[key];
+          
+          if (!existing) {
+            acc[key] = bal;
+          } else {
+            // Se já existe, compara as datas e pega o mais recente
+            const existingDate = existing.balance_date || '';
+            const currentDate = bal.balance_date || '';
+            if (currentDate > existingDate) {
+              acc[key] = bal;
+            }
           }
-          const parsed = parseFloat(String(balanceValue));
-          return sum + (isNaN(parsed) ? 0 : parsed);
-        }, 0);
+          
+          return acc;
+        }, {} as Record<string, any>);
 
-      // Movimentos DO dia específico (apenas === dateStr, não acumulado)
-      const dayForecastedInflows = revenues
-        .filter(r => filterByCompany(r) && r.payment_date === dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente'))
-        .reduce((sum, r) => sum + (r.amount || 0), 0) +
-        forecastedEntries
-          .filter(e => filterByCompany(e) && e.due_date === dateStr && e.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro'))
-          .reduce((sum, e) => sum + (e.amount || 0), 0) +
-        financialTransactions
-          .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
+        // Somar os valores dos saldos mais recentes de cada banco/empresa
+        dayInitialBalance = Object.values(latestBalancesByBankAndUnit)
+          .reduce((sum: number, bal: any) => {
+            const balanceValue = bal?.balance;
+            if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
+              return sum;
+            }
+            const parsed = parseFloat(String(balanceValue));
+            return sum + (isNaN(parsed) ? 0 : parsed);
+          }, 0);
+
+        // Recebimentos Previstos acumulados até dateStr
+        const forecastedRevenues = revenues
+          .filter(r => filterByCompany(r) && r.payment_date <= dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente'))
+          .reduce((sum, r) => sum + (r.amount || 0), 0);
+
+        const forecastedFromEntries = forecastedEntries
+          .filter(e => filterByCompany(e) && e.due_date <= dateStr && e.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro'))
+          .reduce((sum, e) => sum + (e.amount || 0), 0);
+
+        const forecastedTransactionsInflows = financialTransactions
+          .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
           .reduce((sum, t) => sum + (t.amount || 0), 0);
 
-      const dayActualInflows = revenues
-        .filter(r => filterByCompany(r) && r.payment_date === dateStr && r.status?.toLowerCase() === 'realizado')
-        .reduce((sum, r) => sum + (r.amount || 0), 0) +
-        financialTransactions
-          .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'realizado')
+        dayForecastedInflows = forecastedRevenues + forecastedFromEntries + forecastedTransactionsInflows;
+
+        // Recebimentos Realizados acumulados até dateStr
+        const actualRevenues = revenues
+          .filter(r => filterByCompany(r) && r.payment_date <= dateStr && r.status?.toLowerCase() === 'realizado')
+          .reduce((sum, r) => sum + (r.amount || 0), 0);
+
+        const actualTransactionsInflows = financialTransactions
+          .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount > 0 && t.status?.toLowerCase() === 'realizado')
           .reduce((sum, t) => sum + (t.amount || 0), 0);
 
-      const dayForecastedOutflows = accountsPayable
-        .filter(ap => filterByCompany(ap) && ap.payment_date === dateStr && ap.status?.toLowerCase() === 'previsto')
-        .reduce((sum, ap) => {
-          const amount = parseFloat(ap.amount || 0);
-          return sum + (isNaN(amount) ? 0 : amount);
-        }, 0) +
-        financialTransactions
-          .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'previsto')
+        dayActualInflows = actualRevenues + actualTransactionsInflows;
+
+        // Pagamentos Previstos acumulados até dateStr
+        const forecastedOutflowsAccountsPayable = accountsPayable
+          .filter(ap => filterByCompany(ap) && ap.payment_date <= dateStr && ap.status?.toLowerCase() === 'previsto')
+          .reduce((sum, ap) => {
+            const amount = parseFloat(ap.amount || 0);
+            return sum + (isNaN(amount) ? 0 : amount);
+          }, 0);
+
+        const forecastedTransactionsOutflows = financialTransactions
+          .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount < 0 && t.status?.toLowerCase() === 'previsto')
           .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
 
-      const dayActualOutflows = accountsPayable
-        .filter(ap => filterByCompany(ap) && ap.payment_date === dateStr && ap.status?.toLowerCase() === 'realizado')
-        .reduce((sum, ap) => {
-          const amount = parseFloat(ap.amount || 0);
-          return sum + (isNaN(amount) ? 0 : amount);
-        }, 0) +
-        financialTransactions
-          .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'realizado')
+        dayForecastedOutflows = forecastedOutflowsAccountsPayable + forecastedTransactionsOutflows;
+
+        // Pagamentos Realizados acumulados até dateStr
+        const actualOutflowsAccountsPayable = accountsPayable
+          .filter(ap => filterByCompany(ap) && ap.payment_date <= dateStr && ap.status?.toLowerCase() === 'realizado')
+          .reduce((sum, ap) => {
+            const amount = parseFloat(ap.amount || 0);
+            return sum + (isNaN(amount) ? 0 : amount);
+          }, 0);
+
+        const actualTransactionsOutflows = financialTransactions
+          .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount < 0 && t.status?.toLowerCase() === 'realizado')
           .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
 
-      // Para o saldo final, precisa calcular acumulado até aquele dia (como o card faz)
-      // Recebimentos acumulados até dateStr
-      const forecastedRevenues = revenues
-        .filter(r => filterByCompany(r) && r.payment_date <= dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente'))
-        .reduce((sum, r) => sum + (r.amount || 0), 0);
+        dayActualOutflows = actualOutflowsAccountsPayable + actualTransactionsOutflows;
 
-      const forecastedFromEntries = forecastedEntries
-        .filter(e => filterByCompany(e) && e.due_date <= dateStr && e.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro'))
-        .reduce((sum, e) => sum + (e.amount || 0), 0);
+        // Saldo Final = Saldo Inicial (acumulado) + Recebimentos (acumulados) - Pagamentos (acumulados)
+        forecastedBalance = dayInitialBalance + dayForecastedInflows - dayForecastedOutflows;
+        actualBalance = dayInitialBalance + dayActualInflows - dayActualOutflows;
+      } else {
+        // MODO DIÁRIO: calcula APENAS os MOVIMENTOS DAQUELE DIA específico (não acumulado)
+        // Saldo Inicial: apenas saldos com balance_date === dateStr (saldo inicial do dia, atualizado manualmente via planilha)
+        dayInitialBalance = initialBalances
+          .filter(bal => {
+            if (!filterByCompany(bal)) return false;
+            const balanceDate = bal?.balance_date;
+            if (!balanceDate) return false; // Se não tem data, não inclui (precisa ter data específica)
+            return balanceDate === dateStr;
+          })
+          .reduce((sum, bal) => {
+            const balanceValue = bal?.balance;
+            if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
+              return sum;
+            }
+            const parsed = parseFloat(String(balanceValue));
+            return sum + (isNaN(parsed) ? 0 : parsed);
+          }, 0);
 
-      const forecastedTransactionsInflows = financialTransactions
-        .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
-        .reduce((sum, t) => sum + (t.amount || 0), 0);
+        // Recebimentos Previstos DO dia específico (apenas === dateStr)
+        dayForecastedInflows = revenues
+          .filter(r => filterByCompany(r) && r.payment_date === dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente'))
+          .reduce((sum, r) => sum + (r.amount || 0), 0) +
+          forecastedEntries
+            .filter(e => filterByCompany(e) && e.due_date === dateStr && e.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro'))
+            .reduce((sum, e) => sum + (e.amount || 0), 0) +
+          financialTransactions
+            .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
+            .reduce((sum, t) => sum + (t.amount || 0), 0);
 
-      const forecastedInflows = forecastedRevenues + forecastedFromEntries + forecastedTransactionsInflows;
+        // Recebimentos Realizados DO dia específico (apenas === dateStr)
+        dayActualInflows = revenues
+          .filter(r => filterByCompany(r) && r.payment_date === dateStr && r.status?.toLowerCase() === 'realizado')
+          .reduce((sum, r) => sum + (r.amount || 0), 0) +
+          financialTransactions
+            .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'realizado')
+            .reduce((sum, t) => sum + (t.amount || 0), 0);
 
-      const actualRevenues = revenues
-        .filter(r => filterByCompany(r) && r.payment_date <= dateStr && r.status?.toLowerCase() === 'realizado')
-        .reduce((sum, r) => sum + (r.amount || 0), 0);
+        // Pagamentos Previstos DO dia específico (apenas === dateStr)
+        dayForecastedOutflows = accountsPayable
+          .filter(ap => filterByCompany(ap) && ap.payment_date === dateStr && ap.status?.toLowerCase() === 'previsto')
+          .reduce((sum, ap) => {
+            const amount = parseFloat(ap.amount || 0);
+            return sum + (isNaN(amount) ? 0 : amount);
+          }, 0) +
+          financialTransactions
+            .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'previsto')
+            .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
 
-      const actualTransactionsInflows = financialTransactions
-        .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount > 0 && t.status?.toLowerCase() === 'realizado')
-        .reduce((sum, t) => sum + (t.amount || 0), 0);
+        // Pagamentos Realizados DO dia específico (apenas === dateStr)
+        dayActualOutflows = accountsPayable
+          .filter(ap => filterByCompany(ap) && ap.payment_date === dateStr && ap.status?.toLowerCase() === 'realizado')
+          .reduce((sum, ap) => {
+            const amount = parseFloat(ap.amount || 0);
+            return sum + (isNaN(amount) ? 0 : amount);
+          }, 0) +
+          financialTransactions
+            .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'realizado')
+            .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
 
-      const actualInflows = actualRevenues + actualTransactionsInflows;
-
-      // Pagamentos acumulados até dateStr
-      const forecastedOutflowsAccountsPayable = accountsPayable
-        .filter(ap => filterByCompany(ap) && ap.payment_date <= dateStr && ap.status?.toLowerCase() === 'previsto')
-        .reduce((sum, ap) => {
-          const amount = parseFloat(ap.amount || 0);
-          return sum + (isNaN(amount) ? 0 : amount);
-        }, 0);
-
-      const forecastedTransactionsOutflows = financialTransactions
-        .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount < 0 && t.status?.toLowerCase() === 'previsto')
-        .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
-
-      const forecastedOutflows = forecastedOutflowsAccountsPayable + forecastedTransactionsOutflows;
-
-      const actualOutflowsAccountsPayable = accountsPayable
-        .filter(ap => filterByCompany(ap) && ap.payment_date <= dateStr && ap.status?.toLowerCase() === 'realizado')
-        .reduce((sum, ap) => {
-          const amount = parseFloat(ap.amount || 0);
-          return sum + (isNaN(amount) ? 0 : amount);
-        }, 0);
-
-      const actualTransactionsOutflows = financialTransactions
-        .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount < 0 && t.status?.toLowerCase() === 'realizado')
-        .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
-
-      const actualOutflows = actualOutflowsAccountsPayable + actualTransactionsOutflows;
-
-      // Saldo Final = Saldo Inicial (acumulado até dateStr) + Recebimentos (acumulados até dateStr) - Pagamentos (acumulados até dateStr)
-      // Isso replica o comportamento do card quando você filtra aquela data
-      const forecastedBalance = dayInitialBalance + forecastedInflows - forecastedOutflows;
-      const actualBalance = dayInitialBalance + actualInflows - actualOutflows;
+        // Saldo Final = Saldo Inicial do dia + Recebimentos do dia - Pagamentos do dia
+        // Cada dia mostra apenas a movimentação daquele dia específico
+        forecastedBalance = dayInitialBalance + dayForecastedInflows - dayForecastedOutflows;
+        actualBalance = dayInitialBalance + dayActualInflows - dayActualOutflows;
+      }
 
       days.push({
         date: dateStr,
@@ -2218,7 +2209,7 @@ function App() {
     }
 
     return days;
-  }, [revenues, accountsPayable, forecastedEntries, financialTransactions, initialBalances, companies, filters.groups, filters.companies]);
+  }, [revenues, accountsPayable, forecastedEntries, financialTransactions, initialBalances, companies, filters.groups, filters.companies, calendarAccumulatedMode]);
 
   const calendarData = useMemo(() => {
     const year = calendarDate.year;
@@ -3011,7 +3002,7 @@ function App() {
                     section="cashflow"
                     darkMode={darkMode}
                     onViewDetails={() => openKPIDetail('Detalhes: Total de Pagamentos', getFilteredTotalOutflows, 'mixed')}
-                    dataSource="Carregado da planilha de contas a pagar"
+                    dataSource="Carregado das planilhas de contas a pagar e transações financeiras"
                   />
                   <KPICard
                     title="Saldo Final"
@@ -3051,7 +3042,7 @@ function App() {
                     color="orange"
                     section="result"
                     darkMode={darkMode}
-                    onViewDetails={() => openKPIDetail('Detalhes: CMV', getFilteredCMV, 'accounts_payable')}
+                    onViewDetails={() => openKPIDetail('Detalhes: CMV', getFilteredCMVDRE, 'mixed')}
                     dataSource="Carregado da planilha de CMV DRE"
                   />
                   <KPICard
@@ -3089,10 +3080,12 @@ function App() {
                     month={calendarDate.month}
                     onMonthChange={(year, month) => setCalendarDate({ year, month })}
                     darkMode={darkMode}
+                    accumulatedMode={calendarAccumulatedMode}
+                    onToggleAccumulatedMode={() => setCalendarAccumulatedMode(!calendarAccumulatedMode)}
                   />
                 </div>
                 <div className="space-y-4">
-                  <CashFlowChart data={cashFlowData} darkMode={darkMode} />
+                  <CashFlowChart data={cashFlowData} darkMode={darkMode} alerts={alertsData} />
                   <CashFlowAlerts data={alertsData} darkMode={darkMode} />
                 </div>
               </div>

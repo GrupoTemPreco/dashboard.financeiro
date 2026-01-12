@@ -16,9 +16,11 @@ interface CalendarViewProps {
   data: DayData[];
   onMonthChange: (year: number, month: number) => void;
   darkMode?: boolean;
+  accumulatedMode?: boolean;
+  onToggleAccumulatedMode?: () => void;
 }
 
-export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, onMonthChange, darkMode = false }) => {
+export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, onMonthChange, darkMode = false, accumulatedMode = false, onToggleAccumulatedMode }) => {
   const monthNames = [
     'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
     'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
@@ -30,9 +32,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
       currency: 'BRL',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    }).format(value);
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(value || 0);
   };
 
   const getDaysInMonth = (month: number, year: number) => {
@@ -69,7 +71,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
 
   const renderDayCell = (day: number | null, index: number) => {
     if (!day) {
-      return <div key={index} className={`h-24 border ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-gray-200 bg-gray-50'}`}></div>;
+      return <div key={index} className={`h-24 border rounded ${darkMode ? 'border-slate-800 bg-slate-900' : 'border-gray-200 bg-gray-50'}`}></div>;
     }
 
     const dayData = getDayData(day);
@@ -90,29 +92,51 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
         ? 'bg-slate-900/80 border-slate-700'
         : 'bg-white';
 
+    // Calcula o padding dinâmico baseado no maior valor
+    const actualValueLength = dayData?.actualBalance !== undefined ? formatCurrency(dayData.actualBalance).length : 0;
+    const forecastedValueLength = dayData?.forecastedBalance !== undefined ? formatCurrency(dayData.forecastedBalance).length : 0;
+    const maxLength = Math.max(actualValueLength, forecastedValueLength);
+    
+    // Padding ajustado para valores grandes
+    let horizontalPadding = 'px-2.5';
+    let verticalPadding = 'py-1.5';
+    
+    if (maxLength > 18) {
+      horizontalPadding = 'px-1';
+      verticalPadding = 'py-1';
+    } else if (maxLength > 15) {
+      horizontalPadding = 'px-1.5';
+      verticalPadding = 'py-1.5';
+    } else if (maxLength > 12) {
+      horizontalPadding = 'px-2';
+      verticalPadding = 'py-1.5';
+    }
+
     return (
       <div
         key={index}
-        className={`h-32 border p-2 ${balanceColorClass} ${
+        className={`h-24 border rounded ${horizontalPadding} ${verticalPadding} ${balanceColorClass} ${
           isToday ? (darkMode ? 'ring-2 ring-sky-500' : 'ring-2 ring-marsala-500') : ''
         }`}
       >
-        <div className="flex justify-center items-center mb-2">
-          <span className={`text-sm font-medium ${isToday ? (darkMode ? 'text-sky-300' : 'text-marsala-600') : darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
+        <div className="flex justify-center items-center mb-1">
+          <span className={`text-xs font-semibold ${isToday ? (darkMode ? 'text-sky-300' : 'text-marsala-600') : darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
             {day}
           </span>
           {isNegativeBalance && (
-            <span className="ml-1 text-red-600 text-xs">⚠️</span>
+            <span className="ml-1 text-red-600 text-[10px]">⚠️</span>
           )}
         </div>
 
         {dayData && (
-          <div className="space-y-1 text-center">
+          <div className="space-y-0.5 text-center">
             {dayData.actualBalance !== undefined && (
               <div className="pb-0.5">
-                <span className={`text-[9px] block ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>R</span>
+                <span className={`text-[8px] block ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>R</span>
                 <span
-                  className={`font-bold text-xs block leading-tight ${
+                  className={`font-bold block leading-tight whitespace-nowrap ${
+                    actualValueLength > 18 ? 'text-[7.5px]' : actualValueLength > 15 ? 'text-[8px]' : 'text-[9px]'
+                  } ${
                     dayData.actualBalance < 0
                       ? darkMode
                         ? 'text-red-300'
@@ -128,9 +152,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
             )}
 
             <div className={dayData.actualBalance !== undefined ? 'border-t pt-0.5' : ''}>
-              <span className={`text-[9px] block ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>P</span>
+              <span className={`text-[8px] block ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>P</span>
               <span
-                className={`font-bold text-xs block leading-tight ${
+                className={`font-bold block leading-tight whitespace-nowrap ${
+                  forecastedValueLength > 18 ? 'text-[7.5px]' : forecastedValueLength > 15 ? 'text-[8px]' : 'text-[9px]'
+                } ${
                   isNegativeBalance
                     ? darkMode
                       ? 'text-red-300'
@@ -149,9 +175,42 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
     );
   };
 
+  // SVG minimalista de alternância
+  const ToggleIcon = () => (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className="mr-1.5"
+    >
+      <path
+        d="M4 6L2 8L4 10"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 6L14 8L12 10"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M2 8H14"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+
   return (
-      <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
-      <div className="flex items-center justify-between mb-6">
+    <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
+      <div className="flex items-center justify-between mb-6 relative">
         <div className="flex items-center space-x-4">
           <button
             onClick={() => navigateMonth('prev')}
@@ -174,23 +233,27 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
           </button>
         </div>
         
-        <div className="flex items-center space-x-4 text-sm">
-          <div className="flex items-center">
-            <div className="w-3 h-3 bg-blue-600 rounded-full mr-2"></div>
-            <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Saldo Real</span>
-          </div>
-          <div className="flex items-center">
-            <div className="w-3 h-3 bg-green-600 rounded-full mr-2"></div>
-            <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Saldo Previsto</span>
-          </div>
-          <div className="flex items-center">
-            <div className="w-3 h-3 bg-red-600 rounded-full mr-2"></div>
-            <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Negativo</span>
-          </div>
-        </div>
+        {onToggleAccumulatedMode && (
+          <button
+            onClick={onToggleAccumulatedMode}
+            className={`px-3 py-1.5 rounded-lg transition-colors text-sm font-medium flex items-center ${
+              accumulatedMode
+                ? darkMode
+                  ? 'bg-sky-600 text-white hover:bg-sky-700'
+                  : 'bg-sky-500 text-white hover:bg-sky-600'
+                : darkMode
+                  ? 'bg-slate-700 text-slate-200 hover:bg-slate-600'
+                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+            title={accumulatedMode ? 'Modo Acumulado: Mostra saldo final acumulado até cada dia' : 'Modo Diário: Mostra apenas movimentação de cada dia'}
+          >
+            <ToggleIcon />
+            <span>{accumulatedMode ? 'Acumulado' : 'Diário'}</span>
+          </button>
+        )}
       </div>
 
-      <div className="grid grid-cols-7 gap-0">
+      <div className="grid grid-cols-7 gap-1.5 min-w-full">
         {weekDays.map((day, index) => (
           <div
             key={index}
@@ -214,6 +277,21 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
           
           return renderDayCell(day, index);
         })}
+      </div>
+
+      <div className="flex items-center justify-center space-x-6 mt-4 pt-4 border-t border-gray-200 dark:border-slate-700 text-sm">
+        <div className="flex items-center">
+          <div className="w-3 h-3 bg-blue-600 rounded-full mr-2"></div>
+          <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Saldo Real</span>
+        </div>
+        <div className="flex items-center">
+          <div className="w-3 h-3 bg-green-600 rounded-full mr-2"></div>
+          <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Saldo Previsto</span>
+        </div>
+        <div className="flex items-center">
+          <div className="w-3 h-3 bg-red-600 rounded-full mr-2"></div>
+          <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Negativo</span>
+        </div>
       </div>
     </div>
   );

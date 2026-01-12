@@ -103,8 +103,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <div className={`${isCollapsed ? 'w-16' : 'w-72'} bg-gradient-to-b from-slate-950 via-blue-900 to-indigo-900 text-white h-full overflow-y-auto scrollbar-vertical shadow-xl transition-all duration-300`}>
-      <div className={`${isCollapsed ? 'p-3' : 'p-6'} border-b border-sky-700 flex items-center justify-between`}>
+    <div className={`${isCollapsed ? 'w-16' : 'w-56'} bg-gradient-to-b from-slate-950 via-blue-900 to-indigo-900 text-white h-full overflow-y-auto scrollbar-vertical shadow-xl transition-all duration-300`}>
+      <div className={`${isCollapsed ? 'p-3' : 'p-4'} border-b border-sky-700 flex items-center justify-between`}>
         {!isCollapsed && (
           <div>
             <h1 className="text-lg font-bold text-white">Dashboard Financeiro</h1>
@@ -120,7 +120,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
       </div>
 
-      <div className={`${isCollapsed ? 'p-2' : 'p-5'} space-y-5`}>
+      <div className={`${isCollapsed ? 'p-2' : 'p-4'} space-y-4`}>
         {/* Presentation Mode Button */}
         <div>
           <button

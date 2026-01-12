@@ -195,6 +195,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
         if (source === 'transactions') return 'Lançamentos Financeiros';
         if (source === 'revenues') return 'Receitas';
         if (source === 'initial_balance') return 'Saldo Inicial';
+        if (source === 'cmv_dre') return 'CMV DRE';
         return source || '-';
       };
 
