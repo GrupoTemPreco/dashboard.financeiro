@@ -101,6 +101,7 @@ function App() {
   const [importRole, setImportRole] = useState<'none' | 'user' | 'admin'>('none');
   const [importAuthError, setImportAuthError] = useState('');
   const [isPermanentlyUnlocked, setIsPermanentlyUnlocked] = useState(false);
+  const [dreWarningClosed, setDreWarningClosed] = useState(false);
   // unlockClickCount é usado indiretamente através do callback do setState em handleUnlockClick
   // @ts-ignore - valor usado indiretamente via callback do setState
   const [unlockClickCount, setUnlockClickCount] = useState(0);
@@ -125,6 +126,13 @@ function App() {
       setImportRole('admin');
     }
   }, [currentPage, isPermanentlyUnlocked, importRole]);
+
+  // Resetar aviso do DRE quando acessar a página
+  useEffect(() => {
+    if (currentPage === 'dre') {
+      setDreWarningClosed(false);
+    }
+  }, [currentPage]);
 
   // Helper function to normalize business unit codes (remove leading zeros)
   const normalizeCode = (code: any): string => {
@@ -2923,16 +2931,57 @@ function App() {
           )}
 
           {currentPage === 'dre' && (
-            <DREPage
-              accountsPayable={accountsPayable}
-              financialTransactions={financialTransactions}
-              revenuesDRE={revenuesDRE}
-              cmvDRE={cmvDRE}
-              nonOperationalAccounts={nonOperationalAccounts}
-              filters={filters}
-              companies={companies}
-              darkMode={darkMode}
-            />
+            <>
+              {!dreWarningClosed && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                  <div className={`max-w-md w-full mx-4 rounded-lg shadow-xl ${
+                    darkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
+                  } border`}>
+                    <div className="p-6">
+                      <div className="text-center mb-6">
+                        <div className="text-6xl mb-4">🚧</div>
+                        <h2 className={`text-xl font-semibold mb-2 ${
+                          darkMode ? 'text-slate-100' : 'text-gray-800'
+                        }`}>
+                          Análise DRE em desenvolvimento
+                        </h2>
+                        <p className={`text-sm ${
+                          darkMode ? 'text-slate-300' : 'text-gray-600'
+                        }`}>
+                          Em breve, você terá insights completos aqui.
+                        </p>
+                      </div>
+                      
+                      <div className="flex justify-end">
+                        <button
+                          onClick={() => setDreWarningClosed(true)}
+                          className={`px-6 py-2 rounded-lg font-medium transition-colors ${
+                            darkMode 
+                              ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                              : 'bg-blue-600 hover:bg-blue-700 text-white'
+                          }`}
+                        >
+                          Entendi
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {dreWarningClosed && (
+                <DREPage
+                  accountsPayable={accountsPayable}
+                  financialTransactions={financialTransactions}
+                  revenuesDRE={revenuesDRE}
+                  cmvDRE={cmvDRE}
+                  nonOperationalAccounts={nonOperationalAccounts}
+                  filters={filters}
+                  companies={companies}
+                  darkMode={darkMode}
+                />
+              )}
+            </>
           )}
 
           {currentPage === 'import' && (
