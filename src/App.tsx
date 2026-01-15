@@ -2307,215 +2307,16 @@ function App() {
     }));
   }, [dailyCashFlow]);
 
-  const monthlyComparisonData = useMemo(() => {
-    // Group data by month and year
-    const currentYear = new Date().getFullYear();
-    const previousYear = currentYear - 1;
-
-    const monthlyDataCurrent: { [key: string]: {
-      revenues: number,
-      cmv: number,
-      loans: number,
-      revenuesByUnit: { [unit: string]: number },
-      cmvByUnit: { [unit: string]: number }
-    } } = {};
-    const monthlyDataPrevious: { [key: string]: {
-      revenues: number,
-      cmv: number,
-      loans: number,
-      revenuesByUnit: { [unit: string]: number },
-      cmvByUnit: { [unit: string]: number }
-    } } = {};
-
-    // Helper to initialize month data
-    const initMonthData = () => ({
-      revenues: 0,
-      cmv: 0,
-      loans: 0,
-      revenuesByUnit: {},
-      cmvByUnit: {}
-    });
-
-    // Process revenues (Receita Direta) - Only REALIZED - FILTERED
-    getFilteredRevenues.forEach(rev => {
-      if (rev.payment_date && rev.status?.toLowerCase() === 'realizado') {
-        const date = new Date(rev.payment_date);
-        const year = date.getFullYear();
-        const monthKey = `${date.getMonth() + 1}`.padStart(2, '0'); // 01-12
-        const amount = rev.amount || 0;
-
-        const company = companies.find(c => c.company_code === rev.company_code);
-        const unit = company?.company_name || 'Não classificado';
-
-        if (year === currentYear) {
-          if (!monthlyDataCurrent[monthKey]) monthlyDataCurrent[monthKey] = initMonthData();
-          monthlyDataCurrent[monthKey].revenues += amount;
-          monthlyDataCurrent[monthKey].revenuesByUnit[unit] = (monthlyDataCurrent[monthKey].revenuesByUnit[unit] || 0) + amount;
-        } else if (year === previousYear) {
-          if (!monthlyDataPrevious[monthKey]) monthlyDataPrevious[monthKey] = initMonthData();
-          monthlyDataPrevious[monthKey].revenues += amount;
-          monthlyDataPrevious[monthKey].revenuesByUnit[unit] = (monthlyDataPrevious[monthKey].revenuesByUnit[unit] || 0) + amount;
-        }
-      }
-    });
-
-    // Process CMV from accounts payable - Only REALIZED - FILTERED
-    // Use same chart of accounts as KPI calculation
-    getFilteredAccountsPayable.forEach(ap => {
-      if (ap.payment_date && ap.status?.toLowerCase() === 'realizado') {
-        const isCMV = cmvChartOfAccounts.some(chartName =>
-          ap.chart_of_accounts?.toLowerCase().includes(chartName.toLowerCase())
-        );
-
-        if (isCMV) {
-          const date = new Date(ap.payment_date);
-          const year = date.getFullYear();
-          const monthKey = `${date.getMonth() + 1}`.padStart(2, '0');
-          const amount = ap.amount || 0;
-
-          const company = companies.find(c => c.company_code === ap.company_code);
-          const unit = company?.company_name || 'Não classificado';
-
-          if (year === currentYear) {
-            if (!monthlyDataCurrent[monthKey]) monthlyDataCurrent[monthKey] = initMonthData();
-            monthlyDataCurrent[monthKey].cmv += amount;
-            monthlyDataCurrent[monthKey].cmvByUnit[unit] = (monthlyDataCurrent[monthKey].cmvByUnit[unit] || 0) + amount;
-          } else if (year === previousYear) {
-            if (!monthlyDataPrevious[monthKey]) monthlyDataPrevious[monthKey] = initMonthData();
-            monthlyDataPrevious[monthKey].cmv += amount;
-            monthlyDataPrevious[monthKey].cmvByUnit[unit] = (monthlyDataPrevious[monthKey].cmvByUnit[unit] || 0) + amount;
-          }
-        }
-      }
-    });
-
-    // Also process CMV from forecasted entries - Only REALIZED - FILTERED
-    getFilteredForecastedEntries.forEach(entry => {
-      if (entry.payment_date && entry.status?.toLowerCase() === 'paga') {
-        const isCMV = cmvChartOfAccounts.some(chartName =>
-          entry.chart_of_accounts?.toLowerCase().includes(chartName.toLowerCase())
-        );
-
-        if (isCMV) {
-          const date = new Date(entry.payment_date);
-          const year = date.getFullYear();
-          const monthKey = `${date.getMonth() + 1}`.padStart(2, '0');
-          const amount = entry.amount || 0;
-
-          const company = companies.find(c => c.company_code === entry.company_code);
-          const unit = company?.company_name || 'Não classificado';
-
-          if (year === currentYear) {
-            if (!monthlyDataCurrent[monthKey]) monthlyDataCurrent[monthKey] = initMonthData();
-            monthlyDataCurrent[monthKey].cmv += amount;
-            monthlyDataCurrent[monthKey].cmvByUnit[unit] = (monthlyDataCurrent[monthKey].cmvByUnit[unit] || 0) + amount;
-          } else if (year === previousYear) {
-            if (!monthlyDataPrevious[monthKey]) monthlyDataPrevious[monthKey] = initMonthData();
-            monthlyDataPrevious[monthKey].cmv += amount;
-            monthlyDataPrevious[monthKey].cmvByUnit[unit] = (monthlyDataPrevious[monthKey].cmvByUnit[unit] || 0) + amount;
-          }
-        }
-      }
-    });
-
-    // Also process CMV from financial transactions - Only REALIZED - FILTERED
-    getFilteredTransactions.forEach(trans => {
-      if (trans.transaction_date && trans.status?.toLowerCase() === 'realizado') {
-        const isCMV = cmvChartOfAccounts.some(chartName =>
-          trans.chart_of_accounts?.toLowerCase().includes(chartName.toLowerCase())
-        );
-
-        if (isCMV) {
-          const date = new Date(trans.transaction_date);
-          const year = date.getFullYear();
-          const monthKey = `${date.getMonth() + 1}`.padStart(2, '0');
-          const amount = Math.abs(trans.amount || 0);
-
-          const company = companies.find(c => c.company_code === trans.company_code);
-          const unit = company?.company_name || 'Não classificado';
-
-          if (year === currentYear) {
-            if (!monthlyDataCurrent[monthKey]) monthlyDataCurrent[monthKey] = initMonthData();
-            monthlyDataCurrent[monthKey].cmv += amount;
-            monthlyDataCurrent[monthKey].cmvByUnit[unit] = (monthlyDataCurrent[monthKey].cmvByUnit[unit] || 0) + amount;
-          } else if (year === previousYear) {
-            if (!monthlyDataPrevious[monthKey]) monthlyDataPrevious[monthKey] = initMonthData();
-            monthlyDataPrevious[monthKey].cmv += amount;
-            monthlyDataPrevious[monthKey].cmvByUnit[unit] = (monthlyDataPrevious[monthKey].cmvByUnit[unit] || 0) + amount;
-          }
-        }
-      }
-    });
-
-    // Process Loans (Empréstimos) - Only REALIZED
-    const loanAccounts = ['Pagamento de Empréstimo', 'Financiamento', 'Pagamento Via Cartão'];
-
-    const processLoans = (items: any[], dateField: string, accountField: string) => {
-      items.forEach(item => {
-        if (item[dateField] && item[accountField] && item.status?.toLowerCase() === 'realizado') {
-          const isLoan = loanAccounts.some(loan =>
-            item[accountField]?.toLowerCase().includes(loan.toLowerCase())
-          );
-
-          if (isLoan) {
-            const date = new Date(item[dateField]);
-            const year = date.getFullYear();
-            const monthKey = `${date.getMonth() + 1}`.padStart(2, '0');
-            const amount = Math.abs(item.amount || 0);
-
-            if (year === currentYear) {
-              if (!monthlyDataCurrent[monthKey]) monthlyDataCurrent[monthKey] = initMonthData();
-              monthlyDataCurrent[monthKey].loans += amount;
-            } else if (year === previousYear) {
-              if (!monthlyDataPrevious[monthKey]) monthlyDataPrevious[monthKey] = initMonthData();
-              monthlyDataPrevious[monthKey].loans += amount;
-            }
-          }
-        }
-      });
-    };
-
-    processLoans(getFilteredAccountsPayable, 'payment_date', 'chart_of_accounts');
-    processLoans(getFilteredForecastedEntries, 'payment_date', 'chart_of_accounts');
-    processLoans(getFilteredTransactions, 'transaction_date', 'description');
-
-    // Convert to array format expected by component
-    const monthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-    const result = [];
-
-    for (let month = 1; month <= 12; month++) {
-      const monthKey = `${month}`.padStart(2, '0');
-      const currentData = monthlyDataCurrent[monthKey] || initMonthData();
-      const previousData = monthlyDataPrevious[monthKey] || initMonthData();
-
-      // Calculate debt ratio (loans / revenue * 100)
-      const currentDebtRatio = currentData.revenues > 0 ? (currentData.loans / currentData.revenues) * 100 : 0;
-      const previousDebtRatio = previousData.revenues > 0 ? (previousData.loans / previousData.revenues) * 100 : 0;
-
-      result.push({
-        month: monthNames[month - 1],
-        currentYear: {
-          revenue: currentData.revenues,
-          cogs: currentData.cmv,
-          loans: currentData.loans,
-          debtRatio: currentDebtRatio,
-          revenuesByUnit: currentData.revenuesByUnit,
-          cmvByUnit: currentData.cmvByUnit
-        },
-        previousYear: {
-          revenue: previousData.revenues,
-          cogs: previousData.cmv,
-          loans: previousData.loans,
-          debtRatio: previousDebtRatio,
-          revenuesByUnit: previousData.revenuesByUnit,
-          cmvByUnit: previousData.cmvByUnit
-        }
-      });
-    }
-
-    // Return only last 3 months by default
-    return result.slice(-3);
-  }, [getFilteredRevenues, getFilteredAccountsPayable, getFilteredForecastedEntries, getFilteredTransactions]);
+  // Raw data for MonthlyComparison (NO date filtering - component has its own period filter)
+  const monthlyComparisonRawData = useMemo(() => ({
+    revenues: revenues,
+    accountsPayable: accountsPayable,
+    forecastedEntries: forecastedEntries,
+    transactions: financialTransactions,
+    cmvDRE: cmvDRE,
+    companies: companies,
+    cmvChartOfAccounts: cmvChartOfAccounts
+  }), [revenues, accountsPayable, forecastedEntries, financialTransactions, cmvDRE, companies, cmvChartOfAccounts]);
 
   const cashFlowTableData = useMemo(() => [], []);
 
@@ -3091,7 +2892,10 @@ function App() {
               </div>
 
               {/* Monthly Comparison */}
-              <MonthlyComparison data={monthlyComparisonData} darkMode={darkMode} />
+              <MonthlyComparison 
+                rawData={monthlyComparisonRawData} 
+                darkMode={darkMode} 
+              />
             </>
           )}
 
