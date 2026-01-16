@@ -1704,41 +1704,32 @@ function App() {
     '04.8 Medicamentos Multiplos'
   ];
 
-  // Filtro de CMV DRE (somente dados da planilha de CMV DRE)
+  // Filtro de CMV - dados de contas_a_pagar com categoria "04.0DESPESAS COM MERCADORIA"
   const getFilteredCMVDRE = useMemo(() => {
-    if (companies.length === 0) {
-      return cmvDRE.filter(cmv => {
-        const dateMatch = (!filters.startDate || cmv.issue_date >= filters.startDate) &&
-                         (!filters.endDate || cmv.issue_date <= filters.endDate);
-        return dateMatch;
-      });
-    }
-
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-
-    return cmvDRE.filter(cmv => {
-      const dateMatch = (!filters.startDate || cmv.issue_date >= filters.startDate) &&
-                       (!filters.endDate || cmv.issue_date <= filters.endDate);
-
-      if (!hasActiveFilters) {
-        return dateMatch;
-      }
-
-      const filteredCompanyCodes = companies
-        .filter(c => {
-          const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-          const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-          return groupMatch && companyMatch;
-        })
-        .map(c => c.company_code);
-
-      const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-      const normalizedBU = normalizeCode(cmv.business_unit);
-      const companyMatch = normalizedCompanyCodes.includes(normalizedBU);
-
-      return companyMatch && dateMatch;
+    // Filtrar contas_a_pagar pela categoria específica
+    const cmvFromAP = getFilteredAccountsPayable.filter(ap => {
+      const chartOfAccounts = (ap.chart_of_accounts || '').toUpperCase();
+      // Verificar se contém "04.0" seguido de "DESPESAS COM MERCADORIA" (aceita espaço e singular/plural)
+      // Aceita: "04.0DESPESAS COM MERCADORIA", "04.0 DESPESAS COM MERCADORIA", "04.0DESPESAS COM MERCADORIAS", etc.
+      return chartOfAccounts.includes('04.0') && 
+             chartOfAccounts.includes('DESPESAS COM MERCADORIA');
     });
-  }, [cmvDRE, companies, filters]);
+
+    // Mapear para o formato esperado (compatível com o formato antigo de cmvDRE)
+    return cmvFromAP.map(ap => ({
+      id: ap.id,
+      status: ap.status,
+      business_unit: ap.business_unit,
+      chart_of_accounts: ap.chart_of_accounts,
+      issue_date: ap.payment_date, // Usar payment_date como issue_date para compatibilidade
+      amount: ap.amount,
+      creditor: ap.creditor,
+      payment_date: ap.payment_date,
+      import_id: ap.import_id,
+      created_at: ap.created_at,
+      updated_at: ap.updated_at
+    }));
+  }, [getFilteredAccountsPayable]);
 
 
   // Dados detalhados para Resultado Operacional (receita - CMV - despesas)
@@ -1750,10 +1741,10 @@ function App() {
       category: 'Receita Direta'
     }));
 
-    // CMV somente da planilha de CMV DRE
+    // CMV de contas_a_pagar com categoria "04.0DESPESAS COM MERCADORIA"
     const cmvData = getFilteredCMVDRE.map(item => ({
       ...item,
-      source: 'cmv_dre',
+      source: 'accounts_payable',
       type: 'CMV',
       category: 'Custo de Mercadoria Vendida',
       amount: -Math.abs(item.amount || 0) // Negativo para custo
@@ -1769,15 +1760,25 @@ function App() {
     return [...revenueData, ...cmvData, ...expensesData];
   }, [getFilteredRevenues, getFilteredCMVDRE, getFilteredExpenses]);
 
-  // CMV calculado somente da planilha de CMV DRE
+  // CMV calculado de contas_a_pagar com categoria "04.0DESPESAS COM MERCADORIA"
   const cmvTotals = useMemo(() => {
-    // A planilha de CMV DRE contém apenas registros com status 'pago' (realizado)
-    // Não há dados previstos na planilha de CMV DRE
+    // Separar por status: 'realizado' ou 'paga' = actual, 'previsto' ou 'pendente' = forecasted
     const actual = getFilteredCMVDRE
+      .filter(cmv => {
+        const status = (cmv.status || '').toLowerCase();
+        return status === 'realizado' || status === 'paga';
+      })
+      .reduce((sum, cmv) => sum + Math.abs(cmv.amount || 0), 0);
+
+    const forecasted = getFilteredCMVDRE
+      .filter(cmv => {
+        const status = (cmv.status || '').toLowerCase();
+        return status === 'previsto' || status === 'pendente';
+      })
       .reduce((sum, cmv) => sum + Math.abs(cmv.amount || 0), 0);
 
     return {
-      forecasted: 0, // Não há dados previstos na planilha de CMV DRE
+      forecasted: forecasted,
       actual: actual
     };
   }, [getFilteredCMVDRE]);
@@ -2852,7 +2853,7 @@ function App() {
                     section="result"
                     darkMode={darkMode}
                     onViewDetails={() => openKPIDetail('Detalhes: CMV', getFilteredCMVDRE, 'mixed')}
-                    dataSource="Carregado da planilha de CMV DRE"
+                    dataSource="Carregado de contas a pagar (categoria: 04.0DESPESAS COM MERCADORIA)"
                   />
                   <KPICard
                     title="Total de Despesas"
@@ -2973,6 +2974,7 @@ function App() {
                 <DREPage
                   accountsPayable={accountsPayable}
                   financialTransactions={financialTransactions}
+                  forecastedEntries={forecastedEntries}
                   revenuesDRE={revenuesDRE}
                   cmvDRE={cmvDRE}
                   nonOperationalAccounts={nonOperationalAccounts}

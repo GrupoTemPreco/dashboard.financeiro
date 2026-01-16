@@ -171,13 +171,21 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
     };
     
 
+    // Filter CMV from accountsPayable by category "04.0DESPESAS COM MERCADORIA"
+    const cmvFromAP = rawData.accountsPayable.filter(ap => {
+      const chartOfAccounts = (ap.chart_of_accounts || '').toUpperCase();
+      // Verificar se contém "04.0" seguido de "DESPESAS COM MERCADORIA" (aceita espaço e singular/plural)
+      return chartOfAccounts.includes('04.0') && 
+             chartOfAccounts.includes('DESPESAS COM MERCADORIA');
+    });
+
     // Filter by date
     const dateFiltered = {
       revenues: rawData.revenues.filter(rev => filterByDate(rev, 'payment_date')),
       accountsPayable: rawData.accountsPayable.filter(ap => filterByDate(ap, 'payment_date')),
       forecastedEntries: rawData.forecastedEntries.filter(entry => filterByDate(entry, 'due_date')),
       transactions: rawData.transactions.filter(t => filterByDate(t, 'transaction_date')),
-      cmvDRE: (rawData.cmvDRE || []).filter(cmv => filterByDate(cmv, 'issue_date'))
+      cmvDRE: cmvFromAP.filter(cmv => filterByDate(cmv, 'payment_date')) // Usar payment_date ao invés de issue_date
     };
 
     // Then filter by groups/companies if selected
@@ -269,15 +277,38 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
     });
 
 
+    // Log para identificar receitas de setembro
+    const septemberRevenues: any[] = [];
+    
     allRevenues.forEach(rev => {
       if (rev.payment_date) {
-        const date = new Date(rev.payment_date);
-        const year = date.getFullYear();
-        const monthKey = `${date.getMonth() + 1}`.padStart(2, '0');
+        // Extrair ano e mês diretamente da string para evitar problemas de timezone
+        const dateStr = String(rev.payment_date);
+        const dateParts = dateStr.split('-');
+        const year = parseInt(dateParts[0], 10);
+        const month = parseInt(dateParts[1], 10); // Já vem como 1-12
+        const monthKey = `${month}`.padStart(2, '0');
         const amount = rev.amount || 0;
         const status = rev.status?.toLowerCase();
         const isForecasted = status === 'previsto' || status === 'pendente';
         const isActual = status === 'realizado';
+
+        // Criar date apenas para debug/logs
+        const date = new Date(rev.payment_date);
+
+        // Coletar dados de setembro
+        if (month === 9) {
+          septemberRevenues.push({
+            payment_date: rev.payment_date,
+            date_parsed: date.toISOString(),
+            year: year,
+            month: month,
+            amount: amount,
+            status: rev.status,
+            business_unit: rev.business_unit,
+            id: rev.id
+          });
+        }
 
         const normalizedBU = normalizeCode(rev.business_unit);
         const company = rawData.companies.find(c => normalizeCode(c.company_code) === normalizedBU);
@@ -304,6 +335,20 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
         }
       }
     });
+    
+    // Log das receitas de setembro
+    if (septemberRevenues.length > 0) {
+      console.log('🔍 DADOS DE SETEMBRO ENCONTRADOS (Receitas):', {
+        total: septemberRevenues.length,
+        dados: septemberRevenues,
+        resumo: {
+          anoAtual: septemberRevenues.filter(d => d.year === currentYear).length,
+          anoAnterior: septemberRevenues.filter(d => d.year === previousYear).length,
+          totalAnoAtual: septemberRevenues.filter(d => d.year === currentYear).reduce((sum, d) => sum + d.amount, 0),
+          totalAnoAnterior: septemberRevenues.filter(d => d.year === previousYear).reduce((sum, d) => sum + d.amount, 0)
+        }
+      });
+    }
 
     // Process revenues from forecasted entries (movimento em dinheiro) - Same as card logic
     // IMPORTANT: We need to process ALL forecasted entries, not just those in the date range
@@ -325,9 +370,12 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
 
     allForecastedEntries.forEach(entry => {
       if (entry.due_date && entry.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro')) {
-        const date = new Date(entry.due_date);
-        const year = date.getFullYear();
-        const monthKey = `${date.getMonth() + 1}`.padStart(2, '0');
+        // Extrair ano e mês diretamente da string para evitar problemas de timezone
+        const dateStr = String(entry.due_date);
+        const dateParts = dateStr.split('-');
+        const year = parseInt(dateParts[0], 10);
+        const month = parseInt(dateParts[1], 10); // Já vem como 1-12
+        const monthKey = `${month}`.padStart(2, '0');
         const amount = entry.amount || 0;
         const isPaid = entry.status?.toLowerCase() === 'paga';
 
@@ -357,14 +405,19 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
       }
     });
 
-    // Process CMV - Same logic as card: ONLY from CMV DRE spreadsheet (not from accounts payable, forecasted entries, or transactions)
-    // The CMV DRE spreadsheet contains only records with status 'pago' (realized)
-    // There are no forecasted data in CMV DRE spreadsheet
+    // Process CMV - Same logic as card: from contas_a_pagar with category "04.0DESPESAS COM MERCADORIA"
     // IMPORTANT: We need to process ALL CMV data, not just those in the date range, because we're comparing current year vs previous year
-    const allCMVDRE = (rawData.cmvDRE || []).filter(cmv => {
+    const allCMVFromAP = rawData.accountsPayable.filter(ap => {
+      const chartOfAccounts = (ap.chart_of_accounts || '').toUpperCase();
+      // Verificar se contém "04.0" seguido de "DESPESAS COM MERCADORIA" (aceita espaço e singular/plural)
+      const isCMV = chartOfAccounts.includes('04.0') && 
+                    chartOfAccounts.includes('DESPESAS COM MERCADORIA');
+      
+      if (!isCMV) return false;
+      
       // Filter by company/group if filters are active
       if (selectedGroups.length > 0 || selectedCompanies.length > 0) {
-        const normalizedBU = normalizeCode(cmv.business_unit);
+        const normalizedBU = normalizeCode(ap.business_unit);
         const filteredCompanyCodes = rawData.companies
           .filter(c => {
             const groupMatch = selectedGroups.length === 0 || selectedGroups.includes(c.group_name);
@@ -377,13 +430,59 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
       return true; // No filters = show all
     });
 
-    if (allCMVDRE && allCMVDRE.length > 0) {
-      allCMVDRE.forEach(cmv => {
-        if (cmv.issue_date) {
-          const date = new Date(cmv.issue_date);
-          const year = date.getFullYear();
-          const monthKey = `${date.getMonth() + 1}`.padStart(2, '0');
+    if (allCMVFromAP && allCMVFromAP.length > 0) {
+      // Log para identificar dados de setembro
+      const septemberData: any[] = [];
+      const allCMVData: any[] = [];
+      
+      allCMVFromAP.forEach(cmv => {
+        if (cmv.payment_date) {
+          // Extrair ano e mês diretamente da string para evitar problemas de timezone
+          // payment_date vem no formato "YYYY-MM-DD"
+          const dateStr = String(cmv.payment_date);
+          const dateParts = dateStr.split('-');
+          const year = parseInt(dateParts[0], 10);
+          const month = parseInt(dateParts[1], 10); // Já vem como 1-12
+          const monthKey = `${month}`.padStart(2, '0');
           const amount = Math.abs(cmv.amount || 0);
+          
+          // Criar date apenas para debug/logs
+          const date = new Date(cmv.payment_date);
+
+          // Coletar TODOS os dados para debug
+          allCMVData.push({
+            payment_date: cmv.payment_date,
+            date_parsed: date.toISOString(),
+            year: year,
+            month: month,
+            monthKey: monthKey,
+            amount: amount,
+            business_unit: cmv.business_unit,
+            chart_of_accounts: cmv.chart_of_accounts,
+            creditor: cmv.creditor,
+            status: cmv.status,
+            id: cmv.id
+          });
+
+          // Coletar dados de setembro especificamente
+          if (month === 9) {
+            septemberData.push({
+              payment_date: cmv.payment_date,
+              date_parsed: date.toISOString(),
+              year: year,
+              month: month,
+              amount: amount,
+              business_unit: cmv.business_unit,
+              chart_of_accounts: cmv.chart_of_accounts,
+              creditor: cmv.creditor,
+              status: cmv.status,
+              id: cmv.id,
+              currentYear: currentYear,
+              previousYear: previousYear,
+              isCurrentYear: year === currentYear,
+              isPreviousYear: year === previousYear
+            });
+          }
 
           const normalizedBU = normalizeCode(cmv.business_unit);
           const company = rawData.companies.find(c => normalizeCode(c.company_code) === normalizedBU);
@@ -399,6 +498,35 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
             monthlyDataPrevious[monthKey].cmvByUnit[unit] = (monthlyDataPrevious[monthKey].cmvByUnit[unit] || 0) + amount;
           }
         }
+      });
+      
+      // Log dos dados de setembro encontrados
+      if (septemberData.length > 0) {
+        console.log('🔍 DADOS DE SETEMBRO ENCONTRADOS (CMV de contas_a_pagar):', {
+          total: septemberData.length,
+          dados: septemberData,
+          resumo: {
+            anoAtual: septemberData.filter(d => d.year === currentYear).length,
+            anoAnterior: septemberData.filter(d => d.year === previousYear).length,
+            totalAnoAtual: septemberData.filter(d => d.year === currentYear).reduce((sum, d) => sum + d.amount, 0),
+            totalAnoAnterior: septemberData.filter(d => d.year === previousYear).reduce((sum, d) => sum + d.amount, 0)
+          },
+          currentYear: currentYear,
+          previousYear: previousYear
+        });
+      }
+      
+      // Log geral de todos os dados CMV processados (útil para debug)
+      console.log('📊 TODOS OS DADOS CMV PROCESSADOS:', {
+        total: allCMVData.length,
+        porMes: allCMVData.reduce((acc, d) => {
+          const key = `${d.year}-${d.monthKey}`;
+          if (!acc[key]) acc[key] = { count: 0, total: 0 };
+          acc[key].count++;
+          acc[key].total += d.amount;
+          return acc;
+        }, {} as any),
+        setembro: septemberData.length > 0 ? septemberData : 'Nenhum dado de setembro encontrado'
       });
     }
 
@@ -440,9 +568,12 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
         const isLoan = creditorIsLoan || chartIsLoan;
         
         if (isLoan) {
-          const date = new Date(ap.payment_date);
-          const year = date.getFullYear();
-          const monthKey = `${date.getMonth() + 1}`.padStart(2, '0');
+          // Extrair ano e mês diretamente da string para evitar problemas de timezone
+          const dateStr = String(ap.payment_date);
+          const dateParts = dateStr.split('-');
+          const year = parseInt(dateParts[0], 10);
+          const month = parseInt(dateParts[1], 10); // Já vem como 1-12
+          const monthKey = `${month}`.padStart(2, '0');
           const amount = Math.abs(ap.amount || 0);
 
           if (year === currentYear) {
@@ -531,6 +662,19 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
     }
 
 
+    // Log dos meses que serão incluídos
+    console.log('📅 MESES QUE SERÃO INCLUÍDOS NO GRÁFICO:', {
+      monthsToInclude: monthsToInclude,
+      period: period,
+      dateRange: {
+        start: dateRange.start,
+        end: dateRange.end
+      },
+      currentYear: currentYear,
+      currentMonth: currentMonth,
+      setembroIncluido: monthsToInclude.some(m => m.month === 9)
+    });
+
     // Process each month in the range
     monthsToInclude.forEach(({ month }) => {
       const monthKey = `${month}`.padStart(2, '0');
@@ -539,6 +683,27 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
       const currentData = monthlyDataCurrent[monthKey] || initMonthData();
       // Get data for previous year (same month)
       const previousData = monthlyDataPrevious[monthKey] || initMonthData();
+      
+      // Log específico para setembro
+      if (month === 9) {
+        console.log('🔍 PROCESSANDO SETEMBRO:', {
+          monthKey: monthKey,
+          currentData: {
+            revenues: currentData.revenues,
+            cmv: currentData.cmv,
+            loans: currentData.loans,
+            revenuesByUnit: currentData.revenuesByUnit,
+            cmvByUnit: currentData.cmvByUnit
+          },
+          previousData: {
+            revenues: previousData.revenues,
+            cmv: previousData.cmv,
+            loans: previousData.loans,
+            revenuesByUnit: previousData.revenuesByUnit,
+            cmvByUnit: previousData.cmvByUnit
+          }
+        });
+      }
 
       const currentDebtRatio = currentData.revenues > 0 ? (currentData.loans / currentData.revenues) * 100 : 0;
       const previousDebtRatio = previousData.revenues > 0 ? (previousData.loans / previousData.revenues) * 100 : 0;
@@ -604,6 +769,32 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
         }
       });
     });
+
+    // Log final resumindo todos os dados de setembro
+    const septemberInResult = result.find(r => r.month === 'Set');
+    if (septemberInResult) {
+      console.log('📊 RESUMO FINAL - SETEMBRO NO RESULTADO:', {
+        month: 'Set',
+        currentYear: {
+          revenue: septemberInResult.currentYear.revenue,
+          cmv: septemberInResult.currentYear.cogs,
+          loans: septemberInResult.currentYear.loans
+        },
+        previousYear: {
+          revenue: septemberInResult.previousYear.revenue,
+          cmv: septemberInResult.previousYear.cogs,
+          loans: septemberInResult.previousYear.loans
+        },
+        temDadosAnoAtual: septemberInResult.currentYear.revenue > 0 || 
+                          septemberInResult.currentYear.cogs > 0 || 
+                          septemberInResult.currentYear.loans > 0,
+        temDadosAnoAnterior: septemberInResult.previousYear.revenue > 0 || 
+                             septemberInResult.previousYear.cogs > 0 || 
+                             septemberInResult.previousYear.loans > 0
+      });
+    } else {
+      console.log('✅ Setembro NÃO está no resultado final do gráfico');
+    }
 
     return result;
   }, [filteredData, rawData.companies, rawData.cmvChartOfAccounts, dateRange]);
@@ -746,10 +937,13 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
             const revDate = rev.payment_date;
             if (revDate < dateRange.start || revDate > dateRange.end) return;
             
-            const date = new Date(rev.payment_date);
-            const year = date.getFullYear();
+            // Extrair ano e mês diretamente da string para evitar problemas de timezone
+            const dateStr = String(rev.payment_date);
+            const dateParts = dateStr.split('-');
+            const year = parseInt(dateParts[0], 10);
+            const month = parseInt(dateParts[1], 10) - 1; // Converter para 0-11 para usar com monthNames
             if (year === currentYear) {
-              const monthKey = monthNames[date.getMonth()];
+              const monthKey = monthNames[month];
               const normalizedBU = normalizeCode(rev.business_unit);
               
               // Find matching entity
@@ -805,10 +999,13 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
             const entryDate = entry.due_date;
             if (entryDate < dateRange.start || entryDate > dateRange.end) return;
             
-            const date = new Date(entry.due_date);
-            const year = date.getFullYear();
+            // Extrair ano e mês diretamente da string para evitar problemas de timezone
+            const dateStr = String(entry.due_date);
+            const dateParts = dateStr.split('-');
+            const year = parseInt(dateParts[0], 10);
+            const month = parseInt(dateParts[1], 10) - 1; // Converter para 0-11 para usar com monthNames
             if (year === currentYear) {
-              const monthKey = monthNames[date.getMonth()];
+              const monthKey = monthNames[month];
               const normalizedBU = normalizeCode(entry.business_unit);
               
               // Find matching entity
@@ -857,19 +1054,29 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
         });
       }
 
-      // Process CMV - Same logic as card: ONLY from CMV DRE spreadsheet
+      // Process CMV - Same logic as card: from contas_a_pagar with category "04.0DESPESAS COM MERCADORIA"
       if (selectedMetric === 'cogs') {
-        if (rawData.cmvDRE && rawData.cmvDRE.length > 0) {
-          rawData.cmvDRE.forEach(cmv => {
-            if (cmv.issue_date) {
+        const cmvFromAP = rawData.accountsPayable.filter(ap => {
+          const chartOfAccounts = (ap.chart_of_accounts || '').toUpperCase();
+          // Verificar se contém "04.0" seguido de "DESPESAS COM MERCADORIA" (aceita espaço e singular/plural)
+          return chartOfAccounts.includes('04.0') && 
+                 chartOfAccounts.includes('DESPESAS COM MERCADORIA');
+        });
+        
+        if (cmvFromAP && cmvFromAP.length > 0) {
+          cmvFromAP.forEach(cmv => {
+            if (cmv.payment_date) {
               // Filter by date range
-              const cmvDate = cmv.issue_date;
+              const cmvDate = cmv.payment_date;
               if (cmvDate < dateRange.start || cmvDate > dateRange.end) return;
               
-              const date = new Date(cmv.issue_date);
-              const year = date.getFullYear();
+              // Extrair ano e mês diretamente da string para evitar problemas de timezone
+              const dateStr = String(cmv.payment_date);
+              const dateParts = dateStr.split('-');
+              const year = parseInt(dateParts[0], 10);
+              const month = parseInt(dateParts[1], 10) - 1; // Converter para 0-11 para usar com monthNames
               if (year === currentYear) {
-                const monthKey = monthNames[date.getMonth()];
+                const monthKey = monthNames[month];
                 const normalizedBU = normalizeCode(cmv.business_unit);
                 
                 // Find matching entity
@@ -1087,9 +1294,11 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
       if (selectedMetric === 'revenue') {
         filteredData.revenues.forEach(rev => {
           if (rev.payment_date && rev.status?.toLowerCase() === 'realizado') {
-            const date = new Date(rev.payment_date);
+            // Extrair ano diretamente da string para evitar problemas de timezone
+            const dateStr = String(rev.payment_date);
+            const dateParts = dateStr.split('-');
+            const year = parseInt(dateParts[0], 10);
             const dateKey = rev.payment_date;
-            const year = date.getFullYear();
             const isCurrentYear = year === new Date().getFullYear();
             
             if (!dateMap.has(dateKey)) {
@@ -1106,9 +1315,11 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
         
         filteredData.forecastedEntries.forEach(entry => {
           if (entry.due_date && entry.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro') && entry.status?.toLowerCase() === 'paga') {
-            const date = new Date(entry.due_date);
+            // Extrair ano diretamente da string para evitar problemas de timezone
+            const dateStr = String(entry.due_date);
+            const dateParts = dateStr.split('-');
+            const year = parseInt(dateParts[0], 10);
             const dateKey = entry.due_date;
-            const year = date.getFullYear();
             const isCurrentYear = year === new Date().getFullYear();
             
             if (!dateMap.has(dateKey)) {
@@ -1124,13 +1335,22 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
         });
       }
       
-      // Process CMV
+      // Process CMV - from contas_a_pagar with category "04.0DESPESAS COM MERCADORIA"
       if (selectedMetric === 'cogs') {
-        filteredData.cmvDRE?.forEach(cmv => {
-          if (cmv.issue_date) {
-            const date = new Date(cmv.issue_date);
-            const dateKey = cmv.issue_date;
-            const year = date.getFullYear();
+        const cmvFromAP = filteredData.accountsPayable.filter(ap => {
+          const chartOfAccounts = (ap.chart_of_accounts || '').toUpperCase();
+          // Verificar se contém "04.0" seguido de "DESPESAS COM MERCADORIA" (aceita espaço e singular/plural)
+          return chartOfAccounts.includes('04.0') && 
+                 chartOfAccounts.includes('DESPESAS COM MERCADORIA');
+        });
+        
+        cmvFromAP.forEach(cmv => {
+          if (cmv.payment_date) {
+            // Extrair ano diretamente da string para evitar problemas de timezone
+            const dateStr = String(cmv.payment_date);
+            const dateParts = dateStr.split('-');
+            const year = parseInt(dateParts[0], 10);
+            const dateKey = cmv.payment_date;
             const isCurrentYear = year === new Date().getFullYear();
             
             if (!dateMap.has(dateKey)) {
@@ -1170,9 +1390,11 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
             const isLoan = creditorIsLoan || chartIsLoan;
             
             if (isLoan) {
-              const date = new Date(ap.payment_date);
+              // Extrair ano diretamente da string para evitar problemas de timezone
+              const dateStr = String(ap.payment_date);
+              const dateParts = dateStr.split('-');
+              const year = parseInt(dateParts[0], 10);
               const dateKey = ap.payment_date;
-              const year = date.getFullYear();
               const isCurrentYear = year === new Date().getFullYear();
               
               if (!dateMap.has(dateKey)) {

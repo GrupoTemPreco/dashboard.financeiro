@@ -38,6 +38,7 @@ interface DebtData {
 interface DREPageProps {
   accountsPayable: any[];
   financialTransactions: any[];
+  forecastedEntries: any[];
   revenuesDRE: any[];
   cmvDRE: any[];
   nonOperationalAccounts: string[];
@@ -54,6 +55,7 @@ interface DREPageProps {
 export const DREPage: React.FC<DREPageProps> = ({
   accountsPayable,
   financialTransactions,
+  forecastedEntries,
   revenuesDRE,
   cmvDRE,
   nonOperationalAccounts,
@@ -165,33 +167,47 @@ export const DREPage: React.FC<DREPageProps> = ({
   // Calcula o CMV DRE
   const calculateCMV = (startDate: string, endDate: string) => {
     console.log('🔴 Calculando CMV DRE:', { startDate, endDate, totalRecords: cmvDRE.length });
-    console.log('📊 Dados cmvDRE:', cmvDRE);
+    
+    if (cmvDRE.length === 0) {
+      console.warn('⚠️ Nenhum dado de CMV DRE disponível!');
+      return 0;
+    }
+    
+    // Mostrar amostra dos dados
+    console.log('📊 Amostra cmvDRE (primeiros 3):', cmvDRE.slice(0, 3).map(c => ({
+      issue_date: c.issue_date,
+      business_unit: c.business_unit,
+      amount: c.amount,
+      chart_of_accounts: c.chart_of_accounts
+    })));
     
     const filtered = cmvDRE.filter(c => {
       const dateMatch = c.issue_date >= startDate && c.issue_date <= endDate;
       const companyMatch = isCompanyFiltered(c.business_unit);
       const result = dateMatch && companyMatch;
       
-      if (!dateMatch) {
-        console.log('❌ Data não corresponde (CMV):', { 
-          issue_date: c.issue_date, 
-          startDate, 
-          endDate,
-          business_unit: c.business_unit,
-          amount: c.amount 
-        });
-      }
-      if (!companyMatch) {
+      if (!result && dateMatch) {
         console.log('❌ Empresa não corresponde (CMV):', { 
+          issue_date: c.issue_date,
           business_unit: c.business_unit,
-          selectedBusinessUnit
+          selectedBusinessUnit,
+          filters: {
+            groups: filters.groups,
+            companies: filters.companies
+          },
+          companies: companies.map(c => ({ code: c.company_code, name: c.company_name }))
         });
       }
       
       return result;
     });
     
-    console.log('✅ CMV DRE filtrado:', { count: filtered.length, records: filtered });
+    console.log('✅ CMV DRE filtrado:', { 
+      count: filtered.length, 
+      totalRecords: cmvDRE.length,
+      dateRange: { startDate, endDate },
+      sampleFiltered: filtered.slice(0, 3)
+    });
     
     const total = filtered.reduce((sum, c) => sum + parseFloat(c.amount || 0), 0);
     console.log('💰 Total CMV DRE:', total);
@@ -663,58 +679,104 @@ export const DREPage: React.FC<DREPageProps> = ({
   };
 
   // Calcula despesas operacionais (Total de Despesas - igual ao fluxo de caixa)
+  // Usa a mesma lógica do card "Total de Despesas" da tela de fluxo de caixa
   const calculateOperatingExpenses = (startDate: string, endDate: string) => {
     console.log('🟠 Calculando Despesas Operacionais:', { startDate, endDate });
     console.log('📊 Total accountsPayable:', accountsPayable.length);
     console.log('📊 Total financialTransactions:', financialTransactions.length);
+    console.log('📊 Total forecastedEntries:', forecastedEntries?.length || 0);
     
+    if (accountsPayable.length === 0 && financialTransactions.length === 0 && (!forecastedEntries || forecastedEntries.length === 0)) {
+      console.warn('⚠️ Nenhum dado de despesas disponível!');
+      return 0;
+    }
+    
+    // Lista de exclusões (mesma do Total de Despesas)
+    const expensesExclusionList = [
+      'Receita Reembolsável - Makebella',
+      'Despesa Reembolsável - Makebella',
+      'Receita Reembolsável - Outros',
+      'Despesa Reembolsável - Outros',
+      'Receita Reembolsável - XBrothers',
+      'Despesa Reembolsável - XBrothers',
+      'Receita Reembolsável - ESCPP',
+      'Despesa Reembolsável - ESCPP',
+      'Empréstimos Recebidos',
+      'Pagamento de Empréstimo',
+      'Financiamento',
+      'Pagamento Via Cartão',
+      'Empréstimos Recebidos via Cartão',
+      'Investimentos Financeiros',
+      'Investimento - Societário / Comercial',
+      'Invest. Maq. / Equip. / Moveis',
+      'Cartão de Crédito',
+      'Reforma do Imóvel',
+      'Recebimento de Dividendos',
+      'Rendimento Financeiro',
+      'Distribuição de Lucros',
+      'Capital de Investimentos'
+    ];
+    
+    // Despesas de Accounts Payable
     const apExpenses = accountsPayable
       .filter(ap => {
         const dateMatch = ap.payment_date >= startDate && ap.payment_date <= endDate;
-        const isOperational = !nonOperationalAccounts.includes(ap.chart_of_accounts);
+        const isOperational = !expensesExclusionList.some(excluded =>
+          ap.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())
+        );
         const companyMatch = isCompanyFiltered(ap.business_unit);
-        const result = dateMatch && isOperational && companyMatch;
-        
-        if (!result && dateMatch) {
-          console.log('❌ Despesa filtrada (AP):', {
-            payment_date: ap.payment_date,
-            chart_of_accounts: ap.chart_of_accounts,
-            isOperational,
-            business_unit: ap.business_unit,
-            companyMatch
-          });
-        }
-        
-        return result;
+        return dateMatch && isOperational && companyMatch;
       })
-      .reduce((sum, ap) => sum + parseFloat(ap.amount || 0), 0);
+      .reduce((sum, ap) => sum + Math.abs(parseFloat(ap.amount || 0)), 0);
 
+    // Despesas de Forecasted Entries
+    const feExpenses = forecastedEntries
+      .filter(entry => {
+        const dateMatch = entry.due_date >= startDate && entry.due_date <= endDate;
+        const isOperational = !expensesExclusionList.some(excluded =>
+          entry.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())
+        );
+        const companyMatch = isCompanyFiltered(entry.business_unit);
+        return dateMatch && isOperational && companyMatch;
+      })
+      .reduce((sum, entry) => sum + Math.abs(parseFloat(entry.amount || 0)), 0);
+
+    // Despesas de Financial Transactions (apenas negativas)
     const ftExpenses = financialTransactions
       .filter(ft => {
         const dateMatch = ft.transaction_date >= startDate && ft.transaction_date <= endDate;
-        const isOperational = !nonOperationalAccounts.includes(ft.chart_of_accounts);
         const isNegative = parseFloat(ft.amount || 0) < 0;
+        const isOperational = !expensesExclusionList.some(excluded =>
+          (ft.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase()) ||
+           ft.description?.toLowerCase().includes(excluded.toLowerCase()))
+        );
         const companyMatch = isCompanyFiltered(ft.business_unit);
-        const result = dateMatch && isOperational && isNegative && companyMatch;
-        
-        if (!result && dateMatch) {
-          console.log('❌ Despesa filtrada (FT):', {
-            transaction_date: ft.transaction_date,
-            chart_of_accounts: ft.chart_of_accounts,
-            isOperational,
-            isNegative,
-            business_unit: ft.business_unit,
-            companyMatch
-          });
-        }
-        
-        return result;
+        return dateMatch && isNegative && isOperational && companyMatch;
       })
       .reduce((sum, ft) => sum + Math.abs(parseFloat(ft.amount || 0)), 0);
 
-    console.log('💰 Despesas Operacionais:', { apExpenses, ftExpenses, total: apExpenses + ftExpenses });
+    const total = apExpenses + feExpenses + ftExpenses;
+    console.log('💰 Despesas Operacionais:', { 
+      apExpenses, 
+      feExpenses, 
+      ftExpenses, 
+      total,
+      dateRange: { startDate, endDate },
+      accountsPayableFiltered: accountsPayable.filter(ap => {
+        const dateMatch = ap.payment_date >= startDate && ap.payment_date <= endDate;
+        return dateMatch;
+      }).length,
+      forecastedEntriesFiltered: forecastedEntries?.filter(entry => {
+        const dateMatch = entry.due_date >= startDate && entry.due_date <= endDate;
+        return dateMatch;
+      }).length || 0,
+      transactionsFiltered: financialTransactions.filter(ft => {
+        const dateMatch = ft.transaction_date >= startDate && ft.transaction_date <= endDate;
+        return dateMatch;
+      }).length
+    });
 
-    return apExpenses + ftExpenses;
+    return total;
   };
 
   // Calcula EBITDA = Receita - CMV - Despesas Operacionais
@@ -786,9 +848,23 @@ export const DREPage: React.FC<DREPageProps> = ({
     });
   }, [selectedMonth, selectedBusinessUnit, revenuesDRE, cmvDRE, accountsPayable, financialTransactions, companies, filters]);
 
-  const currentRevenue = calculateRevenue(currentMonthDates.start, currentMonthDates.end);
-  const currentCmv = calculateCMV(currentMonthDates.start, currentMonthDates.end);
-  const currentOperatingExpenses = calculateOperatingExpenses(currentMonthDates.start, currentMonthDates.end);
+  // Usar filtros globais se disponíveis, senão usar o mês selecionado
+  const effectiveStartDate = filters.startDate || currentMonthDates.start;
+  const effectiveEndDate = filters.endDate || currentMonthDates.end;
+  
+  console.log('📅 Datas efetivas para cálculo:', {
+    filtersStartDate: filters.startDate,
+    filtersEndDate: filters.endDate,
+    currentMonthStart: currentMonthDates.start,
+    currentMonthEnd: currentMonthDates.end,
+    effectiveStartDate,
+    effectiveEndDate,
+    selectedMonth: format(selectedMonth, 'yyyy-MM-dd')
+  });
+
+  const currentRevenue = calculateRevenue(effectiveStartDate, effectiveEndDate);
+  const currentCmv = calculateCMV(effectiveStartDate, effectiveEndDate);
+  const currentOperatingExpenses = calculateOperatingExpenses(effectiveStartDate, effectiveEndDate);
   const currentEbitda = calculateEBITDA(currentRevenue, currentCmv, currentOperatingExpenses);
   const currentNetProfit = calculateNetProfit(currentEbitda);
 
@@ -798,6 +874,17 @@ export const DREPage: React.FC<DREPageProps> = ({
   const previousOperatingExpenses = calculateOperatingExpenses(previousMonthDates.start, previousMonthDates.end);
   const previousEbitda = calculateEBITDA(previousRevenue, previousCmv, previousOperatingExpenses);
   const previousNetProfit = calculateNetProfit(previousEbitda);
+  
+  console.log('💰 Valores calculados:', {
+    currentRevenue,
+    currentCmv,
+    currentOperatingExpenses,
+    currentEbitda,
+    currentNetProfit,
+    previousRevenue,
+    previousCmv,
+    previousOperatingExpenses
+  });
 
   // DRE data com valores calculados
   const dreData: DREData[] = [
