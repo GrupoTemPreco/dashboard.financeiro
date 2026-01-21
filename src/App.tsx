@@ -18,6 +18,7 @@ import { processExcelFile, processCompaniesFile, processAccountsPayableFile, pro
 import { filterData, calculateKPIs } from './utils/dataProcessor';
 import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List, Moon, Sun, Eye, EyeOff } from 'lucide-react';
 import { supabase } from './lib/supabase';
+import { startOfMonth, endOfMonth, format } from 'date-fns';
 
 const IMPORT_ADMIN_CODE =
   import.meta.env.VITE_IMPORT_ADMIN_CODE || 'admin123';
@@ -43,8 +44,8 @@ function App() {
     companies: [],
     groups: [],
     banks: [],
-    startDate: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    endDate: new Date().toISOString().split('T')[0]
+    startDate: '',
+    endDate: ''
   });
   const [calendarDate, setCalendarDate] = useState({
     year: new Date().getFullYear(),
@@ -147,11 +148,24 @@ function App() {
     testSupabaseConnection();
   }, []);
 
-  // Load data from Supabase on mount
+  // Calcular período padrão (mês atual) quando não houver filtros
+  const getDefaultPeriod = () => {
+    const now = new Date();
+    const start = format(startOfMonth(now), 'yyyy-MM-dd');
+    const end = format(endOfMonth(now), 'yyyy-MM-dd');
+    return { start, end };
+  };
+
+  // Load data from Supabase on mount and when filters change
   useEffect(() => {
     loadDataFromSupabase();
     loadImportsFromSupabase();
   }, []);
+
+  // Recarregar dados quando filtros de data mudarem
+  useEffect(() => {
+    loadDataFromSupabase();
+  }, [filters.startDate, filters.endDate]);
 
   const testSupabaseConnection = async () => {
     console.log('🔌 Testando conexão com Supabase...');
@@ -217,10 +231,31 @@ function App() {
     }
   };
 
-  const loadDataFromSupabase = async () => {
+  const loadDataFromSupabase = async (customStartDate?: string, customEndDate?: string) => {
     console.log('🔄 Starting to load data from Supabase...');
+    
+    // Determinar período: usar filtros se existirem e não estiverem vazios, senão mês atual
+    let startDate: string;
+    let endDate: string;
+    
+    if (customStartDate && customEndDate) {
+      startDate = customStartDate;
+      endDate = customEndDate;
+    } else if (filters.startDate && filters.endDate && filters.startDate.trim() !== '' && filters.endDate.trim() !== '') {
+      // Usa filtros apenas se não estiverem vazios
+      startDate = filters.startDate;
+      endDate = filters.endDate;
+    } else {
+      // Se não houver filtros, usa o mês atual
+      const defaultPeriod = getDefaultPeriod();
+      startDate = defaultPeriod.start;
+      endDate = defaultPeriod.end;
+    }
+    
+    console.log('📅 Carregando dados do período:', { startDate, endDate });
+    
     try {
-      // Load companies
+      // Load companies (não filtra por data - sempre carrega tudo)
       console.log('📊 Loading companies...');
       const { data: companiesData, error: companiesError } = await supabase
         .from('empresas')
@@ -248,22 +283,26 @@ function App() {
 
       const hasActiveImports = activeImportIds.length > 0;
 
-      // Load accounts payable
+      // Load accounts payable - FILTRADO POR DATA NO BANCO
       let apData: any[] | null = [];
       if (hasActiveImports) {
-        // Carregar todos os registros em lotes se necessário
+        // Carregar registros do período em lotes
         let allData: any[] = [];
         const batchSize = 1000;
         let offset = 0;
         let hasMore = true;
         
         while (hasMore) {
-          const { data, error } = await supabase
+          let query = supabase
             .from('contas_a_pagar')
             .select('*')
             .in('import_id', activeImportIds)
+            .gte('payment_date', startDate)
+            .lte('payment_date', endDate)
             .order('payment_date', { ascending: false })
             .range(offset, offset + batchSize - 1);
+          
+          const { data, error } = await query;
           
           if (error) {
             console.error('❌ Error loading accounts payable batch:', error);
@@ -273,36 +312,39 @@ function App() {
           if (data && data.length > 0) {
             allData = [...allData, ...data];
             offset += batchSize;
-            hasMore = data.length === batchSize; // Se retornou menos que o batch, não há mais
+            hasMore = data.length === batchSize;
           } else {
             hasMore = false;
           }
         }
         
         apData = allData;
+        console.log(`✅ Carregados ${apData.length} registros de contas_a_pagar do período ${startDate} a ${endDate}`);
       }
       if (apData) {
         setAccountsPayable(apData);
       }
 
-      // Load revenues
+      // Load revenues - FILTRADO POR DATA NO BANCO
       let revenuesData: any[] | null = [];
       if (hasActiveImports) {
         const { data, error } = await supabase
           .from('receitas')
           .select('*')
           .in('import_id', activeImportIds)
+          .gte('payment_date', startDate)
+          .lte('payment_date', endDate)
           .order('payment_date', { ascending: false });
 
         if (error) throw error;
         revenuesData = data;
+        console.log(`✅ Carregados ${revenuesData?.length || 0} registros de receitas do período ${startDate} a ${endDate}`);
       }
       if (revenuesData) {
-        console.log('Loaded revenues from Supabase:', revenuesData);
         setRevenues(revenuesData);
       }
 
-      // Load financial transactions
+      // Load financial transactions - FILTRADO POR DATA NO BANCO
       let transactionsData: any[] | null = [];
       if (hasActiveImports) {
         try {
@@ -310,6 +352,8 @@ function App() {
             .from('transacoes_financeiras')
             .select('*')
             .in('import_id', activeImportIds)
+            .gte('transaction_date', startDate)
+            .lte('transaction_date', endDate)
             .order('transaction_date', { ascending: false });
 
           if (error) {
@@ -317,6 +361,7 @@ function App() {
             transactionsData = [];
           } else {
             transactionsData = data;
+            console.log(`✅ Carregados ${transactionsData?.length || 0} registros de transacoes_financeiras do período ${startDate} a ${endDate}`);
           }
         } catch (err) {
           console.warn('⚠️ Exception loading financial transactions:', err);
@@ -327,29 +372,34 @@ function App() {
         setFinancialTransactions(transactionsData);
       }
 
-      // Load forecasted entries
+      // Load forecasted entries - FILTRADO POR DATA NO BANCO
       let forecastedData: any[] | null = [];
       if (hasActiveImports) {
         const { data, error } = await supabase
           .from('previstos')
           .select('*')
           .in('import_id', activeImportIds)
+          .gte('due_date', startDate)
+          .lte('due_date', endDate)
           .order('due_date', { ascending: false });
 
         if (error) throw error;
         forecastedData = data;
+        console.log(`✅ Carregados ${forecastedData?.length || 0} registros de previstos do período ${startDate} a ${endDate}`);
       }
       if (forecastedData) {
         setForecastedEntries(forecastedData);
       }
 
-      // Load revenues DRE
+      // Load revenues DRE - FILTRADO POR DATA NO BANCO
       let revenuesDREData: any[] | null = [];
       if (hasActiveImports) {
         const { data, error } = await supabase
           .from('receitas_dre')
           .select('*')
           .in('import_id', activeImportIds)
+          .gte('issue_date', startDate)
+          .lte('issue_date', endDate)
           .order('issue_date', { ascending: false });
 
         if (error) {
@@ -357,18 +407,21 @@ function App() {
           throw error;
         }
         revenuesDREData = data;
+        console.log(`✅ Carregados ${revenuesDREData?.length || 0} registros de receitas_dre do período ${startDate} a ${endDate}`);
       }
       if (revenuesDREData) {
         setRevenuesDRE(revenuesDREData);
       }
 
-      // Load CMV DRE
+      // Load CMV DRE - FILTRADO POR DATA NO BANCO
       let cmvDREData: any[] | null = [];
       if (hasActiveImports) {
         const { data, error } = await supabase
           .from('cmv_dre')
           .select('*')
           .in('import_id', activeImportIds)
+          .gte('issue_date', startDate)
+          .lte('issue_date', endDate)
           .order('issue_date', { ascending: false});
 
         if (error) {
@@ -376,27 +429,32 @@ function App() {
           throw error;
         }
         cmvDREData = data;
+        console.log(`✅ Carregados ${cmvDREData?.length || 0} registros de cmv_dre do período ${startDate} a ${endDate}`);
       }
       if (cmvDREData) {
         setCmvDRE(cmvDREData);
       }
 
-      // Load initial_balances - carrega TODOS os dados, independente de imports
+      // Load initial_balances - FILTRADO POR DATA NO BANCO
       // Carregar em bloco separado para garantir execução mesmo se outras tabelas falharem
       try {
         let initialBalancesData: any[] | null = [];
         
-        // Carregar todos os saldos iniciais, independente de imports ativos
-        const { data, error } = await supabase
+        // Carregar saldos iniciais até a data final do período (pode ter múltiplas datas por banco)
+        let query = supabase
           .from('saldos_iniciais')
           .select('*')
+          .lte('balance_date', endDate)
           .order('balance_date', { ascending: false });
+
+        const { data, error } = await query;
 
         if (error) {
           console.error('❌ Error loading initial balances:', error);
           initialBalancesData = [];
         } else {
           initialBalancesData = data || [];
+          console.log(`✅ Carregados ${initialBalancesData.length} registros de saldos_iniciais até ${endDate}`);
         }
         
         // Sempre definir o estado, mesmo se vazio

@@ -296,7 +296,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <label className="text-xs text-blue-200 mb-1 block">Início</label>
               <input
                 type="date"
-                value={filters.startDate}
+                value={filters.startDate || ''}
                 onChange={(e) => onFiltersChange({ ...filters, startDate: e.target.value })}
                 className="w-full px-2 py-1 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm"
               />
@@ -305,7 +305,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <label className="text-xs text-blue-200 mb-1 block">Fim</label>
               <input
                 type="date"
-                value={filters.endDate}
+                value={filters.endDate || ''}
                 onChange={(e) => onFiltersChange({ ...filters, endDate: e.target.value })}
                 className="w-full px-2 py-1 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm"
               />
