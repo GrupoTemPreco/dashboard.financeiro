@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx';
 
 interface DataImportProps {
   onFileUpload: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances', currentIndex?: number, totalFiles?: number) => Promise<void>;
+  onFileSelectWithMode?: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances', currentIndex?: number, totalFiles?: number) => void;
   importedFiles: ImportedFile[];
   onDeleteFile: (fileId: string) => void;
   onRestoreFile: (fileId: string) => void;
@@ -16,6 +17,7 @@ interface DataImportProps {
 
 export const DataImport: React.FC<DataImportProps> = ({
   onFileUpload,
+  onFileSelectWithMode,
   importedFiles,
   onDeleteFile,
   onRestoreFile,
@@ -58,9 +60,16 @@ export const DataImport: React.FC<DataImportProps> = ({
     setDragOver(null);
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
-      // Processar todos os arquivos sequencialmente
-      for (let i = 0; i < files.length; i++) {
-        await onFileUpload(files[i], type, i + 1, files.length);
+      // Se onFileSelectWithMode estiver disponível, usar o novo fluxo com modal de escolha
+      if (onFileSelectWithMode) {
+        for (let i = 0; i < files.length; i++) {
+          onFileSelectWithMode(files[i], type, i + 1, files.length);
+        }
+      } else {
+        // Fallback para o fluxo antigo
+        for (let i = 0; i < files.length; i++) {
+          await onFileUpload(files[i], type, i + 1, files.length);
+        }
       }
     }
   };
@@ -68,9 +77,16 @@ export const DataImport: React.FC<DataImportProps> = ({
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances') => {
     const files = Array.from(e.target.files || []);
     if (files.length > 0) {
-      // Processar todos os arquivos selecionados sequencialmente
-      for (let i = 0; i < files.length; i++) {
-        await onFileUpload(files[i], type, i + 1, files.length);
+      // Se onFileSelectWithMode estiver disponível, usar o novo fluxo com modal de escolha
+      if (onFileSelectWithMode) {
+        for (let i = 0; i < files.length; i++) {
+          onFileSelectWithMode(files[i], type, i + 1, files.length);
+        }
+      } else {
+        // Fallback para o fluxo antigo
+        for (let i = 0; i < files.length; i++) {
+          await onFileUpload(files[i], type, i + 1, files.length);
+        }
       }
       // Limpar o input para permitir selecionar os mesmos arquivos novamente
       e.target.value = '';

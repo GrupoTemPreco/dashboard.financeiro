@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, DollarSign, Calculator, Target, BarChart3, ChevronLeft, ChevronRight, Save, Edit2, ChevronDown, ChevronRight as ChevronRightIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Line } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { startOfMonth, endOfMonth, subMonths, format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { CardSkeleton } from './CardSkeleton';
+import { ChartSkeleton } from './ChartSkeleton';
 
 interface DREData {
   category: string;
@@ -71,6 +73,7 @@ export const DREPage: React.FC<DREPageProps> = ({
   const [editingBudget, setEditingBudget] = useState<string | null>(null);
   const [tempBudgetValue, setTempBudgetValue] = useState<string>('');
   const [expandedAccounts, setExpandedAccounts] = useState<Record<string, boolean>>({});
+  const [isLoading, setIsLoading] = useState(false);
 
   // Normalize company code (same logic as App.tsx)
   const normalizeCode = (code: any): string => {
@@ -164,27 +167,61 @@ export const DREPage: React.FC<DREPageProps> = ({
     return total;
   };
 
-  // Calcula o CMV DRE
+  // Calcula o CMV DRE - alimentado pela tabela cmv_dre
+  // Os dados vêm da prop cmvDRE que é carregada do banco de dados (tabela cmv_dre)
   const calculateCMV = (startDate: string, endDate: string) => {
-    console.log('🔴 Calculando CMV DRE:', { startDate, endDate, totalRecords: cmvDRE.length });
+    console.log('🔴 Calculando CMV DRE (tabela cmv_dre):', { 
+      startDate, 
+      endDate, 
+      totalRecords: cmvDRE.length,
+      cmvDREIsArray: Array.isArray(cmvDRE)
+    });
     
-    if (cmvDRE.length === 0) {
-      console.warn('⚠️ Nenhum dado de CMV DRE disponível!');
+    if (!cmvDRE || !Array.isArray(cmvDRE) || cmvDRE.length === 0) {
+      console.warn('⚠️ Nenhum dado de CMV DRE disponível na tabela cmv_dre!', {
+        cmvDRE,
+        isArray: Array.isArray(cmvDRE),
+        length: cmvDRE?.length
+      });
       return 0;
     }
     
     // Mostrar amostra dos dados
-    console.log('📊 Amostra cmvDRE (primeiros 3):', cmvDRE.slice(0, 3).map(c => ({
+    console.log('📊 Amostra cmvDRE (primeiros 5):', cmvDRE.slice(0, 5).map(c => ({
       issue_date: c.issue_date,
       business_unit: c.business_unit,
       amount: c.amount,
-      chart_of_accounts: c.chart_of_accounts
+      chart_of_accounts: c.chart_of_accounts,
+      amountType: typeof c.amount,
+      amountParsed: parseFloat(c.amount || 0)
     })));
     
     const filtered = cmvDRE.filter(c => {
-      const dateMatch = c.issue_date >= startDate && c.issue_date <= endDate;
+      if (!c || !c.issue_date) {
+        console.warn('⚠️ Registro CMV inválido (sem issue_date):', c);
+        return false;
+      }
+      
+      // Comparação de datas: garantir que ambas sejam strings no formato YYYY-MM-DD
+      const recordDate = String(c.issue_date).split('T')[0]; // Remove hora se houver
+      const startDateStr = String(startDate).split('T')[0];
+      const endDateStr = String(endDate).split('T')[0];
+      
+      const dateMatch = recordDate >= startDateStr && recordDate <= endDateStr;
       const companyMatch = isCompanyFiltered(c.business_unit);
       const result = dateMatch && companyMatch;
+      
+      // Log detalhado para debug
+      if (!dateMatch && cmvDRE.length > 0 && cmvDRE.length < 100) {
+        // Só logar se houver poucos registros para não poluir o console
+        console.log('📅 Data não corresponde (CMV):', {
+          recordDate,
+          startDateStr,
+          endDateStr,
+          dateMatch,
+          record: c
+        });
+      }
       
       if (!result && dateMatch) {
         console.log('❌ Empresa não corresponde (CMV):', { 
@@ -202,15 +239,53 @@ export const DREPage: React.FC<DREPageProps> = ({
       return result;
     });
     
+    // Mostrar todas as datas disponíveis nos dados para debug
+    const allDates = [...new Set(cmvDRE.map(c => String(c.issue_date).split('T')[0]))].sort();
+    const datesInRange = allDates.filter(d => d >= String(startDate).split('T')[0] && d <= String(endDate).split('T')[0]);
+    
     console.log('✅ CMV DRE filtrado:', { 
       count: filtered.length, 
       totalRecords: cmvDRE.length,
-      dateRange: { startDate, endDate },
-      sampleFiltered: filtered.slice(0, 3)
+      dateRange: { 
+        startDate: String(startDate).split('T')[0], 
+        endDate: String(endDate).split('T')[0] 
+      },
+      allDatesAvailable: allDates.slice(0, 10), // Primeiras 10 datas
+      datesInRange: datesInRange,
+      sampleFiltered: filtered.slice(0, 3).map(c => ({
+        issue_date: c.issue_date,
+        business_unit: c.business_unit,
+        amount: c.amount
+      }))
     });
     
-    const total = filtered.reduce((sum, c) => sum + parseFloat(c.amount || 0), 0);
-    console.log('💰 Total CMV DRE:', total);
+    const total = filtered.reduce((sum, c) => {
+      const amount = parseFloat(c.amount || 0);
+      if (isNaN(amount)) {
+        console.warn('⚠️ Valor CMV inválido (NaN):', c);
+        return sum;
+      }
+      return sum + amount;
+    }, 0);
+    
+    console.log('💰 Total CMV DRE calculado:', total, {
+      filteredCount: filtered.length,
+      sumBreakdown: filtered.slice(0, 5).map(c => ({
+        issue_date: c.issue_date,
+        amount: c.amount,
+        parsed: parseFloat(c.amount || 0)
+      }))
+    });
+    
+    // Se não encontrou dados mas há registros, mostrar aviso
+    if (total === 0 && cmvDRE.length > 0) {
+      console.warn('⚠️ CMV DRE: Nenhum registro encontrado no período, mas há dados disponíveis!', {
+        totalRecords: cmvDRE.length,
+        dateRange: { startDate, endDate },
+        firstRecord: cmvDRE[0],
+        lastRecord: cmvDRE[cmvDRE.length - 1]
+      });
+    }
     
     return total;
   };
@@ -218,11 +293,17 @@ export const DREPage: React.FC<DREPageProps> = ({
   // Load budgets from database
   useEffect(() => {
     const loadBudgets = async () => {
+      if (selectedBusinessUnit === 'all') {
+        setBudgets({});
+        return;
+      }
+      
+      setIsLoading(true);
       try {
         const { data, error } = await supabase
           .from('orcamento_dre')
-          .select('*')
-          .eq('business_unit', selectedBusinessUnit === 'all' ? selectedBusinessUnit : selectedBusinessUnit)
+          .select('account_name, budget_amount')
+          .eq('business_unit', selectedBusinessUnit)
           .eq('period_date', `${selectedPeriod}-01`);
 
         if (error) throw error;
@@ -236,13 +317,27 @@ export const DREPage: React.FC<DREPageProps> = ({
         }
       } catch (error) {
         console.error('Error loading budgets:', error);
+      } finally {
+        setIsLoading(false);
       }
     };
 
-    if (selectedBusinessUnit !== 'all') {
-      loadBudgets();
-    }
+    loadBudgets();
   }, [selectedBusinessUnit, selectedPeriod]);
+
+  // Mostrar loading quando os dados principais estiverem sendo calculados
+  useEffect(() => {
+    // Se não há dados ainda, mostrar loading
+    if (revenuesDRE.length === 0 && cmvDRE.length === 0 && accountsPayable.length === 0) {
+      setIsLoading(true);
+    } else {
+      // Pequeno delay para permitir cálculos
+      const timer = setTimeout(() => {
+        setIsLoading(false);
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [revenuesDRE.length, cmvDRE.length, accountsPayable.length, selectedMonth, selectedBusinessUnit]);
 
   // Save budget
   const saveBudget = async (accountName: string, value: number) => {
@@ -252,7 +347,7 @@ export const DREPage: React.FC<DREPageProps> = ({
     }
 
     try {
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('orcamento_dre')
         .upsert({
           business_unit: selectedBusinessUnit,
@@ -262,8 +357,7 @@ export const DREPage: React.FC<DREPageProps> = ({
           updated_at: new Date().toISOString()
         }, {
           onConflict: 'business_unit,account_name,period_date'
-        })
-        .select();
+        });
 
       if (error) throw error;
 
@@ -896,9 +990,9 @@ export const DREPage: React.FC<DREPageProps> = ({
       variationPercentage: previousRevenue > 0 ? ((currentRevenue - previousRevenue) / previousRevenue) * 100 : 0
     },
     {
-      category: 'CMV',
-      currentMonth: currentCmv,
-      previousMonth: previousCmv,
+      category: 'CMV', // Alimentado pela tabela cmv_dre
+      currentMonth: currentCmv, // Calculado a partir de cmvDRE (tabela cmv_dre)
+      previousMonth: previousCmv, // Calculado a partir de cmvDRE (tabela cmv_dre)
       percentageOfRevenue: currentRevenue > 0 ? (currentCmv / currentRevenue) * 100 : 0,
       variation: currentCmv - previousCmv,
       variationPercentage: previousCmv > 0 ? ((currentCmv - previousCmv) / previousCmv) * 100 : 0
@@ -1086,7 +1180,16 @@ export const DREPage: React.FC<DREPageProps> = ({
       <div>
         <h2 className={`text-2xl font-bold mb-6 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Indicadores de Desempenho</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-          {dreData.map((item, index) => {
+          {isLoading ? (
+            <>
+              <CardSkeleton darkMode={darkMode} />
+              <CardSkeleton darkMode={darkMode} />
+              <CardSkeleton darkMode={darkMode} />
+              <CardSkeleton darkMode={darkMode} />
+              <CardSkeleton darkMode={darkMode} />
+            </>
+          ) : (
+            dreData.map((item, index) => {
             const isPositive = item.variation >= 0;
             const icons = [DollarSign, Calculator, Target, TrendingUp, BarChart3];
             const colors = ['blue', 'red', 'orange', 'green', 'purple'];
@@ -1188,7 +1291,8 @@ export const DREPage: React.FC<DREPageProps> = ({
                 </div>
               </div>
             );
-          })}
+          })
+          )}
         </div>
       </div>
 
@@ -1347,52 +1451,60 @@ export const DREPage: React.FC<DREPageProps> = ({
           ))}
         </div>
 
-        <div className="h-80">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={getMetricData()} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#1f2937' : '#f0f0f0'} />
-              <XAxis dataKey="month" stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
-              <YAxis tickFormatter={(value) => formatCurrency(value)} stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
-              <Tooltip content={<CustomTooltip />} />
-              
-              <Bar
-                dataKey="current"
-                fill={colors.current}
-                name={`${getMetricTitle()} (Atual)`}
-                radius={[2, 2, 0, 0]}
-              />
-              <Bar
-                dataKey="previous"
-                fill={colors.previous}
-                name={`${getMetricTitle()} (Ano Anterior)`}
-                radius={[2, 2, 0, 0]}
-              />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+        {isLoading || !getMetricData() || getMetricData().length === 0 ? (
+          <ChartSkeleton darkMode={darkMode} height="h-80" />
+        ) : (
+          <div className="h-80">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={getMetricData()} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#1f2937' : '#f0f0f0'} />
+                <XAxis dataKey="month" stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
+                <YAxis tickFormatter={(value) => formatCurrency(value)} stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
+                <Tooltip content={<CustomTooltip />} />
+                
+                <Bar
+                  dataKey="current"
+                  fill={colors.current}
+                  name={`${getMetricTitle()} (Atual)`}
+                  radius={[2, 2, 0, 0]}
+                />
+                <Bar
+                  dataKey="previous"
+                  fill={colors.previous}
+                  name={`${getMetricTitle()} (Ano Anterior)`}
+                  radius={[2, 2, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
       </div>
 
       {/* Annual Debt Chart */}
       <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
         <h2 className={`text-xl font-bold mb-6 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Endividamento Mensal</h2>
         
-        <div className="h-80">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={debtData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#1f2937' : '#f0f0f0'} />
-              <XAxis dataKey="month" stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
-              <YAxis tickFormatter={(value) => formatCurrency(value)} stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
-              <Tooltip content={<DebtTooltip />} />
-              
-              <Bar
-                dataKey="loanAmount"
-                fill="#ef4444"
-                name="Empréstimos"
-                radius={[2, 2, 0, 0]}
-              />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+        {isLoading || !debtData || debtData.length === 0 ? (
+          <ChartSkeleton darkMode={darkMode} height="h-80" />
+        ) : (
+          <div className="h-80">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={debtData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#1f2937' : '#f0f0f0'} />
+                <XAxis dataKey="month" stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
+                <YAxis tickFormatter={(value) => formatCurrency(value)} stroke={darkMode ? '#9ca3af' : '#6b7280'} fontSize={12} />
+                <Tooltip content={<DebtTooltip />} />
+                
+                <Bar
+                  dataKey="loanAmount"
+                  fill="#ef4444"
+                  name="Empréstimos"
+                  radius={[2, 2, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
 
         <div className={`mt-4 text-sm text-center ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>
           Passe o mouse sobre as barras para ver % do EBITDA e % da Receita

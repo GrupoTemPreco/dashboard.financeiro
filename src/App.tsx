@@ -12,7 +12,12 @@ import { ExpenseBreakdown } from './components/ExpenseBreakdown';
 import { DataImport } from './components/DataImport';
 import { DREPage } from './components/DREPage';
 import { ConfirmOverwriteModal } from './components/ConfirmOverwriteModal';
+import { ImportModeModal } from './components/ImportModeModal';
+import { ConfirmAccumulateModal } from './components/ConfirmAccumulateModal';
 import { ErrorModal } from './components/ErrorModal';
+import { CardSkeleton } from './components/CardSkeleton';
+import { ChartSkeleton } from './components/ChartSkeleton';
+import { PageLoader } from './components/PageLoader';
 import { FinancialRecord, Filters, ImportedFile } from './types/financial';
 import { processExcelFile, processCompaniesFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, validateFileFormat } from './utils/excelProcessor';
 import { filterData, calculateKPIs } from './utils/dataProcessor';
@@ -61,12 +66,14 @@ function App() {
   }>({
     isLoading: false
   });
+  const [dataLoading, setDataLoading] = useState(false);
   const [importedFiles, setImportedFiles] = useState<ImportedFile[]>([]);
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
     title: string;
     data: any[];
     type: 'accounts_payable' | 'revenues' | 'transactions' | 'generic' | 'mixed';
+    loadPaginatedData?: (page: number, pageSize: number, filters: any) => Promise<{ data: any[]; totalCount: number; hasMore: boolean }>;
   }>({
     isOpen: false,
     title: '',
@@ -98,6 +105,36 @@ function App() {
     isOpen: false,
     title: '',
     message: ''
+  });
+  const [importModeModal, setImportModeModal] = useState<{
+    isOpen: boolean;
+    fileName: string;
+    fileType: string;
+    pendingFile: File | null;
+    pendingType: string | null;
+    pendingIndex?: number;
+    pendingTotal?: number;
+  }>({
+    isOpen: false,
+    fileName: '',
+    fileType: '',
+    pendingFile: null,
+    pendingType: null
+  });
+  const [confirmAccumulateModal, setConfirmAccumulateModal] = useState<{
+    isOpen: boolean;
+    fileName: string;
+    fileType: string;
+    pendingFile: File | null;
+    pendingType: string | null;
+    pendingIndex?: number;
+    pendingTotal?: number;
+  }>({
+    isOpen: false,
+    fileName: '',
+    fileType: '',
+    pendingFile: null,
+    pendingType: null
   });
   const [importRole, setImportRole] = useState<'none' | 'user' | 'admin'>('none');
   const [importAuthError, setImportAuthError] = useState('');
@@ -143,6 +180,28 @@ function App() {
     return isNaN(numCode) ? strCode : String(numCode);
   };
 
+  // Helper function to get filtered business units based on filters
+  // Returns array of normalized business unit codes, or null if no filter is active
+  const getFilteredBusinessUnits = (): string[] | null => {
+    // Se não há empresas cadastradas ou não há filtros ativos, retorna null (sem filtro)
+    if (companies.length === 0) return null;
+
+    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
+    if (!hasActiveFilters) return null;
+
+    // Filtra empresas baseado em grupos e empresas selecionados
+    const filteredCompanyCodes = companies
+      .filter(c => {
+        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
+        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
+        return groupMatch && companyMatch;
+      })
+      .map(c => normalizeCode(c.company_code));
+
+    // Retorna null se não houver filtros aplicados (mostra tudo)
+    return filteredCompanyCodes.length > 0 ? filteredCompanyCodes : null;
+  };
+
   // Test Supabase connection on mount
   useEffect(() => {
     testSupabaseConnection();
@@ -162,10 +221,10 @@ function App() {
     loadImportsFromSupabase();
   }, []);
 
-  // Recarregar dados quando filtros de data mudarem
+  // Recarregar dados quando filtros de data, empresas ou grupos mudarem
   useEffect(() => {
     loadDataFromSupabase();
-  }, [filters.startDate, filters.endDate]);
+  }, [filters.startDate, filters.endDate, filters.companies, filters.groups]);
 
   const testSupabaseConnection = async () => {
     console.log('🔌 Testando conexão com Supabase...');
@@ -233,33 +292,33 @@ function App() {
 
   const loadDataFromSupabase = async (customStartDate?: string, customEndDate?: string) => {
     console.log('🔄 Starting to load data from Supabase...');
-    
-    // Determinar período: usar filtros se existirem e não estiverem vazios, senão mês atual
-    let startDate: string;
-    let endDate: string;
-    
-    if (customStartDate && customEndDate) {
-      startDate = customStartDate;
-      endDate = customEndDate;
-    } else if (filters.startDate && filters.endDate && filters.startDate.trim() !== '' && filters.endDate.trim() !== '') {
-      // Usa filtros apenas se não estiverem vazios
-      startDate = filters.startDate;
-      endDate = filters.endDate;
-    } else {
-      // Se não houver filtros, usa o mês atual
-      const defaultPeriod = getDefaultPeriod();
-      startDate = defaultPeriod.start;
-      endDate = defaultPeriod.end;
-    }
-    
-    console.log('📅 Carregando dados do período:', { startDate, endDate });
+    setDataLoading(true);
     
     try {
+      // Determinar período: usar filtros se existirem e não estiverem vazios, senão mês atual
+      let startDate: string;
+      let endDate: string;
+    
+      if (customStartDate && customEndDate) {
+        startDate = customStartDate;
+        endDate = customEndDate;
+      } else if (filters.startDate && filters.endDate && filters.startDate.trim() !== '' && filters.endDate.trim() !== '') {
+        // Usa filtros apenas se não estiverem vazios
+        startDate = filters.startDate;
+        endDate = filters.endDate;
+      } else {
+        // Se não houver filtros, usa o mês atual
+        const defaultPeriod = getDefaultPeriod();
+        startDate = defaultPeriod.start;
+        endDate = defaultPeriod.end;
+      }
+    
+      console.log('📅 Carregando dados do período:', { startDate, endDate });
       // Load companies (não filtra por data - sempre carrega tudo)
       console.log('📊 Loading companies...');
       const { data: companiesData, error: companiesError } = await supabase
         .from('empresas')
-        .select('*')
+        .select('id, company_code, company_name, group_name')
         .order('created_at', { ascending: false });
 
       if (companiesError) {
@@ -283,7 +342,10 @@ function App() {
 
       const hasActiveImports = activeImportIds.length > 0;
 
-      // Load accounts payable - FILTRADO POR DATA NO BANCO
+      // Obter business units filtrados (para otimizar queries com índices compostos)
+      const filteredBusinessUnits = getFilteredBusinessUnits();
+
+      // Load accounts payable - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
       let apData: any[] | null = [];
       if (hasActiveImports) {
         // Carregar registros do período em lotes
@@ -295,8 +357,15 @@ function App() {
         while (hasMore) {
           let query = supabase
             .from('contas_a_pagar')
-            .select('*')
-            .in('import_id', activeImportIds)
+            .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, creditor, id')
+            .in('import_id', activeImportIds);
+          
+          // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
+          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+            query = query.in('business_unit', filteredBusinessUnits);
+          }
+          
+          query = query
             .gte('payment_date', startDate)
             .lte('payment_date', endDate)
             .order('payment_date', { ascending: false })
@@ -319,39 +388,53 @@ function App() {
         }
         
         apData = allData;
-        console.log(`✅ Carregados ${apData.length} registros de contas_a_pagar do período ${startDate} a ${endDate}`);
+        console.log(`✅ Carregados ${apData.length} registros de contas_a_pagar do período ${startDate} a ${endDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
       }
       if (apData) {
         setAccountsPayable(apData);
       }
 
-      // Load revenues - FILTRADO POR DATA NO BANCO
+      // Load revenues - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
       let revenuesData: any[] | null = [];
       if (hasActiveImports) {
-        const { data, error } = await supabase
+        let query = supabase
           .from('receitas')
-          .select('*')
-          .in('import_id', activeImportIds)
+          .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, id')
+          .in('import_id', activeImportIds);
+        
+        // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
+        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+          query = query.in('business_unit', filteredBusinessUnits);
+        }
+        
+        const { data, error } = await query
           .gte('payment_date', startDate)
           .lte('payment_date', endDate)
           .order('payment_date', { ascending: false });
 
         if (error) throw error;
         revenuesData = data;
-        console.log(`✅ Carregados ${revenuesData?.length || 0} registros de receitas do período ${startDate} a ${endDate}`);
+        console.log(`✅ Carregados ${revenuesData?.length || 0} registros de receitas do período ${startDate} a ${endDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
       }
       if (revenuesData) {
         setRevenues(revenuesData);
       }
 
-      // Load financial transactions - FILTRADO POR DATA NO BANCO
+      // Load financial transactions - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
       let transactionsData: any[] | null = [];
       if (hasActiveImports) {
         try {
-          const { data, error } = await supabase
+          let query = supabase
             .from('transacoes_financeiras')
-            .select('*')
-            .in('import_id', activeImportIds)
+            .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, id')
+            .in('import_id', activeImportIds);
+          
+          // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
+          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+            query = query.in('business_unit', filteredBusinessUnits);
+          }
+          
+          const { data, error } = await query
             .gte('transaction_date', startDate)
             .lte('transaction_date', endDate)
             .order('transaction_date', { ascending: false });
@@ -361,7 +444,7 @@ function App() {
             transactionsData = [];
           } else {
             transactionsData = data;
-            console.log(`✅ Carregados ${transactionsData?.length || 0} registros de transacoes_financeiras do período ${startDate} a ${endDate}`);
+            console.log(`✅ Carregados ${transactionsData?.length || 0} registros de transacoes_financeiras do período ${startDate} a ${endDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
           }
         } catch (err) {
           console.warn('⚠️ Exception loading financial transactions:', err);
@@ -372,34 +455,55 @@ function App() {
         setFinancialTransactions(transactionsData);
       }
 
-      // Load forecasted entries - FILTRADO POR DATA NO BANCO
+      // Load forecasted entries - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
       let forecastedData: any[] | null = [];
       if (hasActiveImports) {
-        const { data, error } = await supabase
+        let query = supabase
           .from('previstos')
-          .select('*')
-          .in('import_id', activeImportIds)
+          .select('import_id, business_unit, due_date, amount, status, chart_of_accounts, supplier, id')
+          .in('import_id', activeImportIds);
+        
+        // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
+        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+          query = query.in('business_unit', filteredBusinessUnits);
+        }
+        
+        const { data, error } = await query
           .gte('due_date', startDate)
           .lte('due_date', endDate)
           .order('due_date', { ascending: false });
 
         if (error) throw error;
         forecastedData = data;
-        console.log(`✅ Carregados ${forecastedData?.length || 0} registros de previstos do período ${startDate} a ${endDate}`);
+        console.log(`✅ Carregados ${forecastedData?.length || 0} registros de previstos do período ${startDate} a ${endDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
       }
       if (forecastedData) {
         setForecastedEntries(forecastedData);
       }
 
-      // Load revenues DRE - FILTRADO POR DATA NO BANCO
+      // Load revenues DRE - Carregar período amplo (últimos 24 meses) para permitir navegação na tela DRE
+      // A tela DRE filtra localmente conforme o usuário navega entre meses
       let revenuesDREData: any[] | null = [];
       if (hasActiveImports) {
-        const { data, error } = await supabase
+        // Calcular período amplo: últimos 24 meses a partir da data final
+        const wideEndDate = endDate;
+        const wideStartDate = new Date(new Date(wideEndDate).setMonth(new Date(wideEndDate).getMonth() - 24))
+          .toISOString()
+          .split('T')[0];
+        
+        let query = supabase
           .from('receitas_dre')
-          .select('*')
-          .in('import_id', activeImportIds)
-          .gte('issue_date', startDate)
-          .lte('issue_date', endDate)
+          .select('import_id, business_unit, issue_date, amount, id')
+          .in('import_id', activeImportIds);
+        
+        // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
+        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+          query = query.in('business_unit', filteredBusinessUnits);
+        }
+        
+        const { data, error } = await query
+          .gte('issue_date', wideStartDate)
+          .lte('issue_date', wideEndDate)
           .order('issue_date', { ascending: false });
 
         if (error) {
@@ -407,21 +511,35 @@ function App() {
           throw error;
         }
         revenuesDREData = data;
-        console.log(`✅ Carregados ${revenuesDREData?.length || 0} registros de receitas_dre do período ${startDate} a ${endDate}`);
+        console.log(`✅ Carregados ${revenuesDREData?.length || 0} registros de receitas_dre do período amplo ${wideStartDate} a ${wideEndDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
       }
       if (revenuesDREData) {
         setRevenuesDRE(revenuesDREData);
       }
 
-      // Load CMV DRE - FILTRADO POR DATA NO BANCO
+      // Load CMV DRE - Carregar período amplo (últimos 24 meses) para permitir navegação na tela DRE
+      // A tela DRE filtra localmente conforme o usuário navega entre meses
       let cmvDREData: any[] | null = [];
       if (hasActiveImports) {
-        const { data, error } = await supabase
+        // Calcular período amplo: últimos 24 meses a partir da data final
+        const wideEndDate = endDate;
+        const wideStartDate = new Date(new Date(wideEndDate).setMonth(new Date(wideEndDate).getMonth() - 24))
+          .toISOString()
+          .split('T')[0];
+        
+        let query = supabase
           .from('cmv_dre')
-          .select('*')
-          .in('import_id', activeImportIds)
-          .gte('issue_date', startDate)
-          .lte('issue_date', endDate)
+          .select('import_id, business_unit, issue_date, amount, chart_of_accounts, status, id')
+          .in('import_id', activeImportIds);
+        
+        // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
+        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+          query = query.in('business_unit', filteredBusinessUnits);
+        }
+        
+        const { data, error } = await query
+          .gte('issue_date', wideStartDate)
+          .lte('issue_date', wideEndDate)
           .order('issue_date', { ascending: false});
 
         if (error) {
@@ -429,7 +547,7 @@ function App() {
           throw error;
         }
         cmvDREData = data;
-        console.log(`✅ Carregados ${cmvDREData?.length || 0} registros de cmv_dre do período ${startDate} a ${endDate}`);
+        console.log(`✅ Carregados ${cmvDREData?.length || 0} registros de cmv_dre do período amplo ${wideStartDate} a ${wideEndDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
       }
       if (cmvDREData) {
         setCmvDRE(cmvDREData);
@@ -443,7 +561,7 @@ function App() {
         // Carregar saldos iniciais até a data final do período (pode ter múltiplas datas por banco)
         let query = supabase
           .from('saldos_iniciais')
-          .select('*')
+          .select('import_id, business_unit, balance_date, balance, bank_name, id')
           .lte('balance_date', endDate)
           .order('balance_date', { ascending: false });
 
@@ -466,6 +584,8 @@ function App() {
 
     } catch (error) {
       console.error('Error loading data from Supabase:', error);
+    } finally {
+      setDataLoading(false);
     }
   };
 
@@ -473,7 +593,7 @@ function App() {
     try {
       const { data: importsData, error } = await supabase
         .from('importacoes')
-        .select('*')
+        .select('id, file_name, file_type, imported_at, record_count, is_deleted')
         .order('imported_at', { ascending: false });
 
       if (error) throw error;
@@ -514,26 +634,45 @@ function App() {
     }
   };
 
-  const checkDuplicateFile = async (fileName: string, fileType: string): Promise<string | null> => {
+
+  const moveOldImportsToTrash = async (fileType: string) => {
     try {
-      const { data, error } = await supabase
+      console.log(`🗑️ Movendo imports antigos do tipo ${fileType} para a lixeira`);
+      
+      // Buscar todos os imports ativos do mesmo tipo
+      const { data: oldImports, error: fetchError } = await supabase
         .from('importacoes')
         .select('id')
-        .eq('file_name', fileName)
         .eq('file_type', fileType)
-        .order('imported_at', { ascending: false })
-        .limit(1);
+        .eq('is_deleted', false);
 
-      if (error) {
-        console.error('Error checking duplicate:', error);
-        return null;
+      if (fetchError) throw fetchError;
+
+      if (oldImports && oldImports.length > 0) {
+        // Marcar todos como deletados (soft delete)
+        const importIds = oldImports.map(imp => imp.id);
+        const { error: updateError } = await supabase
+          .from('importacoes')
+          .update({
+            is_deleted: true,
+            deleted_at: new Date().toISOString()
+          })
+          .in('id', importIds);
+
+        if (updateError) throw updateError;
+
+        // Atualizar UI
+        setImportedFiles(prev =>
+          prev.map(f => 
+            importIds.includes(f.id) ? { ...f, isDeleted: true } : f
+          )
+        );
+
+        console.log(`✅ ${oldImports.length} import(s) movido(s) para a lixeira`);
       }
-
-      // Retorna o ID do primeiro arquivo encontrado (o mais recente)
-      return data && data.length > 0 ? data[0].id : null;
     } catch (error) {
-      console.error('Error checking duplicate file:', error);
-      return null;
+      console.error('❌ Erro ao mover imports para a lixeira:', error);
+      throw error;
     }
   };
 
@@ -615,7 +754,7 @@ function App() {
     }
   };
 
-  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances', currentIndex?: number, totalFiles?: number, shouldOverwrite?: boolean, existingImportId?: string | null) => {
+  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances', currentIndex?: number, totalFiles?: number, shouldOverwrite?: boolean, shouldAccumulate?: boolean) => {
     // Validar formato do arquivo antes de processar
     if (type !== 'transactions') {
       const validation = await validateFileFormat(file, type);
@@ -629,28 +768,9 @@ function App() {
       }
     }
 
-    // Verificar duplicatas antes de processar (a menos que seja uma sobreposição confirmada)
-    if (!shouldOverwrite) {
-      const duplicateImportId = await checkDuplicateFile(file.name, type);
-      if (duplicateImportId) {
-        // Mostrar modal de confirmação
-        setOverwriteModal({
-          isOpen: true,
-          fileName: file.name,
-          fileType: type,
-          existingImportId: duplicateImportId,
-          pendingFile: file,
-          pendingType: type,
-          pendingIndex: currentIndex,
-          pendingTotal: totalFiles
-        });
-        return; // Não processar ainda, aguardar confirmação do usuário
-      }
-    }
-
-    // Se deve sobrepor e há um importId existente, deletar os dados antigos
-    if (shouldOverwrite && existingImportId) {
-      await deleteOldImportData(existingImportId, type);
+    // Se deve sobrepor (e não acumular), mover todos os imports anteriores do mesmo tipo para a lixeira
+    if (shouldOverwrite && !shouldAccumulate) {
+      await moveOldImportsToTrash(type);
     }
 
     setLoading({
@@ -724,6 +844,7 @@ function App() {
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
+        await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
         recordCount = importedAccountsPayable.length;
         console.log('Saved accounts payable to Supabase');
       } else if (type === 'revenues') {
@@ -745,6 +866,7 @@ function App() {
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
+        await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
         recordCount = importedRevenues.length;
         console.log('Saved revenues to Supabase');
       } else if (type === 'financial_transactions') {
@@ -766,6 +888,7 @@ function App() {
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
+        await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
         recordCount = importedTransactions.length;
         console.log('Saved financial transactions to Supabase');
       } else if (type === 'forecasted_entries') {
@@ -801,6 +924,7 @@ function App() {
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
+        await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
         recordCount = importedEntries.length;
         console.log('Saved forecasted entries to Supabase');
       } else if (type === 'revenues_dre') {
@@ -837,6 +961,7 @@ function App() {
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
+        await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
         recordCount = importedRevenuesDRE.length;
         console.log('Saved revenues DRE to Supabase');
       } else if (type === 'cmv_dre') {
@@ -872,6 +997,7 @@ function App() {
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
+        await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
         recordCount = importedCMVDRE.length;
         console.log('Saved CMV DRE to Supabase');
       } else if (type === 'initial_balances') {
@@ -963,6 +1089,23 @@ function App() {
       }
       // Se não é o último arquivo, o loading será atualizado quando o próximo arquivo começar
     }
+  };
+
+  const handleFileSelectWithMode = (
+    file: File,
+    type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances',
+    currentIndex?: number,
+    totalFiles?: number
+  ) => {
+    setImportModeModal({
+      isOpen: true,
+      fileName: file.name,
+      fileType: type,
+      pendingFile: file,
+      pendingType: type,
+      pendingIndex: currentIndex,
+      pendingTotal: totalFiles
+    });
   };
 
   // Envia arquivo para a lixeira (soft delete)
@@ -1111,40 +1254,15 @@ function App() {
     'Capital de Investimentos'
   ];
 
+  // Dados já vêm filtrados do banco por data e business_unit quando há filtros ativos
+  // Não precisa refiltrar aqui - apenas retorna os dados como estão
   const getFilteredAccountsPayable = useMemo(() => {
-    if (companies.length === 0) {
-      return accountsPayable.filter(ap => {
-        const dateMatch = (!filters.startDate || ap.payment_date >= filters.startDate) &&
-                         (!filters.endDate || ap.payment_date <= filters.endDate);
-        return dateMatch;
-      });
-    }
-
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-
-    return accountsPayable.filter(ap => {
-      const dateMatch = (!filters.startDate || ap.payment_date >= filters.startDate) &&
-                       (!filters.endDate || ap.payment_date <= filters.endDate);
-
-      if (!hasActiveFilters) {
-        return dateMatch;
-      }
-
-      const filteredCompanyCodes = companies
-        .filter(c => {
-          const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-          const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-          return groupMatch && companyMatch;
-        })
-        .map(c => c.company_code);
-
-      const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-      const normalizedBU = normalizeCode(ap.business_unit);
-      const companyMatch = normalizedCompanyCodes.includes(normalizedBU);
-
-      return companyMatch && dateMatch;
-    });
-  }, [accountsPayable, companies, filters]);
+    // Os dados já vêm filtrados do banco em loadDataFromSupabase:
+    // - Por data (startDate/endDate)
+    // - Por business_unit (quando há filtros de empresas/grupos)
+    // Então apenas retornamos os dados como estão
+    return accountsPayable;
+  }, [accountsPayable]);
 
   const getFilteredOperationalPayments = useMemo(() => {
     return getFilteredAccountsPayable.filter(ap => {
@@ -1156,43 +1274,15 @@ function App() {
     });
   }, [getFilteredAccountsPayable]);
 
+  // Dados já vêm filtrados do banco por data e business_unit quando há filtros ativos
+  // Não precisa refiltrar aqui - apenas retorna os dados como estão
   const getFilteredForecastedEntries = useMemo(() => {
-    if (companies.length === 0) {
-      return forecastedEntries.filter(entry => {
-        const dateMatch = (!filters.startDate || entry.due_date >= filters.startDate) &&
-                         (!filters.endDate || entry.due_date <= filters.endDate);
-        return dateMatch;
-      });
-    }
-
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-
-    if (!hasActiveFilters) {
-      return forecastedEntries.filter(entry => {
-        const dateMatch = (!filters.startDate || entry.due_date >= filters.startDate) &&
-                         (!filters.endDate || entry.due_date <= filters.endDate);
-        return dateMatch;
-      });
-    }
-
-    const filteredCompanyCodes = companies
-      .filter(c => {
-        const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-        return groupMatch && companyMatch;
-      })
-      .map(c => c.company_code);
-
-    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-
-    return forecastedEntries.filter(entry => {
-      const dateMatch = (!filters.startDate || entry.due_date >= filters.startDate) &&
-                       (!filters.endDate || entry.due_date <= filters.endDate);
-      const normalizedBU = normalizeCode(entry.business_unit);
-      const companyMatch = normalizedCompanyCodes.includes(normalizedBU);
-      return companyMatch && dateMatch;
-    });
-  }, [forecastedEntries, companies, filters]);
+    // Os dados já vêm filtrados do banco em loadDataFromSupabase:
+    // - Por data (startDate/endDate)
+    // - Por business_unit (quando há filtros de empresas/grupos)
+    // Então apenas retornamos os dados como estão
+    return forecastedEntries;
+  }, [forecastedEntries]);
 
   const getFilteredRevenuesFromForecasted = useMemo(() => {
     return getFilteredForecastedEntries.filter(entry =>
@@ -1200,75 +1290,25 @@ function App() {
     );
   }, [getFilteredForecastedEntries]);
 
+  // Dados já vêm filtrados do banco por data e business_unit quando há filtros ativos
+  // Não precisa refiltrar aqui - apenas retorna os dados como estão
   const getFilteredRevenues = useMemo(() => {
-    if (companies.length === 0) {
-      return revenues.filter(rev => {
-        const dateMatch = (!filters.startDate || rev.payment_date >= filters.startDate) &&
-                         (!filters.endDate || rev.payment_date <= filters.endDate);
-        return dateMatch;
-      });
-    }
+    // Os dados já vêm filtrados do banco em loadDataFromSupabase:
+    // - Por data (startDate/endDate)
+    // - Por business_unit (quando há filtros de empresas/grupos)
+    // Então apenas retornamos os dados como estão
+    return revenues;
+  }, [revenues]);
 
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-
-    return revenues.filter(rev => {
-      const dateMatch = (!filters.startDate || rev.payment_date >= filters.startDate) &&
-                       (!filters.endDate || rev.payment_date <= filters.endDate);
-
-      if (!hasActiveFilters) {
-        return dateMatch;
-      }
-
-      const filteredCompanyCodes = companies
-        .filter(c => {
-          const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-          const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-          return groupMatch && companyMatch;
-        })
-        .map(c => c.company_code);
-
-      const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-      const normalizedBU = normalizeCode(rev.business_unit);
-      const companyMatch = normalizedCompanyCodes.includes(normalizedBU);
-
-      return companyMatch && dateMatch;
-    });
-  }, [revenues, companies, filters]);
-
+  // Dados já vêm filtrados do banco por data e business_unit quando há filtros ativos
+  // Não precisa refiltrar aqui - apenas retorna os dados como estão
   const getFilteredTransactions = useMemo(() => {
-    if (companies.length === 0) {
-      return financialTransactions.filter(t => {
-        const dateMatch = (!filters.startDate || t.transaction_date >= filters.startDate) &&
-                         (!filters.endDate || t.transaction_date <= filters.endDate);
-        return dateMatch;
-      });
-    }
-
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-
-    return financialTransactions.filter(t => {
-      const dateMatch = (!filters.startDate || t.transaction_date >= filters.startDate) &&
-                       (!filters.endDate || t.transaction_date <= filters.endDate);
-
-      if (!hasActiveFilters) {
-        return dateMatch;
-      }
-
-      const filteredCompanyCodes = companies
-        .filter(c => {
-          const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-          const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-          return groupMatch && companyMatch;
-        })
-        .map(c => c.company_code);
-
-      const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-      const normalizedBU = normalizeCode(t.business_unit);
-      const companyMatch = normalizedCompanyCodes.includes(normalizedBU);
-
-      return companyMatch && dateMatch;
-    });
-  }, [financialTransactions, companies, filters]);
+    // Os dados já vêm filtrados do banco em loadDataFromSupabase:
+    // - Por data (startDate/endDate)
+    // - Por business_unit (quando há filtros de empresas/grupos)
+    // Então apenas retornamos os dados como estão
+    return financialTransactions;
+  }, [financialTransactions]);
 
   const getFilteredExpenses = useMemo(() => {
     const expensesExclusionList = [
@@ -1311,8 +1351,8 @@ function App() {
     const fromTransactions = getFilteredTransactions.filter(t =>
       t.amount < 0 &&
       !expensesExclusionList.some(excluded =>
-        (t.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase()) ||
-         t.description?.toLowerCase().includes(excluded.toLowerCase()))
+        // Nota: transacoes_financeiras não tem coluna 'description', apenas chart_of_accounts
+        t.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())
       )
     );
 
@@ -1472,12 +1512,382 @@ function App() {
   }, [getFilteredInitialBalances, getFilteredTotalInflows, getFilteredTotalOutflows]);
 
 
+  // Função para carregar dados paginados do banco para o modal
+  const loadPaginatedDataForModal = async (
+    type: 'accounts_payable' | 'revenues' | 'transactions' | 'mixed',
+    page: number,
+    pageSize: number,
+    filters: {
+      status?: string;
+      businessUnit?: string;
+      startDate?: string;
+      endDate?: string;
+      searchTerm?: string;
+    }
+  ): Promise<{ data: any[]; totalCount: number; hasMore: boolean }> => {
+    try {
+      // Buscar imports ativos
+      const { data: importsData } = await supabase
+        .from('importacoes')
+        .select('id, is_deleted');
+
+      const activeImportIds = (importsData || [])
+        .filter((imp: any) => !imp.is_deleted)
+        .map((imp: any) => imp.id);
+
+      if (activeImportIds.length === 0) {
+        return { data: [], totalCount: 0, hasMore: false };
+      }
+
+      // Obter business units filtrados
+      const filteredBusinessUnits = getFilteredBusinessUnits();
+
+      // Determinar período base (usar filtros globais ou período padrão)
+      let baseStartDate: string;
+      let baseEndDate: string;
+      
+      if (filters.startDate && filters.endDate) {
+        baseStartDate = filters.startDate;
+        baseEndDate = filters.endDate;
+      } else if (filters.startDate || filters.endDate) {
+        // Se só um filtro de data foi passado, usar ele
+        baseStartDate = filters.startDate || '';
+        baseEndDate = filters.endDate || '';
+      } else if (filters.startDate && filters.endDate && filters.startDate.trim() !== '' && filters.endDate.trim() !== '') {
+        baseStartDate = filters.startDate;
+        baseEndDate = filters.endDate;
+      } else {
+        const defaultPeriod = getDefaultPeriod();
+        baseStartDate = defaultPeriod.start;
+        baseEndDate = defaultPeriod.end;
+      }
+
+      const offset = page * pageSize;
+
+      if (type === 'accounts_payable') {
+        let query = supabase
+          .from('contas_a_pagar')
+          .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, creditor, id', { count: 'exact' })
+          .in('import_id', activeImportIds);
+
+        // Aplicar filtros de business_unit (do filtro global ou do modal)
+        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+          query = query.in('business_unit', filteredBusinessUnits);
+        } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+          query = query.eq('business_unit', filters.businessUnit);
+        }
+
+        // Aplicar filtros de data
+        if (baseStartDate) {
+          query = query.gte('payment_date', baseStartDate);
+        }
+        if (baseEndDate) {
+          query = query.lte('payment_date', baseEndDate);
+        }
+
+        // Aplicar filtro de status
+        if (filters.status && filters.status !== 'all') {
+          const statusValue = filters.status === 'realizado' ? 'realizado' : 'previsto';
+          query = query.eq('status', statusValue);
+        }
+
+        // Busca de texto (se houver)
+        if (filters.searchTerm && filters.searchTerm.trim() !== '') {
+          const searchLower = `%${filters.searchTerm.toLowerCase()}%`;
+          // Buscar em múltiplas colunas usando OR
+          query = query.or(`chart_of_accounts.ilike.${searchLower},creditor.ilike.${searchLower},business_unit.ilike.${searchLower}`);
+        }
+
+        const { data, error, count } = await query
+          .order('payment_date', { ascending: false })
+          .range(offset, offset + pageSize - 1);
+
+        if (error) throw error;
+
+        return {
+          data: data || [],
+          totalCount: count || 0,
+          hasMore: (count || 0) > offset + pageSize
+        };
+      } else if (type === 'revenues') {
+        let query = supabase
+          .from('receitas')
+          .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, id', { count: 'exact' })
+          .in('import_id', activeImportIds);
+
+        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+          query = query.in('business_unit', filteredBusinessUnits);
+        } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+          query = query.eq('business_unit', filters.businessUnit);
+        }
+
+        if (baseStartDate) {
+          query = query.gte('payment_date', baseStartDate);
+        }
+        if (baseEndDate) {
+          query = query.lte('payment_date', baseEndDate);
+        }
+
+        if (filters.status && filters.status !== 'all') {
+          const statusValue = filters.status === 'realizado' ? 'realizado' : 'previsto';
+          query = query.eq('status', statusValue);
+        }
+
+        if (filters.searchTerm && filters.searchTerm.trim() !== '') {
+          const searchLower = `%${filters.searchTerm.toLowerCase()}%`;
+          query = query.or(`chart_of_accounts.ilike.${searchLower},business_unit.ilike.${searchLower}`);
+        }
+
+        const { data, error, count } = await query
+          .order('payment_date', { ascending: false })
+          .range(offset, offset + pageSize - 1);
+
+        if (error) throw error;
+
+        return {
+          data: data || [],
+          totalCount: count || 0,
+          hasMore: (count || 0) > offset + pageSize
+        };
+      } else if (type === 'transactions') {
+        let query = supabase
+          .from('transacoes_financeiras')
+          .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, id', { count: 'exact' })
+          .in('import_id', activeImportIds);
+
+        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+          query = query.in('business_unit', filteredBusinessUnits);
+        } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+          query = query.eq('business_unit', filters.businessUnit);
+        }
+
+        if (baseStartDate) {
+          query = query.gte('transaction_date', baseStartDate);
+        }
+        if (baseEndDate) {
+          query = query.lte('transaction_date', baseEndDate);
+        }
+
+        if (filters.status && filters.status !== 'all') {
+          const statusValue = filters.status === 'realizado' ? 'realizado' : 'previsto';
+          query = query.eq('status', statusValue);
+        }
+
+        if (filters.searchTerm && filters.searchTerm.trim() !== '') {
+          const searchLower = `%${filters.searchTerm.toLowerCase()}%`;
+          query = query.or(`chart_of_accounts.ilike.${searchLower},business_unit.ilike.${searchLower}`);
+        }
+
+        const { data, error, count } = await query
+          .order('transaction_date', { ascending: false })
+          .range(offset, offset + pageSize - 1);
+
+        if (error) throw error;
+
+        return {
+          data: data || [],
+          totalCount: count || 0,
+          hasMore: (count || 0) > offset + pageSize
+        };
+      } else if (type === 'mixed') {
+        // Para mixed, carregar de múltiplas fontes e combinar
+        // Por enquanto, vamos carregar todas as fontes e combinar
+        // (pode ser otimizado depois para carregar cada fonte paginada)
+        const [revenuesResult, apResult, transactionsResult, forecastedResult, balancesResult] = await Promise.all([
+          // Receitas
+          (async () => {
+            let query = supabase
+              .from('receitas')
+              .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, id', { count: 'exact' })
+              .in('import_id', activeImportIds);
+
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+              query = query.eq('business_unit', filters.businessUnit);
+            }
+
+            if (baseStartDate) query = query.gte('payment_date', baseStartDate);
+            if (baseEndDate) query = query.lte('payment_date', baseEndDate);
+            if (filters.status && filters.status !== 'all') {
+              query = query.eq('status', filters.status === 'realizado' ? 'realizado' : 'previsto');
+            }
+
+            const { data, error } = await query.order('payment_date', { ascending: false });
+            if (error) throw error;
+            return (data || []).map(r => ({ ...r, source: 'revenues', type: 'Receita' }));
+          })(),
+          // Contas a pagar
+          (async () => {
+            let query = supabase
+              .from('contas_a_pagar')
+              .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, creditor, id', { count: 'exact' })
+              .in('import_id', activeImportIds);
+
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+              query = query.eq('business_unit', filters.businessUnit);
+            }
+
+            if (baseStartDate) query = query.gte('payment_date', baseStartDate);
+            if (baseEndDate) query = query.lte('payment_date', baseEndDate);
+            if (filters.status && filters.status !== 'all') {
+              query = query.eq('status', filters.status === 'realizado' ? 'realizado' : 'previsto');
+            }
+
+            const { data, error } = await query.order('payment_date', { ascending: false });
+            if (error) throw error;
+            return (data || []).map(ap => ({ ...ap, source: 'accounts_payable', type: 'Conta a Pagar' }));
+          })(),
+          // Transações
+          (async () => {
+            let query = supabase
+              .from('transacoes_financeiras')
+              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, id', { count: 'exact' })
+              .in('import_id', activeImportIds);
+
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+              query = query.eq('business_unit', filters.businessUnit);
+            }
+
+            if (baseStartDate) query = query.gte('transaction_date', baseStartDate);
+            if (baseEndDate) query = query.lte('transaction_date', baseEndDate);
+            if (filters.status && filters.status !== 'all') {
+              query = query.eq('status', filters.status === 'realizado' ? 'realizado' : 'previsto');
+            }
+
+            const { data, error } = await query.order('transaction_date', { ascending: false });
+            if (error) throw error;
+            return (data || []).map(t => ({ ...t, source: 'transactions', type: 'Transação Financeira', transaction_date: t.transaction_date }));
+          })(),
+          // Previstos
+          (async () => {
+            let query = supabase
+              .from('previstos')
+              .select('import_id, business_unit, due_date, amount, status, chart_of_accounts, supplier, id', { count: 'exact' })
+              .in('import_id', activeImportIds);
+
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+              query = query.eq('business_unit', filters.businessUnit);
+            }
+
+            if (baseStartDate) query = query.gte('due_date', baseStartDate);
+            if (baseEndDate) query = query.lte('due_date', baseEndDate);
+            if (filters.status && filters.status !== 'all') {
+              query = query.eq('status', filters.status === 'realizado' ? 'paga' : 'pendente');
+            }
+
+            const { data, error } = await query.order('due_date', { ascending: false });
+            if (error) throw error;
+            return (data || []).map(e => ({ ...e, source: 'forecasted_entries', type: 'Lançamento Orçado', payment_date: e.due_date }));
+          })(),
+          // Saldos iniciais
+          (async () => {
+            let query = supabase
+              .from('saldos_iniciais')
+              .select('import_id, business_unit, balance_date, balance, bank_name, id', { count: 'exact' })
+              .lte('balance_date', baseEndDate || new Date().toISOString().split('T')[0]);
+
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+              query = query.eq('business_unit', filters.businessUnit);
+            }
+
+            const { data, error } = await query.order('balance_date', { ascending: false });
+            if (error) throw error;
+            
+            // Agrupar por banco e business_unit (manter lógica existente)
+            const grouped = (data || []).reduce((acc: any, bal: any) => {
+              const bankName = bal.bank_name || '-';
+              const key = `${bankName}_${bal.business_unit || '-'}`;
+              if (!acc[key]) {
+                acc[key] = {
+                  bank_name: bankName,
+                  business_unit: bal.business_unit,
+                  balance: 0,
+                  balance_date: bal.balance_date,
+                  amount: 0,
+                  source: 'initial_balance',
+                  type: 'Saldo Inicial'
+                };
+              }
+              if (!acc[key].balance_date || bal.balance_date > acc[key].balance_date) {
+                acc[key].balance_date = bal.balance_date;
+                acc[key].balance = bal.balance;
+                acc[key].amount = bal.balance;
+              }
+              return acc;
+            }, {});
+            
+            return Object.values(grouped);
+          })()
+        ]);
+
+        // Combinar todos os resultados
+        const allData = [...revenuesResult, ...apResult, ...transactionsResult, ...forecastedResult, ...balancesResult];
+
+        // Ordenar por data (mais recente primeiro)
+        allData.sort((a: any, b: any) => {
+          const dateA = a.payment_date || a.transaction_date || a.due_date || a.balance_date || '';
+          const dateB = b.payment_date || b.transaction_date || b.due_date || b.balance_date || '';
+          return dateB.localeCompare(dateA);
+        });
+
+        // Aplicar busca de texto se houver (no front, já que é mixed)
+        let filteredData = allData;
+        if (filters.searchTerm && filters.searchTerm.trim() !== '') {
+          const searchLower = filters.searchTerm.toLowerCase();
+          filteredData = allData.filter(item => 
+            JSON.stringify(item).toLowerCase().includes(searchLower)
+          );
+        }
+
+        // Aplicar paginação
+        const paginatedData = filteredData.slice(offset, offset + pageSize);
+        const totalCount = filteredData.length;
+
+        return {
+          data: paginatedData,
+          totalCount,
+          hasMore: totalCount > offset + pageSize
+        };
+      }
+
+      return { data: [], totalCount: 0, hasMore: false };
+    } catch (error) {
+      console.error('❌ Erro ao carregar dados paginados:', error);
+      return { data: [], totalCount: 0, hasMore: false };
+    }
+  };
+
   const openKPIDetail = (title: string, data: any[], type: 'accounts_payable' | 'revenues' | 'transactions' | 'mixed') => {
+    // Criar função de carregamento paginado para o modal
+    const loadPaginatedData = async (
+      page: number,
+      pageSize: number,
+      filters: {
+        status?: string;
+        businessUnit?: string;
+        startDate?: string;
+        endDate?: string;
+        searchTerm?: string;
+      }
+    ) => {
+      return await loadPaginatedDataForModal(type, page, pageSize, filters);
+    };
+
     setModalState({
       isOpen: true,
       title,
-      data,
-      type
+      data: data, // Manter para compatibilidade com código que ainda não usa paginação
+      type,
+      loadPaginatedData
     });
   };
 
@@ -1486,7 +1896,8 @@ function App() {
       isOpen: false,
       title: '',
       data: [],
-      type: 'generic'
+      type: 'generic',
+      loadPaginatedData: undefined
     });
   };
 
@@ -1512,35 +1923,16 @@ function App() {
   }, [getFilteredAccountsPayable]);
 
   // Calculate totals from forecasted entries
+  // Dados já vêm filtrados do banco por data e business_unit
+  // Apenas aplica filtros de lógica de negócio (operacional, não-receita)
   const forecastedEntriesTotals = useMemo(() => {
     console.log('Forecasted Entries:', forecastedEntries);
 
-    if (companies.length === 0) {
-      const filtered = forecastedEntries.filter(entry => {
-        const dateMatch = (!filters.startDate || entry.due_date >= filters.startDate) &&
-                         (!filters.endDate || entry.due_date <= filters.endDate);
-
-        const isOperational = !nonOperationalAccounts.some(account =>
-          entry.chart_of_accounts?.toLowerCase() === account.toLowerCase()
-        );
-
-        // Exclude "Movimento em Dinheiro" as it goes to revenues
-        const isNotRevenue = !entry.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro');
-
-        return dateMatch && isOperational && isNotRevenue;
-      });
-
-      const total = filtered.reduce((sum, entry) => sum + (entry.amount || 0), 0);
-
-      return { forecasted: total, actual: 0 };
-    }
-
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-
+    // Os dados já vêm filtrados do banco em loadDataFromSupabase:
+    // - Por data (startDate/endDate)
+    // - Por business_unit (quando há filtros de empresas/grupos)
+    // Apenas aplicamos filtros de lógica de negócio aqui
     const filtered = forecastedEntries.filter(entry => {
-      const dateMatch = (!filters.startDate || entry.due_date >= filters.startDate) &&
-                       (!filters.endDate || entry.due_date <= filters.endDate);
-
       const isOperational = !nonOperationalAccounts.some(account =>
         entry.chart_of_accounts?.toLowerCase() === account.toLowerCase()
       );
@@ -1548,185 +1940,51 @@ function App() {
       // Exclude "Movimento em Dinheiro" as it goes to revenues
       const isNotRevenue = !entry.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro');
 
-      if (!hasActiveFilters) {
-        return dateMatch && isOperational && isNotRevenue;
-      }
-
-      const filteredCompanyCodes = companies
-        .filter(c => {
-          const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-          const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-          return groupMatch && companyMatch;
-        })
-        .map(c => c.company_code);
-
-      const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-      const normalizedBU = normalizeCode(entry.business_unit);
-      const companyMatch = normalizedCompanyCodes.includes(normalizedBU);
-
-      return companyMatch && dateMatch && isOperational && isNotRevenue;
+      return isOperational && isNotRevenue;
     });
 
     const total = filtered.reduce((sum, entry) => sum + (entry.amount || 0), 0);
 
     return { forecasted: total, actual: 0 };
-  }, [forecastedEntries, companies, filters]);
+  }, [forecastedEntries, nonOperationalAccounts]);
 
   // Calculate totals from revenues
+  // Dados já vêm filtrados do banco por data e business_unit
+  // Apenas calcula totais por status (previsto/realizado)
   const revenueTotals = useMemo(() => {
-
-    // If no companies are registered, show all data
-    if (companies.length === 0) {
-      const filtered = revenues.filter(rev => {
-        const dateMatch = (!filters.startDate || rev.payment_date >= filters.startDate) &&
-                         (!filters.endDate || rev.payment_date <= filters.endDate);
-        return dateMatch;
-      });
-
-      const forecasted = filtered
-        .filter(rev => rev.status?.toLowerCase() === 'previsto' || rev.status?.toLowerCase() === 'pendente')
-        .reduce((sum, rev) => sum + (rev.amount || 0), 0);
-
-      const forecastedFromEntries = getFilteredRevenuesFromForecasted
-        .reduce((sum, entry) => sum + (entry.amount || 0), 0);
-
-      const actual = filtered
-        .filter(rev => rev.status?.toLowerCase() === 'realizado')
-        .reduce((sum, rev) => sum + (rev.amount || 0), 0);
-
-      console.log('Revenue Forecasted total (no companies):', forecasted, 'From entries:', forecastedFromEntries, 'Revenue Actual total:', actual);
-
-      return { forecasted: forecasted + forecastedFromEntries, actual };
-    }
-
-    // If no filters are active, show all data
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-
-    // Filter by business_unit matching company codes and date range
-    const filtered = revenues.filter(rev => {
-      const dateMatch = (!filters.startDate || rev.payment_date >= filters.startDate) &&
-                       (!filters.endDate || rev.payment_date <= filters.endDate);
-
-      // If no company/group filters are active, include all records (only filter by date)
-      if (!hasActiveFilters) {
-        return dateMatch;
-      }
-
-      // Get filtered company codes based on selected groups and companies
-      const filteredCompanyCodes = companies
-        .filter(c => {
-          const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-          const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-          return groupMatch && companyMatch;
-        })
-        .map(c => c.company_code);
-
-      // Normalize company codes for comparison
-      const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-
-      console.log('🔍 Revenue Filter Debug:', {
-        selectedGroups: filters.groups,
-        selectedCompanies: filters.companies,
-        filteredCompanyCodes: filteredCompanyCodes,
-        normalizedCompanyCodes: normalizedCompanyCodes
-      });
-
-      // Match business_unit with company codes
-      const normalizedBU = normalizeCode(rev.business_unit);
-      const companyMatch = normalizedCompanyCodes.includes(normalizedBU);
-
-      return companyMatch && dateMatch;
-    });
-
-    const forecasted = filtered
+    // Os dados já vêm filtrados do banco em loadDataFromSupabase:
+    // - Por data (startDate/endDate)
+    // - Por business_unit (quando há filtros de empresas/grupos)
+    // Apenas calculamos totais por status aqui
+    const forecasted = revenues
       .filter(rev => rev.status?.toLowerCase() === 'previsto' || rev.status?.toLowerCase() === 'pendente')
       .reduce((sum, rev) => sum + (rev.amount || 0), 0);
 
     const forecastedFromEntries = getFilteredRevenuesFromForecasted
       .reduce((sum, entry) => sum + (entry.amount || 0), 0);
 
-    const actual = filtered
+    const actual = revenues
       .filter(rev => rev.status?.toLowerCase() === 'realizado')
       .reduce((sum, rev) => sum + (rev.amount || 0), 0);
 
     return { forecasted: forecasted + forecastedFromEntries, actual };
-  }, [revenues, companies, filters, getFilteredRevenuesFromForecasted]);
+  }, [revenues, getFilteredRevenuesFromForecasted]);
 
-  // Calculate totals from financial transactions (positive = inflow, negative = outflow)
+  // Dados já vêm filtrados do banco por data e business_unit
+  // Apenas calcula totais por status e tipo (inflow/outflow), excluindo contas não operacionais
   const transactionTotals = useMemo(() => {
     console.log('Financial Transactions:', financialTransactions);
 
-    // If no companies are registered, show all data
-    if (companies.length === 0) {
-      const filtered = financialTransactions.filter(t => {
-        const dateMatch = (!filters.startDate || t.transaction_date >= filters.startDate) &&
-                         (!filters.endDate || t.transaction_date <= filters.endDate);
-
-        // Exclude non-operational accounts for outflows
-        const isOperational = t.amount >= 0 || !nonOperationalAccounts.some(account =>
-          t.chart_of_accounts?.toLowerCase() === account.toLowerCase()
-        );
-
-        return dateMatch && isOperational;
-      });
-
-      const forecastedInflows = filtered
-        .filter(t => t.status?.toLowerCase() === 'previsto' && t.amount > 0)
-        .reduce((sum, t) => sum + (t.amount || 0), 0);
-
-      const forecastedOutflows = Math.abs(filtered
-        .filter(t => t.status?.toLowerCase() === 'previsto' && t.amount < 0)
-        .reduce((sum, t) => sum + (t.amount || 0), 0));
-
-      const actualInflows = filtered
-        .filter(t => t.status?.toLowerCase() === 'realizado' && t.amount > 0)
-        .reduce((sum, t) => sum + (t.amount || 0), 0);
-
-      const actualOutflows = Math.abs(filtered
-        .filter(t => t.status?.toLowerCase() === 'realizado' && t.amount < 0)
-        .reduce((sum, t) => sum + (t.amount || 0), 0));
-
-      return {
-        inflows: { forecasted: forecastedInflows, actual: actualInflows },
-        outflows: { forecasted: forecastedOutflows, actual: actualOutflows }
-      };
-    }
-
-    // If no filters are active, show all data
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-
-    // Filter by business_unit matching company codes and date range
+    // Os dados já vêm filtrados do banco em loadDataFromSupabase:
+    // - Por data (startDate/endDate)
+    // - Por business_unit (quando há filtros de empresas/grupos)
+    // Apenas aplicamos filtros de lógica de negócio (excluir contas não operacionais) e calculamos totais
     const filtered = financialTransactions.filter(t => {
-      const dateMatch = (!filters.startDate || t.transaction_date >= filters.startDate) &&
-                       (!filters.endDate || t.transaction_date <= filters.endDate);
-
       // Exclude non-operational accounts for outflows
       const isOperational = t.amount >= 0 || !nonOperationalAccounts.some(account =>
         t.chart_of_accounts?.toLowerCase() === account.toLowerCase()
       );
-
-      // If no company/group filters are active, include all records (only filter by date)
-      if (!hasActiveFilters) {
-        return dateMatch && isOperational;
-      }
-
-      // Get filtered company codes based on selected groups and companies
-      const filteredCompanyCodes = companies
-        .filter(c => {
-          const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-          const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
-          return groupMatch && companyMatch;
-        })
-        .map(c => c.company_code);
-
-      // Normalize company codes for comparison
-      const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-
-      // Match business_unit with company codes
-      const normalizedBU = normalizeCode(t.business_unit);
-      const companyMatch = normalizedCompanyCodes.includes(normalizedBU);
-
-      return companyMatch && dateMatch && isOperational;
+      return isOperational;
     });
 
     // Forecasted
@@ -1751,7 +2009,7 @@ function App() {
       inflows: { forecasted: forecastedInflows, actual: actualInflows },
       outflows: { forecasted: forecastedOutflows, actual: actualOutflows }
     };
-  }, [financialTransactions, companies, filters]);
+  }, [financialTransactions, nonOperationalAccounts]);
 
   const cmvChartOfAccounts = [
     'Medicamentos Bonificados',
@@ -1910,18 +2168,17 @@ function App() {
       .reduce((sum, e) => sum + Math.abs(e.amount || 0), 0);
 
     // Filter Financial Transactions (outflows only)
+    // Nota: transacoes_financeiras não tem coluna 'description', apenas chart_of_accounts
     const expensesFromTransactionsForecasted = getFilteredTransactions
       .filter(t => t.amount < 0 && t.status?.toLowerCase() === 'previsto' &&
         !expensesExclusionList.some(excluded =>
-          (t.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase()) ||
-           t.description?.toLowerCase().includes(excluded.toLowerCase()))))
+          t.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())))
       .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
 
     const expensesFromTransactionsActual = getFilteredTransactions
       .filter(t => t.amount < 0 && t.status?.toLowerCase() === 'realizado' &&
         !expensesExclusionList.some(excluded =>
-          (t.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase()) ||
-           t.description?.toLowerCase().includes(excluded.toLowerCase()))))
+          t.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())))
       .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
 
     const totalExpensesForecasted = expensesFromAPForecasted + expensesFromForecastedForecasted + expensesFromTransactionsForecasted;
@@ -1954,18 +2211,17 @@ function App() {
       }
     };
 
-    // Calculate initial balance from database - pega o saldo inicial mais recente até a data de início do período
-    // Como o saldo inicial é atualizado manualmente todos os dias, devemos pegar o mais recente <= startDate
-    const balancesUpToStartDate = (getFilteredInitialBalancesRaw || [])
+    // Calculate initial balance from database - pega o saldo inicial mais recente disponível
+    // Como o saldo inicial é atualizado manualmente todos os dias, devemos sempre pegar o mais recente
+    // independente do filtro de período (o saldo inicial é dinâmico e atualizado diariamente)
+    const allBalances = (getFilteredInitialBalancesRaw || [])
       .filter(bal => {
         const balanceDate = bal.balance_date;
-        if (!balanceDate) return false;
-        // Pega saldos até a data de início do período (ou todos se não houver filtro)
-        return !filters.startDate || balanceDate <= filters.startDate;
+        return !!balanceDate; // Apenas filtra saldos com data válida
       });
 
     // Agrupar por bank_name + business_unit e pegar o mais recente de cada grupo
-    const latestBalancesByBankAndUnit = balancesUpToStartDate.reduce((acc, bal) => {
+    const latestBalancesByBankAndUnit = allBalances.reduce((acc, bal) => {
       const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
       const existing = acc[key];
       
@@ -2374,16 +2630,312 @@ function App() {
     }));
   }, [dailyCashFlow]);
 
-  // Raw data for MonthlyComparison (NO date filtering - component has its own period filter)
-  const monthlyComparisonRawData = useMemo(() => ({
-    revenues: revenues,
-    accountsPayable: accountsPayable,
-    forecastedEntries: forecastedEntries,
-    transactions: financialTransactions,
-    cmvDRE: cmvDRE,
-    companies: companies,
-    cmvChartOfAccounts: cmvChartOfAccounts
-  }), [revenues, accountsPayable, forecastedEntries, financialTransactions, cmvDRE, companies, cmvChartOfAccounts]);
+  // Raw data for MonthlyComparison - precisa carregar TODOS os dados, não apenas do período filtrado
+  // O componente tem seu próprio filtro de período interno
+  const [monthlyComparisonData, setMonthlyComparisonData] = useState<{
+    revenues: any[];
+    accountsPayable: any[];
+    forecastedEntries: any[];
+    transactions: any[];
+    cmvDRE: any[];
+    companies: any[];
+    cmvChartOfAccounts: string[];
+  }>({
+    revenues: [],
+    accountsPayable: [],
+    forecastedEntries: [],
+    transactions: [],
+    cmvDRE: [],
+    companies: [],
+    cmvChartOfAccounts: []
+  });
+
+  // Carregar dados completos para MonthlyComparison (sem filtro de data ou com range muito amplo)
+  const loadMonthlyComparisonData = async () => {
+    console.log('🔄 Carregando dados completos para MonthlyComparison...');
+    
+    try {
+      // Buscar imports ativos
+      const { data: importsData, error: importsError } = await supabase
+        .from('importacoes')
+        .select('id, is_deleted');
+
+      if (importsError) throw importsError;
+
+      const activeImportIds = (importsData || [])
+        .filter((imp: any) => !imp.is_deleted)
+        .map((imp: any) => imp.id);
+
+      const hasActiveImports = activeImportIds.length > 0;
+
+      // Obter business units filtrados (para otimizar queries com índices compostos)
+      const filteredBusinessUnits = getFilteredBusinessUnits();
+
+      // Carregar TODOS os dados disponíveis (sem limite de data) para garantir comparação ano a ano completa
+      // Não limitamos por data porque o componente MonthlyComparison tem seu próprio filtro de período
+      // Mas aplicamos filtro de business_unit se houver filtros ativos (otimização com índices)
+      console.log('📅 Carregando TODOS os dados disponíveis para MonthlyComparison (sem filtro de data)...');
+
+      // Carregar todos os dados necessários
+      let revenuesResult: any = { data: [], error: null };
+      let apResult: any = { data: [], error: null };
+      let transactionsResult: any = { data: [], error: null };
+      let forecastedResult: any = { data: [], error: null };
+      let cmvDREResult: any = { data: [], error: null };
+
+      if (hasActiveImports) {
+        try {
+          // Carregar receitas em lotes para evitar limite do Supabase
+          let allRevenues: any[] = [];
+          const batchSize = 1000;
+          let offset = 0;
+          let hasMore = true;
+          
+          while (hasMore) {
+            let query = supabase
+              .from('receitas')
+              .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, id')
+              .in('import_id', activeImportIds);
+            
+            // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            }
+            
+            const batch = await query
+              .order('payment_date', { ascending: false })
+              .range(offset, offset + batchSize - 1);
+            
+            if (batch.error) {
+              console.error('❌ Erro ao carregar receitas para MonthlyComparison:', batch.error);
+              break;
+            }
+            
+            if (batch.data && batch.data.length > 0) {
+              allRevenues = [...allRevenues, ...batch.data];
+              offset += batchSize;
+              hasMore = batch.data.length === batchSize;
+            } else {
+              hasMore = false;
+            }
+          }
+          
+          revenuesResult = { data: allRevenues, error: null };
+        } catch (err) {
+          console.error('❌ Exceção ao carregar receitas para MonthlyComparison:', err);
+          revenuesResult = { data: [], error: err };
+        }
+
+        try {
+          // Carregar contas_a_pagar em lotes para evitar limite do Supabase
+          let allAP: any[] = [];
+          const batchSize = 1000;
+          let offset = 0;
+          let hasMore = true;
+          
+          while (hasMore) {
+            let query = supabase
+              .from('contas_a_pagar')
+              .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, creditor, id')
+              .in('import_id', activeImportIds);
+            
+            // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            }
+            
+            const batch = await query
+              .order('payment_date', { ascending: false })
+              .range(offset, offset + batchSize - 1);
+            
+            if (batch.error) {
+              console.error('❌ Erro ao carregar contas_a_pagar para MonthlyComparison:', batch.error);
+              break;
+            }
+            
+            if (batch.data && batch.data.length > 0) {
+              allAP = [...allAP, ...batch.data];
+              offset += batchSize;
+              hasMore = batch.data.length === batchSize;
+            } else {
+              hasMore = false;
+            }
+          }
+          
+          apResult = { data: allAP, error: null };
+        } catch (err) {
+          console.error('❌ Exceção ao carregar contas_a_pagar para MonthlyComparison:', err);
+          apResult = { data: [], error: err };
+        }
+
+        try {
+          // Carregar transacoes_financeiras em lotes para evitar limite do Supabase
+          let allTransactions: any[] = [];
+          const batchSize = 1000;
+          let offset = 0;
+          let hasMore = true;
+          
+          while (hasMore) {
+            let query = supabase
+              .from('transacoes_financeiras')
+              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, id')
+              .in('import_id', activeImportIds);
+            
+            // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            }
+            
+            const batch = await query
+              .order('transaction_date', { ascending: false })
+              .range(offset, offset + batchSize - 1);
+            
+            if (batch.error) {
+              console.error('❌ Erro ao carregar transacoes_financeiras para MonthlyComparison:', batch.error);
+              break;
+            }
+            
+            if (batch.data && batch.data.length > 0) {
+              allTransactions = [...allTransactions, ...batch.data];
+              offset += batchSize;
+              hasMore = batch.data.length === batchSize;
+            } else {
+              hasMore = false;
+            }
+          }
+          
+          transactionsResult = { data: allTransactions, error: null };
+        } catch (err) {
+          console.error('❌ Exceção ao carregar transacoes_financeiras para MonthlyComparison:', err);
+          transactionsResult = { data: [], error: err };
+        }
+
+        try {
+          // Carregar previstos em lotes para evitar limite do Supabase
+          let allForecasted: any[] = [];
+          const batchSize = 1000;
+          let offset = 0;
+          let hasMore = true;
+          
+          while (hasMore) {
+            let query = supabase
+              .from('previstos')
+              .select('import_id, business_unit, due_date, amount, status, chart_of_accounts, supplier, id')
+              .in('import_id', activeImportIds);
+            
+            // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            }
+            
+            const batch = await query
+              .order('due_date', { ascending: false })
+              .range(offset, offset + batchSize - 1);
+            
+            if (batch.error) {
+              console.error('❌ Erro ao carregar previstos para MonthlyComparison:', batch.error);
+              break;
+            }
+            
+            if (batch.data && batch.data.length > 0) {
+              allForecasted = [...allForecasted, ...batch.data];
+              offset += batchSize;
+              hasMore = batch.data.length === batchSize;
+            } else {
+              hasMore = false;
+            }
+          }
+          
+          forecastedResult = { data: allForecasted, error: null };
+        } catch (err) {
+          console.error('❌ Exceção ao carregar previstos para MonthlyComparison:', err);
+          forecastedResult = { data: [], error: err };
+        }
+
+        try {
+          // Carregar cmv_dre em lotes para evitar limite do Supabase
+          let allCMVDRE: any[] = [];
+          const batchSize = 1000;
+          let offset = 0;
+          let hasMore = true;
+          
+          while (hasMore) {
+            let query = supabase
+              .from('cmv_dre')
+              .select('import_id, business_unit, issue_date, amount, chart_of_accounts, status, id')
+              .in('import_id', activeImportIds);
+            
+            // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            }
+            
+            const batch = await query
+              .order('issue_date', { ascending: false })
+              .range(offset, offset + batchSize - 1);
+            
+            if (batch.error) {
+              console.error('❌ Erro ao carregar cmv_dre para MonthlyComparison:', batch.error);
+              break;
+            }
+            
+            if (batch.data && batch.data.length > 0) {
+              allCMVDRE = [...allCMVDRE, ...batch.data];
+              offset += batchSize;
+              hasMore = batch.data.length === batchSize;
+            } else {
+              hasMore = false;
+            }
+          }
+          
+          cmvDREResult = { data: allCMVDRE, error: null };
+        } catch (err) {
+          console.error('❌ Exceção ao carregar cmv_dre para MonthlyComparison:', err);
+          cmvDREResult = { data: [], error: err };
+        }
+      }
+
+      const newData = {
+        revenues: revenuesResult.data || [],
+        accountsPayable: apResult.data || [],
+        forecastedEntries: forecastedResult.data || [],
+        transactions: transactionsResult.data || [],
+        cmvDRE: cmvDREResult.data || [],
+        companies: companies, // Usa companies já carregadas do estado
+        cmvChartOfAccounts: cmvChartOfAccounts // Usa cmvChartOfAccounts (constante)
+      };
+
+      console.log('✅ Dados completos carregados para MonthlyComparison:', {
+        revenues: newData.revenues.length,
+        accountsPayable: newData.accountsPayable.length,
+        transactions: newData.transactions.length,
+        forecastedEntries: newData.forecastedEntries.length,
+        cmvDRE: newData.cmvDRE.length,
+        companies: newData.companies.length,
+        hasActiveImports
+      });
+
+      setMonthlyComparisonData(newData);
+    } catch (error) {
+      console.error('❌ Erro ao carregar dados para MonthlyComparison:', error);
+    }
+  };
+
+  // Carregar dados do MonthlyComparison quando companies for carregado ou quando houver novas importações
+  // Também recarregar quando filtros de empresas/grupos mudarem
+  useEffect(() => {
+    // Só carregar se companies já foi carregado
+    if (companies.length > 0) {
+      loadMonthlyComparisonData();
+    }
+  }, [companies.length, filters.companies, filters.groups]); // Recarregar quando companies ou filtros mudarem
+  
+  // Também carregar quando a aplicação iniciar (mesmo sem companies, para ter dados básicos)
+  useEffect(() => {
+    loadMonthlyComparisonData();
+  }, []); // Carregar uma vez no mount
+
+  const monthlyComparisonRawData = useMemo(() => monthlyComparisonData, [monthlyComparisonData]);
 
   const cashFlowTableData = useMemo(() => [], []);
 
@@ -2409,7 +2961,8 @@ function App() {
         );
 
         dayExpenses.forEach(expense => {
-          const category = expense.expense_category || expense.chart_of_accounts || 'Sem categoria';
+          // Nota: contas_a_pagar não tem coluna 'expense_category', apenas chart_of_accounts
+          const category = expense.chart_of_accounts || 'Sem categoria';
           categoryExpenses[category] = (categoryExpenses[category] || 0) + (expense.amount || 0);
         });
 
@@ -2419,7 +2972,8 @@ function App() {
         );
 
         dayForecasted.forEach(entry => {
-          const category = entry.expense_category || entry.chart_of_accounts || 'Sem categoria';
+          // Nota: previstos não tem coluna 'expense_category', apenas chart_of_accounts
+          const category = entry.chart_of_accounts || 'Sem categoria';
           categoryExpenses[category] = (categoryExpenses[category] || 0) + (entry.amount || 0);
         });
       });
@@ -2560,7 +3114,8 @@ function App() {
         getFilteredTransactions
           .filter(t => t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'previsto')
           .forEach(t => {
-            const group = t.chart_of_accounts || t.description || 'Não classificado';
+            // Nota: transacoes_financeiras não tem coluna 'description', apenas chart_of_accounts
+            const group = t.chart_of_accounts || 'Não classificado';
             groupTotals[group] = (groupTotals[group] || 0) + Math.abs(t.amount || 0);
           });
       } else {
@@ -2575,7 +3130,8 @@ function App() {
         getFilteredTransactions
           .filter(t => t.transaction_date === dateStr && t.amount < 0 && t.status?.toLowerCase() === 'realizado')
           .forEach(t => {
-            const group = t.chart_of_accounts || t.description || 'Não classificado';
+            // Nota: transacoes_financeiras não tem coluna 'description', apenas chart_of_accounts
+            const group = t.chart_of_accounts || 'Não classificado';
             groupTotals[group] = (groupTotals[group] || 0) + Math.abs(t.amount || 0);
           });
       }
@@ -2850,39 +3406,49 @@ function App() {
                       </div>
                     </div>
                   </div>
-                  <KPICard
-                    title="Total de Recebimentos"
-                    forecasted={kpiData.totalInflows.forecasted}
-                    actual={kpiData.totalInflows.actual}
-                    icon={<ArrowDown className="w-5 h-5" />}
-                    color="green"
-                    section="cashflow"
-                    darkMode={darkMode}
-                    onViewDetails={() => openKPIDetail('Detalhes: Total de Recebimentos', getFilteredTotalInflows, 'mixed')}
-                    dataSource="Carregado das planilhas de receitas e transações financeiras"
-                  />
-                  <KPICard
-                    title="Total de Pagamentos"
-                    forecasted={kpiData.totalOutflows.forecasted}
-                    actual={kpiData.totalOutflows.actual}
-                    icon={<ArrowUp className="w-5 h-5" />}
-                    color="red"
-                    section="cashflow"
-                    darkMode={darkMode}
-                    onViewDetails={() => openKPIDetail('Detalhes: Total de Pagamentos', getFilteredTotalOutflows, 'mixed')}
-                    dataSource="Carregado das planilhas de contas a pagar e transações financeiras"
-                  />
-                  <KPICard
-                    title="Saldo Final"
-                    forecasted={kpiData.finalBalance.forecasted}
-                    actual={kpiData.finalBalance.actual}
-                    icon={<DollarSign className="w-5 h-5" />}
-                    color="purple"
-                    section="cashflow"
-                    darkMode={darkMode}
-                    onViewDetails={() => openKPIDetail('Detalhes: Saldo Final', getFilteredFinalBalance, 'mixed')}
-                    dataSource="Calculado: Saldo Inicial + Recebimentos - Pagamentos"
-                  />
+                  {dataLoading ? (
+                    <>
+                      <CardSkeleton darkMode={darkMode} />
+                      <CardSkeleton darkMode={darkMode} />
+                      <CardSkeleton darkMode={darkMode} />
+                    </>
+                  ) : (
+                    <>
+                      <KPICard
+                        title="Total de Recebimentos"
+                        forecasted={kpiData.totalInflows.forecasted}
+                        actual={kpiData.totalInflows.actual}
+                        icon={<ArrowDown className="w-5 h-5" />}
+                        color="green"
+                        section="cashflow"
+                        darkMode={darkMode}
+                        onViewDetails={() => openKPIDetail('Detalhes: Total de Recebimentos', getFilteredTotalInflows, 'mixed')}
+                        dataSource="Carregado das planilhas de receitas e transações financeiras"
+                      />
+                      <KPICard
+                        title="Total de Pagamentos"
+                        forecasted={kpiData.totalOutflows.forecasted}
+                        actual={kpiData.totalOutflows.actual}
+                        icon={<ArrowUp className="w-5 h-5" />}
+                        color="red"
+                        section="cashflow"
+                        darkMode={darkMode}
+                        onViewDetails={() => openKPIDetail('Detalhes: Total de Pagamentos', getFilteredTotalOutflows, 'mixed')}
+                        dataSource="Carregado das planilhas de contas a pagar e transações financeiras"
+                      />
+                      <KPICard
+                        title="Saldo Final"
+                        forecasted={kpiData.finalBalance.forecasted}
+                        actual={kpiData.finalBalance.actual}
+                        icon={<DollarSign className="w-5 h-5" />}
+                        color="purple"
+                        section="cashflow"
+                        darkMode={darkMode}
+                        onViewDetails={() => openKPIDetail('Detalhes: Saldo Final', getFilteredFinalBalance, 'mixed')}
+                        dataSource="Calculado: Saldo Inicial + Recebimentos - Pagamentos"
+                      />
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -2890,52 +3456,63 @@ function App() {
               <div className="mb-8">
                 <h2 className={`text-lg font-bold mb-4 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Entrega de Resultado</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <KPICard
-                    title="Receita Direta"
-                    forecasted={kpiData.directRevenue.forecasted}
-                    actual={kpiData.directRevenue.actual}
-                    icon={<TrendingUp className="w-5 h-5" />}
-                    color="yellow"
-                    section="result"
-                    darkMode={darkMode}
-                    onViewDetails={() => openKPIDetail('Detalhes: Receita Direta', getFilteredRevenues, 'revenues')}
-                    dataSource="Carregado da planilha de receitas"
-                  />
-                  <KPICard
-                    title="CMV"
-                    forecasted={kpiData.cogs.forecasted}
-                    actual={kpiData.cogs.actual}
-                    percentage={kpiData.cogs.percentageOfRevenue}
-                    icon={<Pill className="w-5 h-5" />}
-                    color="orange"
-                    section="result"
-                    darkMode={darkMode}
-                    onViewDetails={() => openKPIDetail('Detalhes: CMV', getFilteredCMVDRE, 'mixed')}
-                    dataSource="Carregado de contas a pagar (categoria: 04.0DESPESAS COM MERCADORIA)"
-                  />
-                  <KPICard
-                    title="Total de Despesas"
-                    forecasted={kpiData.totalExpenses.forecasted}
-                    actual={kpiData.totalExpenses.actual}
-                    icon={<Calculator className="w-5 h-5" />}
-                    color="red"
-                    section="result"
-                    darkMode={darkMode}
-                    onViewDetails={() => openKPIDetail('Detalhes: Total de Despesas', getFilteredExpenses, 'mixed')}
-                    dataSource="Carregado das planilhas de contas a pagar, previstos e transações financeiras"
-                  />
-                  <KPICard
-                    title="Resultado Operacional"
-                    forecasted={kpiData.directRevenue.forecasted - kpiData.cogs.forecasted - kpiData.totalExpenses.forecasted}
-                    actual={kpiData.directRevenue.actual - kpiData.cogs.actual - kpiData.totalExpenses.actual}
-                    percentage={kpiData.directRevenue.actual !== 0 ? ((kpiData.directRevenue.actual - kpiData.cogs.actual - kpiData.totalExpenses.actual) / kpiData.directRevenue.actual) * 100 : 0}
-                    icon={<Target className="w-5 h-5" />}
-                    color="indigo"
-                    section="result"
-                    darkMode={darkMode}
-                    onViewDetails={() => openKPIDetail('Detalhes: Resultado Operacional', getFilteredOperationalResult, 'mixed')}
-                    dataSource="Calculado: Receita Direta - CMV - Total de Despesas"
-                  />
+                  {dataLoading ? (
+                    <>
+                      <CardSkeleton darkMode={darkMode} />
+                      <CardSkeleton darkMode={darkMode} />
+                      <CardSkeleton darkMode={darkMode} />
+                      <CardSkeleton darkMode={darkMode} />
+                    </>
+                  ) : (
+                    <>
+                      <KPICard
+                        title="Receita Direta"
+                        forecasted={kpiData.directRevenue.forecasted}
+                        actual={kpiData.directRevenue.actual}
+                        icon={<TrendingUp className="w-5 h-5" />}
+                        color="yellow"
+                        section="result"
+                        darkMode={darkMode}
+                        onViewDetails={() => openKPIDetail('Detalhes: Receita Direta', getFilteredRevenues, 'revenues')}
+                        dataSource="Carregado da planilha de receitas"
+                      />
+                      <KPICard
+                        title="CMV DRE"
+                        forecasted={kpiData.cogs.forecasted}
+                        actual={kpiData.cogs.actual}
+                        percentage={kpiData.cogs.percentageOfRevenue}
+                        icon={<Pill className="w-5 h-5" />}
+                        color="orange"
+                        section="result"
+                        darkMode={darkMode}
+                        onViewDetails={() => openKPIDetail('Detalhes: CMV', getFilteredCMVDRE, 'mixed')}
+                        dataSource="Carregado de contas a pagar (categoria: 04.0DESPESAS COM MERCADORIA)"
+                      />
+                      <KPICard
+                        title="Total de Despesas"
+                        forecasted={kpiData.totalExpenses.forecasted}
+                        actual={kpiData.totalExpenses.actual}
+                        icon={<Calculator className="w-5 h-5" />}
+                        color="red"
+                        section="result"
+                        darkMode={darkMode}
+                        onViewDetails={() => openKPIDetail('Detalhes: Total de Despesas', getFilteredExpenses, 'mixed')}
+                        dataSource="Carregado das planilhas de contas a pagar, previstos e transações financeiras"
+                      />
+                      <KPICard
+                        title="Resultado Operacional"
+                        forecasted={kpiData.directRevenue.forecasted - kpiData.cogs.forecasted - kpiData.totalExpenses.forecasted}
+                        actual={kpiData.directRevenue.actual - kpiData.cogs.actual - kpiData.totalExpenses.actual}
+                        percentage={kpiData.directRevenue.actual !== 0 ? ((kpiData.directRevenue.actual - kpiData.cogs.actual - kpiData.totalExpenses.actual) / kpiData.directRevenue.actual) * 100 : 0}
+                        icon={<Target className="w-5 h-5" />}
+                        color="indigo"
+                        section="result"
+                        darkMode={darkMode}
+                        onViewDetails={() => openKPIDetail('Detalhes: Resultado Operacional', getFilteredOperationalResult, 'mixed')}
+                        dataSource="Calculado: Receita Direta - CMV - Total de Despesas"
+                      />
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -2953,16 +3530,24 @@ function App() {
                   />
                 </div>
                 <div className="space-y-4">
-                  <CashFlowChart data={cashFlowData} darkMode={darkMode} alerts={alertsData} />
+                  {dataLoading ? (
+                    <ChartSkeleton darkMode={darkMode} />
+                  ) : (
+                    <CashFlowChart data={cashFlowData} darkMode={darkMode} alerts={alertsData} />
+                  )}
                   <CashFlowAlerts data={alertsData} darkMode={darkMode} />
                 </div>
               </div>
 
               {/* Monthly Comparison */}
-              <MonthlyComparison 
-                rawData={monthlyComparisonRawData} 
-                darkMode={darkMode} 
-              />
+              {dataLoading ? (
+                <PageLoader darkMode={darkMode} message="Carregando comparação mensal..." />
+              ) : (
+                <MonthlyComparison 
+                  rawData={monthlyComparisonRawData} 
+                  darkMode={darkMode} 
+                />
+              )}
             </>
           )}
 
@@ -3157,6 +3742,7 @@ function App() {
               ) : (
                 <DataImport
                   onFileUpload={handleDataImport}
+                  onFileSelectWithMode={handleFileSelectWithMode}
                   importedFiles={importedFiles}
                   onDeleteFile={handleDeleteFile}
                   onRestoreFile={handleRestoreFile}
@@ -3177,6 +3763,57 @@ function App() {
         title={modalState.title}
         data={modalState.data}
         type={modalState.type}
+        loadPaginatedData={modalState.loadPaginatedData}
+      />
+
+      <ImportModeModal
+        isOpen={importModeModal.isOpen}
+        onClose={() => setImportModeModal({ ...importModeModal, isOpen: false })}
+        onAccumulate={() => {
+          setImportModeModal({ ...importModeModal, isOpen: false });
+          setConfirmAccumulateModal({
+            isOpen: true,
+            fileName: importModeModal.fileName,
+            fileType: importModeModal.fileType,
+            pendingFile: importModeModal.pendingFile,
+            pendingType: importModeModal.pendingType,
+            pendingIndex: importModeModal.pendingIndex,
+            pendingTotal: importModeModal.pendingTotal
+          });
+        }}
+        onOverwrite={() => {
+          setImportModeModal({ ...importModeModal, isOpen: false });
+          setOverwriteModal({
+            isOpen: true,
+            fileName: importModeModal.fileName,
+            fileType: importModeModal.fileType,
+            existingImportId: null,
+            pendingFile: importModeModal.pendingFile,
+            pendingType: importModeModal.pendingType,
+            pendingIndex: importModeModal.pendingIndex,
+            pendingTotal: importModeModal.pendingTotal
+          });
+        }}
+        fileName={importModeModal.fileName}
+      />
+
+      <ConfirmAccumulateModal
+        isOpen={confirmAccumulateModal.isOpen}
+        onClose={() => setConfirmAccumulateModal({ ...confirmAccumulateModal, isOpen: false })}
+        onConfirm={async () => {
+          if (confirmAccumulateModal.pendingFile && confirmAccumulateModal.pendingType) {
+            setConfirmAccumulateModal({ ...confirmAccumulateModal, isOpen: false });
+            await handleDataImport(
+              confirmAccumulateModal.pendingFile,
+              confirmAccumulateModal.pendingType as any,
+              confirmAccumulateModal.pendingIndex,
+              confirmAccumulateModal.pendingTotal,
+              false, // shouldOverwrite
+              true // shouldAccumulate
+            );
+          }
+        }}
+        fileName={confirmAccumulateModal.fileName}
       />
 
       <ConfirmOverwriteModal
@@ -3191,11 +3828,12 @@ function App() {
               overwriteModal.pendingIndex,
               overwriteModal.pendingTotal,
               true, // shouldOverwrite
-              overwriteModal.existingImportId
+              false // shouldAccumulate
             );
           }
         }}
         fileName={overwriteModal.fileName}
+        fileType={overwriteModal.fileType}
       />
 
       <ErrorModal

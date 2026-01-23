@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
-import { AlertTriangle, ChevronDown } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Loader2 } from 'lucide-react';
 
 interface CashFlowData {
   date: string;
@@ -77,9 +77,17 @@ export const CashFlowChart: React.FC<CashFlowChartProps> = ({ data, darkMode = f
       </div>
 
       <div className="h-56 overflow-x-auto scrollbar-horizontal">
-        <div style={{ minWidth: '800px', height: '100%' }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+        {!data || data.length === 0 ? (
+          <div className="h-full flex items-center justify-center">
+            <div className="flex flex-col items-center gap-3">
+              <Loader2 className={`w-8 h-8 ${darkMode ? 'text-slate-400' : 'text-gray-400'} animate-spin`} />
+              <p className={`text-sm ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Carregando...</p>
+            </div>
+          </div>
+        ) : (
+          <div style={{ minWidth: '800px', height: '100%' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={data} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
               <defs>
                 <linearGradient id="actualGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
@@ -127,6 +135,7 @@ export const CashFlowChart: React.FC<CashFlowChartProps> = ({ data, darkMode = f
             </AreaChart>
           </ResponsiveContainer>
         </div>
+        )}
       </div>
 
       <div className="mt-4 flex items-center justify-between">

@@ -42,7 +42,9 @@ interface MonthlyComparisonProps {
 }
 
 export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, darkMode = false }) => {
-  // Period filter: defines which dates are included
+  // IMPORTANTE: Este componente NÃO respeita o filtro de período global da aplicação.
+  // Ele usa apenas seus próprios filtros internos. Quando não houver seleção, usa os últimos 3 meses por padrão.
+  // Period filter: defines which dates are included (independente do filtro global)
   const [period, setPeriod] = useState<'3months' | '6months' | '12months' | 'currentYear' | 'custom'>('3months');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
@@ -161,8 +163,10 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
   }, [period, customStartDate, customEndDate]);
 
   // Filter data based on period, groups and companies
+  // IMPORTANTE: Este filtro usa APENAS os filtros internos do componente (period, selectedGroups, selectedCompanies)
+  // NÃO usa o filtro de período global da aplicação
   const filteredData = useMemo(() => {
-    // First filter by date (period)
+    // First filter by date (period) - usa apenas o dateRange calculado internamente, não o filtro global
     const filterByDate = (item: any, dateField: string) => {
       if (!item[dateField]) return false;
       const itemDate = item[dateField];
@@ -1502,19 +1506,6 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
             const revenueForYear = originalData?.[year]?.revenueActual ?? 0;
             const cmvForYear = originalData?.[year]?.cogs ?? 0;
             const cmvPercentage = revenueForYear > 0 ? (cmvForYear / revenueForYear) * 100 : 0;
-            
-            // Debug log for CMV percentage calculation
-            if (selectedMetric === 'cogs' && cmvForYear > 0) {
-              console.log(`🔍 CMV Percentage Calc [${label} - ${yearLabel}]:`, {
-                revenueActual: originalData?.[year]?.revenueActual,
-                revenue: originalData?.[year]?.revenue,
-                revenueForecasted: originalData?.[year]?.revenueForecasted,
-                cmv: cmvForYear,
-                percentage: cmvPercentage,
-                revenuesByUnitKeys: Object.keys(originalData?.[year]?.revenuesByUnit || {}),
-                cmvByUnitKeys: Object.keys(originalData?.[year]?.cmvByUnit || {})
-              });
-            }
 
             return (
               <div key={index} className="mb-3">

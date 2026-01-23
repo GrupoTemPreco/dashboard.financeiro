@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { X, Search } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { X, Search, Loader2 } from 'lucide-react';
 
 interface KPIDetailModalProps {
   isOpen: boolean;
@@ -7,6 +7,13 @@ interface KPIDetailModalProps {
   title: string;
   data: any[];
   type: 'accounts_payable' | 'revenues' | 'transactions' | 'generic' | 'mixed';
+  loadPaginatedData?: (page: number, pageSize: number, filters: {
+    status?: string;
+    businessUnit?: string;
+    startDate?: string;
+    endDate?: string;
+    searchTerm?: string;
+  }) => Promise<{ data: any[]; totalCount: number; hasMore: boolean }>;
 }
 
 export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
@@ -14,13 +21,139 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
   onClose,
   title,
   data,
-  type
+  type,
+  loadPaginatedData
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'previsto' | 'realizado'>('all');
   const [businessUnitFilter, setBusinessUnitFilter] = useState<string>('all');
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
+
+  // Estados para paginação
+  const [loadedData, setLoadedData] = useState<any[]>([]);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const PAGE_SIZE = 500;
+
+  // Carregar dados iniciais quando o modal abrir ou filtros mudarem
+  useEffect(() => {
+    if (!isOpen) {
+      // Resetar estados quando o modal fechar
+      setLoadedData([]);
+      setCurrentPage(0);
+      setTotalCount(0);
+      setHasMore(false);
+      setSearchTerm('');
+      setStatusFilter('all');
+      setBusinessUnitFilter('all');
+      setStartDate('');
+      setEndDate('');
+      return;
+    }
+
+    // Se não tiver função de carregamento paginado, usar dados passados diretamente (compatibilidade)
+    if (!loadPaginatedData) {
+      setLoadedData(data);
+      setTotalCount(data.length);
+      setHasMore(false);
+      return;
+    }
+
+    // Carregar primeira página
+    const loadInitialData = async () => {
+      setIsLoading(true);
+      setCurrentPage(0);
+      setLoadedData([]);
+
+      try {
+        const result = await loadPaginatedData(0, PAGE_SIZE, {
+          status: statusFilter,
+          businessUnit: businessUnitFilter,
+          startDate,
+          endDate,
+          searchTerm: searchTerm.trim() !== '' ? searchTerm : undefined
+        });
+
+        setLoadedData(result.data);
+        setTotalCount(result.totalCount);
+        setHasMore(result.hasMore);
+      } catch (error) {
+        console.error('Erro ao carregar dados:', error);
+        setLoadedData([]);
+        setTotalCount(0);
+        setHasMore(false);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadInitialData();
+  }, [isOpen, loadPaginatedData, statusFilter, businessUnitFilter, startDate, endDate]);
+
+  // Recarregar quando searchTerm mudar (com debounce)
+  useEffect(() => {
+    if (!isOpen || !loadPaginatedData) return;
+
+    const timeoutId = setTimeout(async () => {
+      setIsLoading(true);
+      setCurrentPage(0);
+      setLoadedData([]);
+
+      try {
+        const result = await loadPaginatedData(0, PAGE_SIZE, {
+          status: statusFilter,
+          businessUnit: businessUnitFilter,
+          startDate,
+          endDate,
+          searchTerm: searchTerm.trim() !== '' ? searchTerm : undefined
+        });
+
+        setLoadedData(result.data);
+        setTotalCount(result.totalCount);
+        setHasMore(result.hasMore);
+      } catch (error) {
+        console.error('Erro ao carregar dados:', error);
+        setLoadedData([]);
+        setTotalCount(0);
+        setHasMore(false);
+      } finally {
+        setIsLoading(false);
+      }
+    }, 500); // Debounce de 500ms
+
+    return () => clearTimeout(timeoutId);
+  }, [searchTerm]);
+
+  // Função para carregar mais dados
+  const loadMore = async () => {
+    if (!loadPaginatedData || isLoadingMore || !hasMore) return;
+
+    setIsLoadingMore(true);
+    const nextPage = currentPage + 1;
+
+    try {
+      const result = await loadPaginatedData(nextPage, PAGE_SIZE, {
+        status: statusFilter,
+        businessUnit: businessUnitFilter,
+        startDate,
+        endDate,
+        searchTerm: searchTerm.trim() !== '' ? searchTerm : undefined
+      });
+
+      setLoadedData(prev => [...prev, ...result.data]);
+      setCurrentPage(nextPage);
+      setTotalCount(result.totalCount);
+      setHasMore(result.hasMore);
+    } catch (error) {
+      console.error('Erro ao carregar mais dados:', error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -37,9 +170,46 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
     return d.toLocaleDateString('pt-BR');
   };
 
+  // Para tipos simples, os dados já vêm filtrados do banco
+  // Para mixed, pode precisar de filtro adicional no front (busca de texto)
+  const filteredData = useMemo(() => {
+    if (!loadPaginatedData) {
+      // Modo compatibilidade: usar dados passados diretamente
+      return data.filter(item => {
+        const matchesSearch = searchTerm === '' ||
+          JSON.stringify(item).toLowerCase().includes(searchTerm.toLowerCase());
+
+        const matchesStatus = statusFilter === 'all' ||
+          item.status?.toLowerCase() === statusFilter ||
+          (statusFilter === 'realizado' && (item.status?.toLowerCase() === 'paga' || !item.status));
+
+        const matchesBusinessUnit = businessUnitFilter === 'all' ||
+          String(item.business_unit) === businessUnitFilter;
+
+        const itemDate = item.payment_date || item.transaction_date || item.due_date || item.balance_date || item.issue_date || item.date || '';
+        const matchesStartDate = !startDate || itemDate >= startDate;
+        const matchesEndDate = !endDate || itemDate <= endDate;
+
+        return matchesSearch && matchesStatus && matchesBusinessUnit && matchesStartDate && matchesEndDate;
+      });
+    }
+
+    // Com paginação: os dados já vêm filtrados do banco, mas para mixed pode precisar busca adicional
+    if (type === 'mixed' && searchTerm.trim() !== '') {
+      const searchLower = searchTerm.toLowerCase();
+      return loadedData.filter(item => 
+        JSON.stringify(item).toLowerCase().includes(searchLower)
+      );
+    }
+
+    return loadedData;
+  }, [loadPaginatedData, loadedData, data, searchTerm, statusFilter, businessUnitFilter, startDate, endDate, type]);
+
+  // Obter business units únicos dos dados carregados
   const uniqueBusinessUnits = useMemo(() => {
     const units = new Set<string>();
-    data.forEach(item => {
+    const dataSource = loadPaginatedData ? loadedData : data;
+    dataSource.forEach(item => {
       if (item.business_unit) {
         units.add(String(item.business_unit));
       }
@@ -50,27 +220,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
       if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
       return a.localeCompare(b);
     });
-  }, [data]);
-
-  const filteredData = useMemo(() => {
-    return data.filter(item => {
-      const matchesSearch = searchTerm === '' ||
-        JSON.stringify(item).toLowerCase().includes(searchTerm.toLowerCase());
-
-      const matchesStatus = statusFilter === 'all' ||
-        item.status?.toLowerCase() === statusFilter ||
-        (statusFilter === 'realizado' && (item.status?.toLowerCase() === 'paga' || !item.status));
-
-      const matchesBusinessUnit = businessUnitFilter === 'all' ||
-        String(item.business_unit) === businessUnitFilter;
-
-      const itemDate = item.payment_date || item.transaction_date || item.due_date || item.balance_date || item.issue_date || item.date || '';
-      const matchesStartDate = !startDate || itemDate >= startDate;
-      const matchesEndDate = !endDate || itemDate <= endDate;
-
-      return matchesSearch && matchesStatus && matchesBusinessUnit && matchesStartDate && matchesEndDate;
-    });
-  }, [data, searchTerm, statusFilter, businessUnitFilter, startDate, endDate]);
+  }, [loadPaginatedData, loadedData, data]);
 
   const totalAmount = useMemo(() => {
     return filteredData.reduce((sum, item) => {
@@ -344,7 +494,16 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
           <div className="px-6 py-4 bg-blue-50 border-b border-gray-200">
             <div className="flex justify-between items-center">
               <span className="text-sm text-gray-600">
-                Mostrando <span className="font-semibold text-gray-900">{filteredData.length}</span> de <span className="font-semibold text-gray-900">{data.length}</span> registros
+                {isLoading ? (
+                  <span>Carregando...</span>
+                ) : (
+                  <>
+                    Mostrando <span className="font-semibold text-gray-900">{filteredData.length}</span> de <span className="font-semibold text-gray-900">{loadPaginatedData ? totalCount : data.length}</span> registros
+                    {loadPaginatedData && hasMore && (
+                      <span className="ml-2 text-xs text-gray-500">(carregue mais para ver todos)</span>
+                    )}
+                  </>
+                )}
               </span>
               <span className="text-lg font-bold text-gray-900">
                 Total: {formatCurrency(totalAmount)}
@@ -353,25 +512,51 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
           </div>
 
           <div className="overflow-x-auto" style={{ maxHeight: '60vh' }}>
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50 sticky top-0">
-                <tr>
-                  {renderTableHeaders()}
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredData.length > 0 ? (
-                  filteredData.map((item, index) => renderTableRow(item, index))
-                ) : (
+            {isLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+                <span className="ml-3 text-gray-600">Carregando dados...</span>
+              </div>
+            ) : (
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50 sticky top-0">
                   <tr>
-                    <td colSpan={type === 'mixed' ? 7 : 6} className="px-4 py-8 text-center text-gray-500">
-                      Nenhum registro encontrado
-                    </td>
+                    {renderTableHeaders()}
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {filteredData.length > 0 ? (
+                    filteredData.map((item, index) => renderTableRow(item, index))
+                  ) : (
+                    <tr>
+                      <td colSpan={type === 'mixed' ? 7 : 6} className="px-4 py-8 text-center text-gray-500">
+                        Nenhum registro encontrado
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
+
+          {loadPaginatedData && hasMore && !isLoading && (
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-200">
+              <button
+                onClick={loadMore}
+                disabled={isLoadingMore}
+                className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center"
+              >
+                {isLoadingMore ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                    Carregando mais...
+                  </>
+                ) : (
+                  `Carregar mais (${totalCount - filteredData.length} restantes)`
+                )}
+              </button>
+            </div>
+          )}
 
           <div className="px-6 py-4 bg-gray-50 border-t border-gray-200">
             <button
