@@ -28,7 +28,6 @@ export const ConfirmOverwriteModal: React.FC<ConfirmOverwriteModalProps> = ({
       revenues_dre: 'Receita DRE',
       cmv_dre: 'CMV DRE',
       initial_balances: 'Saldos Bancários',
-      faturamento_dre: 'Faturamento DRE',
       orcamento_dre: 'Orçamento DRE'
     };
     return map[type] || type;

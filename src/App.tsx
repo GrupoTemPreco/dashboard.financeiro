@@ -19,7 +19,7 @@ import { CardSkeleton } from './components/CardSkeleton';
 import { ChartSkeleton } from './components/ChartSkeleton';
 import { PageLoader } from './components/PageLoader';
 import { FinancialRecord, Filters, ImportedFile } from './types/financial';
-import { processExcelFile, processCompaniesFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, processFaturamentoDREFile, processOrcamentoDREFile, validateFileFormat } from './utils/excelProcessor';
+import { processExcelFile, processCompaniesFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, processOrcamentoDREFile, validateFileFormat } from './utils/excelProcessor';
 import { filterData, calculateKPIs } from './utils/dataProcessor';
 import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List, Moon, Sun, Eye, EyeOff } from 'lucide-react';
 import { supabase } from './lib/supabase';
@@ -646,7 +646,6 @@ function App() {
       'revenues_dre': 'receitas_dre',
       'cmv_dre': 'cmv_dre',
       'initial_balances': 'saldos_iniciais',
-      'faturamento_dre': 'faturamento_dre',
       'orcamento_dre': 'orcamento_dre',
       'transactions': 'transactions'
     };
@@ -664,7 +663,6 @@ function App() {
       'receitas_dre': 'revenues_dre',
       'cmv_dre': 'cmv_dre',
       'saldos_iniciais': 'initial_balances',
-      'faturamento_dre': 'faturamento_dre',
       'orcamento_dre': 'orcamento_dre',
       'transactions': 'transactions'
     };
@@ -769,13 +767,6 @@ function App() {
           .eq('import_id', importId);
         if (error) throw error;
         console.log('✅ Dados de saldos iniciais deletados');
-      } else if (fileType === 'faturamento_dre') {
-        const { error } = await supabase
-          .from('faturamento_dre')
-          .delete()
-          .eq('import_id', importId);
-        if (error) throw error;
-        console.log('✅ Dados de faturamento DRE deletados');
       } else if (fileType === 'orcamento_dre') {
         const { error } = await supabase
           .from('orcamento_dre')
@@ -807,7 +798,7 @@ function App() {
     }
   };
 
-  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'faturamento_dre' | 'orcamento_dre', currentIndex?: number, totalFiles?: number, shouldOverwrite?: boolean, shouldAccumulate?: boolean) => {
+  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre', currentIndex?: number, totalFiles?: number, shouldOverwrite?: boolean, shouldAccumulate?: boolean) => {
     // Validar formato do arquivo antes de processar
     if (type !== 'transactions') {
       const validation = await validateFileFormat(file, type);
@@ -1166,51 +1157,6 @@ function App() {
         await loadDataFromSupabase();
         recordCount = importedBalances.length;
         console.log('Saved Initial Balances to Supabase');
-      } else if (type === 'faturamento_dre') {
-        console.log('🔄 Starting Faturamento DRE import...');
-        console.log('📁 File info:', { name: file.name, size: file.size, type: file.type });
-        const importedFaturamentoDRE = await processFaturamentoDREFile(file);
-        console.log('✅ Faturamento DRE importado:', importedFaturamentoDRE);
-        console.log('📊 Number of entries:', importedFaturamentoDRE.length);
-
-        if (importedFaturamentoDRE.length === 0) {
-          throw new Error('Nenhum faturamento DRE foi processado. Verifique o formato do arquivo.');
-        }
-
-        // Se deve sobrepor, deletar dados antigos primeiro
-        if (shouldOverwrite && !shouldAccumulate) {
-          const { error: deleteError } = await supabase
-            .from('faturamento_dre')
-            .delete()
-            .neq('id', '00000000-0000-0000-0000-000000000000');
-          if (deleteError) throw deleteError;
-        }
-
-        // Add import_id to each record
-        const recordsWithImportId = importedFaturamentoDRE.map(record => ({
-          ...record,
-          import_id: importId
-        }));
-
-        console.log('Records to insert:', recordsWithImportId);
-
-        // Save to Supabase faturamento_dre table - sempre usar insert
-        const { data: insertedData, error } = await supabase
-          .from('faturamento_dre')
-          .insert(recordsWithImportId)
-          .select();
-
-        if (error) {
-          console.error('Supabase insert error:', error);
-          throw error;
-        }
-
-        console.log('Inserted data:', insertedData);
-
-        // Reload from database
-        await loadDataFromSupabase();
-        recordCount = importedFaturamentoDRE.length;
-        console.log('Saved Faturamento DRE to Supabase');
       } else if (type === 'orcamento_dre') {
         console.log('🔄 Starting Orçamento DRE import...');
         console.log('📁 File info:', { name: file.name, size: file.size, type: file.type });
@@ -1325,7 +1271,7 @@ function App() {
 
   const handleFileSelectWithMode = (
     file: File,
-    type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'faturamento_dre' | 'orcamento_dre',
+    type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre',
     currentIndex?: number,
     totalFiles?: number
   ) => {

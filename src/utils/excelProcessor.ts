@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { FinancialRecord, Company, AccountsPayable, Revenue, FinancialTransaction } from '../types/financial';
 
-export type FileType = 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'faturamento_dre' | 'orcamento_dre';
+export type FileType = 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre';
 
 export interface ValidationResult {
   isValid: boolean;
@@ -124,52 +124,31 @@ export const validateFileFormat = (file: File, expectedType: FileType): Promise<
             break;
 
           case 'revenues_dre':
-            // Revenues DRE: A=Status (deve ser "Recebida"), B=Unidade, C=Plano de Contas (deve ser "Receita Bruta"), D=Data Emissão, E=Valor
+            // Receita DRE: A=Unidade de Negócio, B=Data emissão, C=Valor
             if (header.length < 3) {
               validationResult = {
                 isValid: false,
-                errorMessage: 'O arquivo de Receita DRE deve ter pelo menos 3 colunas: Status, Unidade de Negócio, Plano de Contas, Data de Emissão e Valor.'
+                errorMessage: 'O arquivo de Receita DRE deve ter pelo menos 3 colunas: Unidade de Negócio, Data emissão e Valor.'
               };
             } else {
-              // Verificar nas primeiras linhas se o Status é "Recebida" e Plano de Contas é "Receita Bruta"
-              let foundValidRow = false;
-              for (const row of sampleRows) {
-                const rowArray = row as any[];
-                if (rowArray && Array.isArray(rowArray) && rowArray.length >= 3) {
-                  const status = String(rowArray[0] || '').toLowerCase().trim();
-                  const chartOfAccounts = String(rowArray[2] || '').trim();
-                  if (status === 'recebida' && chartOfAccounts.toLowerCase().includes('receita bruta')) {
-                    foundValidRow = true;
-                    break;
-                  }
-                }
-              }
+              // Verificar se tem coluna de Status (típica de outras tabelas DRE antigas)
+              const hasStatus = header.some((col: any) => String(col || '').toLowerCase().includes('status'));
+              const hasCredor = header.some((col: any) => String(col || '').toLowerCase().includes('credor') || String(col || '').toLowerCase().includes('fornecedor'));
+              const hasChartOfAccounts = header.some((col: any) => String(col || '').toLowerCase().includes('plano') || String(col || '').toLowerCase().includes('chart'));
               
-              // Verificar se tem coluna de Banco (típica de Saldos)
-              const hasBank = header.some((col: any) => String(col || '').toLowerCase().includes('banco') || String(col || '').toLowerCase().includes('bank'));
-              if (hasBank) {
+              if (hasStatus || hasCredor || hasChartOfAccounts) {
                 validationResult = {
                   isValid: false,
-                  errorMessage: 'Este arquivo parece ser de Saldos Bancários, não de Receita DRE. O arquivo de Receita DRE deve ter: Status (Recebida), Unidade de Negócio, Plano de Contas (Receita Bruta), Data de Emissão e Valor.'
+                  errorMessage: 'Este arquivo parece ter formato antigo. O arquivo de Receita DRE deve ter apenas 3 colunas: Unidade de Negócio, Data emissão e Valor (sem Status, Credor ou Plano de Contas).'
                 };
-              } else if (!foundValidRow && sampleRows.length > 0) {
-                // Se não encontrou uma linha válida, verificar se tem características de outro tipo
-                const firstRow = sampleRows[0] as any[];
-                if (firstRow && firstRow.length >= 3) {
-                  const status = String(firstRow[0] || '').toLowerCase().trim();
-                  const hasCredor = header.some((col: any) => String(col || '').toLowerCase().includes('credor'));
-                  
-                  if (hasCredor) {
-                    validationResult = {
-                      isValid: false,
-                      errorMessage: 'Este arquivo parece ser de Contas a Pagar ou Lançamentos Previstos (tem coluna Credor), não de Receita DRE. O arquivo de Receita DRE não deve ter coluna de Credor e o Status deve ser "Recebida".'
-                    };
-                  } else if (status === 'pago' || status === 'paga') {
-                    validationResult = {
-                      isValid: false,
-                      errorMessage: 'Este arquivo parece ser de CMV DRE (Status "Pago"), não de Receita DRE. O arquivo de Receita DRE deve ter Status "Recebida" e Plano de Contas "Receita Bruta".'
-                    };
-                  }
+              } else {
+                // Verificar se tem coluna de Banco (típica de Saldos)
+                const hasBank = header.some((col: any) => String(col || '').toLowerCase().includes('banco') || String(col || '').toLowerCase().includes('bank'));
+                if (hasBank) {
+                  validationResult = {
+                    isValid: false,
+                    errorMessage: 'Este arquivo parece ser de Saldos Bancários, não de Receita DRE. O arquivo de Receita DRE deve ter: Unidade de Negócio, Data emissão e Valor.'
+                  };
                 }
               }
             }
@@ -279,28 +258,6 @@ export const validateFileFormat = (file: File, expectedType: FileType): Promise<
                     };
                   }
                 }
-              }
-            }
-            break;
-
-          case 'faturamento_dre':
-            // Faturamento DRE: A=Unidade de Negócio, B=Data emissão, C=Valor
-            if (header.length < 3) {
-              validationResult = {
-                isValid: false,
-                errorMessage: 'O arquivo de Faturamento DRE deve ter pelo menos 3 colunas: Unidade de Negócio, Data emissão e Valor.'
-              };
-            } else {
-              // Verificar se tem coluna de Status (típica de outras tabelas DRE)
-              const hasStatus = header.some((col: any) => String(col || '').toLowerCase().includes('status'));
-              const hasCredor = header.some((col: any) => String(col || '').toLowerCase().includes('credor') || String(col || '').toLowerCase().includes('fornecedor'));
-              const hasChartOfAccounts = header.some((col: any) => String(col || '').toLowerCase().includes('plano') || String(col || '').toLowerCase().includes('chart'));
-              
-              if (hasStatus || hasCredor || hasChartOfAccounts) {
-                validationResult = {
-                  isValid: false,
-                  errorMessage: 'Este arquivo parece ser de outro tipo de DRE (tem colunas de Status, Credor ou Plano de Contas). O arquivo de Faturamento DRE deve ter apenas: Unidade de Negócio, Data emissão e Valor.'
-                };
               }
             }
             break;
@@ -834,44 +791,33 @@ export const processRevenuesDREFile = (file: File): Promise<any[]> => {
         }
 
         const revenuesDRE: any[] = [];
+        let totalProcessed = 0;
+        let totalIgnored = 0;
 
         for (let i = 1; i < jsonData.length; i++) {
           try {
             const row = jsonData[i] as any[];
 
-            if (!row || row.length === 0) continue;
+            if (!row || row.length === 0) {
+              totalIgnored++;
+              continue;
+            }
 
-            const status = row[0];
-            const businessUnit = row[1];
-            const chartOfAccounts = row[2];
-            const issueDate = row[3];
-            const amount = row[4];
+            // Formato simplificado: Unidade de Negócio | Data | Valor
+            const businessUnit = row[0];
+            const issueDate = row[1];
+            const amount = row[2];
 
-            if (!status || !businessUnit || !chartOfAccounts || !issueDate) {
+            if (!businessUnit || !issueDate || amount === undefined || amount === null || amount === '') {
               console.log(`⚠️ Linha ${i + 1} ignorada: dados incompletos`);
-              continue;
-            }
-
-            const statusStr = String(status).toLowerCase().trim();
-            if (statusStr !== 'recebida') {
-              console.log(`⚠️ Linha ${i + 1} ignorada: Status deve ser "Recebida", encontrado: "${status}"`);
-              continue;
-            }
-
-            const chartStr = String(chartOfAccounts).trim();
-            if (chartStr !== 'Receita Bruta') {
-              console.log(`⚠️ Linha ${i + 1} ignorada: Plano de Contas deve ser "Receita Bruta", encontrado: "${chartOfAccounts}"`);
+              totalIgnored++;
               continue;
             }
 
             const businessUnitNum = typeof businessUnit === 'number' ? businessUnit : parseInt(String(businessUnit));
             if (isNaN(businessUnitNum)) {
               console.log(`⚠️ Linha ${i + 1} ignorada: Unidade de Negócio deve ser um número, encontrado: "${businessUnit}"`);
-              continue;
-            }
-
-            if (amount === undefined || amount === null || amount === '') {
-              console.log(`⚠️ Linha ${i + 1} ignorada: valor ausente`);
+              totalIgnored++;
               continue;
             }
 
@@ -885,31 +831,39 @@ export const processRevenuesDREFile = (file: File): Promise<any[]> => {
                 formattedDate = `${dateParts[2]}-${dateParts[1].padStart(2, '0')}-${dateParts[0].padStart(2, '0')}`;
               } else {
                 console.log(`⚠️ Linha ${i + 1} ignorada: formato de data inválido`);
+                totalIgnored++;
                 continue;
               }
             } else {
               console.log(`⚠️ Linha ${i + 1} ignorada: data em formato desconhecido`);
+              totalIgnored++;
               continue;
             }
 
             const parsedAmount = parseFloat(String(amount).replace(',', '.'));
             if (isNaN(parsedAmount)) {
               console.log(`⚠️ Linha ${i + 1} ignorada: valor inválido`);
+              totalIgnored++;
               continue;
             }
 
             revenuesDRE.push({
-              status: 'recebida',
               business_unit: String(businessUnitNum),
-              chart_of_accounts: 'Receita Bruta',
               issue_date: formattedDate,
               amount: parsedAmount
+              // status e chart_of_accounts serão preenchidos com valores padrão pela tabela
             });
+            totalProcessed++;
           } catch (rowError) {
             console.error(`❌ Erro ao processar linha ${i + 1}:`, rowError);
+            totalIgnored++;
             continue;
           }
         }
+
+        console.log(`\n📊 RESUMO DO PROCESSAMENTO:`);
+        console.log(`✅ Registros processados: ${totalProcessed}`);
+        console.log(`⚠️ Linhas ignoradas: ${totalIgnored}`);
 
         if (revenuesDRE.length === 0) {
           throw new Error('Nenhum registro válido foi encontrado no arquivo. Verifique se o formato está correto.');
@@ -1180,127 +1134,6 @@ export const processInitialBalancesFile = (file: File): Promise<any[]> => {
         resolve(initialBalances);
       } catch (error) {
         console.error('❌ Erro ao processar Saldos Bancários:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido ao processar arquivo';
-        reject(new Error(errorMessage));
-      }
-    };
-
-    reader.onerror = (error) => {
-      console.error('❌ Erro ao ler arquivo:', error);
-      reject(new Error('Falha ao ler o arquivo. Verifique se o arquivo está corrompido.'));
-    };
-
-    reader.readAsBinaryString(file);
-  });
-};
-
-export const processFaturamentoDREFile = (file: File): Promise<any[]> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onload = (e) => {
-      try {
-        console.log('🔄 Iniciando processamento de Faturamento DRE...');
-        const data = e.target?.result;
-
-        if (!data) {
-          throw new Error('Arquivo vazio ou não pôde ser lido');
-        }
-
-        const workbook = XLSX.read(data, { type: 'binary' });
-        console.log('📊 Planilhas disponíveis:', workbook.SheetNames);
-
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-
-        console.log(`📋 Total de linhas no arquivo: ${jsonData.length}`);
-
-        if (jsonData.length < 2) {
-          throw new Error('Arquivo não contém dados suficientes (necessário pelo menos 2 linhas: cabeçalho + dados)');
-        }
-
-        const faturamentoDRE: any[] = [];
-        let totalProcessed = 0;
-        let totalIgnored = 0;
-
-        for (let i = 1; i < jsonData.length; i++) {
-          try {
-            const row = jsonData[i] as any[];
-
-            if (!row || row.length === 0) {
-              totalIgnored++;
-              continue;
-            }
-
-            const businessUnit = row[0];
-            const issueDate = row[1];
-            const amount = row[2];
-
-            if (!businessUnit || !issueDate || amount === undefined || amount === null || amount === '') {
-              console.log(`⚠️ Linha ${i + 1} ignorada: dados incompletos`);
-              totalIgnored++;
-              continue;
-            }
-
-            const businessUnitNum = typeof businessUnit === 'number' ? businessUnit : parseInt(String(businessUnit));
-            if (isNaN(businessUnitNum)) {
-              console.log(`⚠️ Linha ${i + 1} ignorada: Unidade de Negócio deve ser um número, encontrado: "${businessUnit}"`);
-              totalIgnored++;
-              continue;
-            }
-
-            let formattedDate: string;
-            if (typeof issueDate === 'number') {
-              const jsDate = XLSX.SSF.parse_date_code(issueDate);
-              formattedDate = `${jsDate.y}-${String(jsDate.m).padStart(2, '0')}-${String(jsDate.d).padStart(2, '0')}`;
-            } else if (typeof issueDate === 'string') {
-              const dateParts = issueDate.split('/');
-              if (dateParts.length === 3) {
-                formattedDate = `${dateParts[2]}-${dateParts[1].padStart(2, '0')}-${dateParts[0].padStart(2, '0')}`;
-              } else {
-                console.log(`⚠️ Linha ${i + 1} ignorada: formato de data inválido`);
-                totalIgnored++;
-                continue;
-              }
-            } else {
-              console.log(`⚠️ Linha ${i + 1} ignorada: data em formato desconhecido`);
-              totalIgnored++;
-              continue;
-            }
-
-            const parsedAmount = parseFloat(String(amount).replace(',', '.'));
-            if (isNaN(parsedAmount)) {
-              console.log(`⚠️ Linha ${i + 1} ignorada: valor inválido`);
-              totalIgnored++;
-              continue;
-            }
-
-            faturamentoDRE.push({
-              business_unit: String(businessUnitNum),
-              issue_date: formattedDate,
-              amount: parsedAmount
-            });
-            totalProcessed++;
-          } catch (rowError) {
-            console.error(`❌ Erro ao processar linha ${i + 1}:`, rowError);
-            totalIgnored++;
-            continue;
-          }
-        }
-
-        console.log(`\n📊 RESUMO DO PROCESSAMENTO:`);
-        console.log(`✅ Registros processados: ${totalProcessed}`);
-        console.log(`⚠️ Linhas ignoradas: ${totalIgnored}`);
-
-        if (faturamentoDRE.length === 0) {
-          throw new Error('Nenhum registro válido foi encontrado no arquivo. Verifique se o formato está correto.');
-        }
-
-        console.log(`✅ Faturamento DRE - Processados ${faturamentoDRE.length} registros com sucesso`);
-        resolve(faturamentoDRE);
-      } catch (error) {
-        console.error('❌ Erro ao processar Faturamento DRE:', error);
         const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido ao processar arquivo';
         reject(new Error(errorMessage));
       }

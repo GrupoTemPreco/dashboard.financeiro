@@ -66,7 +66,6 @@ export interface ImportedFile {
     | 'revenues_dre'
     | 'cmv_dre'
     | 'initial_balances'
-    | 'faturamento_dre'
     | 'orcamento_dre';
   uploadDate: string;
   recordCount: number;
