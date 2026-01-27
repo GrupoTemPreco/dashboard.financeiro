@@ -542,6 +542,35 @@ export const DREPage: React.FC<DREPageProps> = ({
     return total;
   };
 
+  // Calcula o valor previsto de uma conta a partir de forecastedEntries
+  const getForecastedAccountValue = (accountName: string, startDate: string, endDate: string): number => {
+    if (!forecastedEntries || !Array.isArray(forecastedEntries) || forecastedEntries.length === 0) {
+      return 0;
+    }
+
+    // Para receita, não há forecasted entries normalmente, retornar 0
+    if (accountName === 'Receita') {
+      return 0;
+    }
+
+    // Para CMV, também não há forecasted entries normalmente
+    if (accountName === 'CMV') {
+      return 0;
+    }
+
+    // Buscar em forecastedEntries
+    const forecastedValue = forecastedEntries
+      .filter(entry => {
+        const dateMatch = entry.due_date >= startDate && entry.due_date <= endDate;
+        const accountMatch = entry.chart_of_accounts === accountName;
+        const companyMatch = isCompanyFiltered(entry.business_unit);
+        return dateMatch && accountMatch && companyMatch;
+      })
+      .reduce((sum, entry) => sum + Math.abs(parseFloat(entry.amount || 0)), 0);
+
+    return forecastedValue;
+  };
+
   // Calcula o valor de uma conta recursivamente (soma das subcontas)
   const getAccountValueRecursive = (account: any, month: 'current' | 'previous'): number => {
     const { start: currentStart, end: currentEnd } = getCurrentMonthDates();
@@ -617,6 +646,68 @@ export const DREPage: React.FC<DREPageProps> = ({
 
     // Se não tem fórmula ou é uma conta editável, buscar valor direto
     return getDirectAccountValue(account.name || account.id, startDate, endDate);
+  };
+
+  // Calcula o valor previsto de uma conta recursivamente
+  const getForecastedAccountValueRecursive = (account: any): number => {
+    const { start, end } = getCurrentMonthDates();
+
+    // Se a conta tem fórmula 'sum', calcular a soma das subcontas
+    if (account.formula === 'sum') {
+      const subAccounts = dreAccountStructure.filter(
+        acc => acc.parent === account.id || acc.parent === account.name
+      );
+
+      let sum = 0;
+      subAccounts.forEach(subAccount => {
+        sum += getForecastedAccountValueRecursive(subAccount);
+      });
+
+      return sum;
+    }
+
+    // Se a conta tem uma fórmula específica, calcular baseado nos valores previstos
+    if (account.formula && account.formula !== 'sum') {
+      if (account.formula === 'receita-deducoes') {
+        const receita = getForecastedAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'receita') || { name: 'Receita' }
+        );
+        const deducoes = getForecastedAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'deducoes') || { name: 'Deduções' }
+        );
+        return receita - deducoes;
+      }
+      if (account.formula === 'receitaliq-cmv') {
+        const receitaLiq = getForecastedAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'receita-liquida') || { name: 'Receita Líquida' }
+        );
+        const cmv = getForecastedAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'cmv') || { name: 'CMV' }
+        );
+        return receitaLiq - cmv;
+      }
+      if (account.formula === 'lucrobruto-despop') {
+        const lucroBruto = getForecastedAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'lucro-bruto') || { name: 'Lucro Bruto' }
+        );
+        const despesasOp = getForecastedAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'despesas-op') || { name: 'Despesas Operacionais' }
+        );
+        return lucroBruto - despesasOp;
+      }
+      if (account.formula === 'ebitda-despnaoop') {
+        const ebitda = getForecastedAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'ebitda') || { name: 'EBITDA' }
+        );
+        const despesasNaoOp = getForecastedAccountValueRecursive(
+          dreAccountStructure.find(a => a.id === 'despesas-nao-op') || { name: 'Despesas não operacionais' }
+        );
+        return ebitda - despesasNaoOp;
+      }
+    }
+
+    // Se não tem fórmula ou é uma conta editável, buscar valor previsto direto
+    return getForecastedAccountValue(account.name || account.id, start, end);
   };
 
   // Helper para calcular valores das contas
@@ -706,9 +797,26 @@ export const DREPage: React.FC<DREPageProps> = ({
 
     const currentValue = getAccountValue(account.name, 'current');
     const previousValue = getAccountValue(account.name, 'previous');
-    const variation = currentValue - previousValue;
-    const receita = getAccountValue('Receita', 'current');
-    const percentOfRevenue = receita > 0 ? (currentValue / receita) * 100 : 0;
+    
+    // Calcular valor previsto
+    const accountForForecast = dreAccountStructure.find(
+      acc => acc.name === account.name || acc.id === account.id
+    );
+    const forecastedValue = accountForForecast 
+      ? getForecastedAccountValueRecursive(accountForForecast)
+      : 0;
+    
+    // Variação = previsto - realizado (em valor e em percentual)
+    const variationValue = forecastedValue - currentValue;
+    const variationPercentage = forecastedValue !== 0 
+      ? ((forecastedValue - currentValue) / forecastedValue) * 100 
+      : 0;
+    
+    // % Receita = realizado - previsto (em valor e em percentual)
+    const revenueDiffValue = currentValue - forecastedValue;
+    const revenueDiffPercentage = forecastedValue !== 0 
+      ? ((currentValue - forecastedValue) / forecastedValue) * 100 
+      : 0;
 
     const paddingClass = account.level === 1 ? 'px-4' : account.level === 2 ? 'pl-8 pr-4' : 'pl-12 pr-4';
     const fontClass = account.bold ? 'font-semibold' : '';
@@ -756,17 +864,30 @@ export const DREPage: React.FC<DREPageProps> = ({
           </div>
         </td>
         <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
-          {formatCurrency(currentValue)}
-        </td>
-        <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
           {formatCurrency(previousValue)}
         </td>
         {renderBudgetCell(account.name, account.editable)}
-        <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
-          {formatCurrency(variation)}
+        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+          {formatCurrency(forecastedValue)}
+        </td>
+        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+          {formatCurrency(currentValue)}
         </td>
         <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
-          {percentOfRevenue.toFixed(1)}%
+          <div className="flex flex-col items-end">
+            <span>{formatCurrency(variationValue)}</span>
+            <span className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
+              {variationPercentage >= 0 ? '+' : ''}{variationPercentage.toFixed(1)}%
+            </span>
+          </div>
+        </td>
+        <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+          <div className="flex flex-col items-end">
+            <span>{formatCurrency(revenueDiffValue)}</span>
+            <span className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
+              {revenueDiffPercentage >= 0 ? '+' : ''}{revenueDiffPercentage.toFixed(1)}%
+            </span>
+          </div>
         </td>
       </tr>
     );
@@ -1390,17 +1511,22 @@ export const DREPage: React.FC<DREPageProps> = ({
                 <th className={`border px-4 py-3 text-right text-sm font-semibold ${
                   darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
                 }`}>
-                  {format(selectedMonth, 'MMM/yy', { locale: ptBR })}
+                  {format(subMonths(selectedMonth, 1), 'MMMM', { locale: ptBR })}
                 </th>
                 <th className={`border px-4 py-3 text-right text-sm font-semibold ${
                   darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
                 }`}>
-                  {format(subMonths(selectedMonth, 1), 'MMM/yy', { locale: ptBR })}
+                  {format(selectedMonth, 'MMM', { locale: ptBR })} Orçamento
                 </th>
                 <th className={`border px-4 py-3 text-right text-sm font-semibold ${
                   darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
                 }`}>
-                  Orçamento
+                  {format(selectedMonth, 'MMM', { locale: ptBR })} Previsto
+                </th>
+                <th className={`border px-4 py-3 text-right text-sm font-semibold ${
+                  darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
+                }`}>
+                  {format(selectedMonth, 'MMM', { locale: ptBR })} Realizado
                 </th>
                 <th className={`border px-4 py-3 text-right text-sm font-semibold ${
                   darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'

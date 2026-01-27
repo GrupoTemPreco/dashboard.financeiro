@@ -4,8 +4,8 @@ import { ImportedFile } from '../types/financial';
 import * as XLSX from 'xlsx';
 
 interface DataImportProps {
-  onFileUpload: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances', currentIndex?: number, totalFiles?: number) => Promise<void>;
-  onFileSelectWithMode?: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances', currentIndex?: number, totalFiles?: number) => void;
+  onFileUpload: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'faturamento_dre' | 'orcamento_dre', currentIndex?: number, totalFiles?: number) => Promise<void>;
+  onFileSelectWithMode?: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'faturamento_dre' | 'orcamento_dre', currentIndex?: number, totalFiles?: number) => void;
   importedFiles: ImportedFile[];
   onDeleteFile: (fileId: string) => void;
   onRestoreFile: (fileId: string) => void;
@@ -45,6 +45,8 @@ export const DataImport: React.FC<DataImportProps> = ({
   const revenuesDREInputRef = useRef<HTMLInputElement>(null);
   const cmvDREInputRef = useRef<HTMLInputElement>(null);
   const initialBalancesInputRef = useRef<HTMLInputElement>(null);
+  const faturamentoDREInputRef = useRef<HTMLInputElement>(null);
+  const orcamentoDREInputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = (e: React.DragEvent, type: string) => {
     e.preventDefault();
@@ -55,7 +57,7 @@ export const DataImport: React.FC<DataImportProps> = ({
     setDragOver(null);
   };
 
-  const handleDrop = async (e: React.DragEvent, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances') => {
+  const handleDrop = async (e: React.DragEvent, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'faturamento_dre' | 'orcamento_dre') => {
     e.preventDefault();
     setDragOver(null);
     const files = Array.from(e.dataTransfer.files);
@@ -74,7 +76,7 @@ export const DataImport: React.FC<DataImportProps> = ({
     }
   };
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances') => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'faturamento_dre' | 'orcamento_dre') => {
     const files = Array.from(e.target.files || []);
     if (files.length > 0) {
       // Se onFileSelectWithMode estiver disponível, usar o novo fluxo com modal de escolha
@@ -245,7 +247,7 @@ export const DataImport: React.FC<DataImportProps> = ({
     XLSX.writeFile(wb, 'modelo_cmv_dre.xlsx');
   };
 
-  const renderFormatTooltip = (type: 'revenues_dre' | 'cmv_dre' | 'initial_balances') => {
+  const renderFormatTooltip = (type: 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'faturamento_dre' | 'orcamento_dre') => {
     const formatInfo = {
       revenues_dre: {
         title: 'Formato esperado - Receita DRE',
@@ -270,6 +272,27 @@ export const DataImport: React.FC<DataImportProps> = ({
         ],
         templateLink: '/templates/template_cmv_dre.xlsx',
         color: 'rose'
+      },
+      faturamento_dre: {
+        title: 'Formato esperado - Faturamento DRE',
+        items: [
+          'Unidade de Negócio: Número da empresa cadastrada',
+          'Data emissão: Formato data (DD/MM/AAAA)',
+          'Valor: Formato numérico'
+        ],
+        templateLink: '/templates/template_faturamento_dre.xlsx',
+        color: 'blue'
+      },
+      orcamento_dre: {
+        title: 'Formato esperado - Orçamento DRE',
+        items: [
+          'Unidade de Negócio: Número da empresa cadastrada',
+          'Nome da Conta: Nome da conta da DRE',
+          'Período: Data do período (DD/MM/AAAA)',
+          'Valor do Orçamento: Formato numérico'
+        ],
+        templateLink: '/templates/template_orcamento_dre.xlsx',
+        color: 'purple'
       },
       initial_balances: {
         title: 'Formato esperado - Saldos Bancários',
@@ -325,7 +348,9 @@ export const DataImport: React.FC<DataImportProps> = ({
       forecasted_entries: 'Lançamentos Previstos',
       revenues_dre: 'Receita DRE',
       cmv_dre: 'CMV DRE',
-      initial_balances: 'Saldos Bancários'
+      initial_balances: 'Saldos Bancários',
+      faturamento_dre: 'Faturamento DRE',
+      orcamento_dre: 'Orçamento DRE'
     };
     return map[type] || type;
   };
@@ -353,7 +378,9 @@ export const DataImport: React.FC<DataImportProps> = ({
       'forecasted_entries',
       'revenues_dre',
       'cmv_dre',
-      'initial_balances'
+      'initial_balances',
+      'faturamento_dre',
+      'orcamento_dre'
     ];
 
     const toggleSection = (key: string) => {
@@ -1036,7 +1063,7 @@ export const DataImport: React.FC<DataImportProps> = ({
       </div>
 
       {/* Upload Areas */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         {/* Companies Upload */}
         <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
           <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
@@ -1372,6 +1399,92 @@ export const DataImport: React.FC<DataImportProps> = ({
             accept=".xlsx,.xls"
             multiple
             onChange={(e) => handleFileSelect(e, 'initial_balances')}
+            className="hidden"
+          />
+        </div>
+
+        {/* Faturamento DRE Upload */}
+        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
+          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
+            <FileText className="w-5 h-5 mr-2 text-blue-600" />
+            9. Faturamento DRE
+            {renderFormatTooltip('faturamento_dre')}
+          </h3>
+
+          <div
+            className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+              dragOver === 'faturamento_dre'
+                ? darkMode
+                  ? 'border-blue-400 bg-blue-950/20'
+                  : 'border-blue-400 bg-blue-50'
+                : darkMode
+                  ? 'border-slate-600 hover:border-blue-400'
+                : 'border-gray-300 hover:border-blue-400'
+            }`}
+            onDragOver={(e) => handleDragOver(e, 'faturamento_dre')}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, 'faturamento_dre')}
+          >
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
+            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
+            <button
+              onClick={() => faturamentoDREInputRef.current?.click()}
+              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Selecionar Arquivos
+            </button>
+            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
+          </div>
+
+          <input
+            ref={faturamentoDREInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            multiple
+            onChange={(e) => handleFileSelect(e, 'faturamento_dre')}
+            className="hidden"
+          />
+        </div>
+
+        {/* Orçamento DRE Upload */}
+        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
+          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
+            <FileText className="w-5 h-5 mr-2 text-purple-600" />
+            10. Orçamento DRE
+            {renderFormatTooltip('orcamento_dre')}
+          </h3>
+
+          <div
+            className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+              dragOver === 'orcamento_dre'
+                ? darkMode
+                  ? 'border-purple-400 bg-purple-950/20'
+                  : 'border-purple-400 bg-purple-50'
+                : darkMode
+                  ? 'border-slate-600 hover:border-purple-400'
+                : 'border-gray-300 hover:border-purple-400'
+            }`}
+            onDragOver={(e) => handleDragOver(e, 'orcamento_dre')}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, 'orcamento_dre')}
+          >
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
+            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
+            <button
+              onClick={() => orcamentoDREInputRef.current?.click()}
+              className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+            >
+              Selecionar Arquivos
+            </button>
+            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
+          </div>
+
+          <input
+            ref={orcamentoDREInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            multiple
+            onChange={(e) => handleFileSelect(e, 'orcamento_dre')}
             className="hidden"
           />
         </div>

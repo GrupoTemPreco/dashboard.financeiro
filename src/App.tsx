@@ -19,7 +19,7 @@ import { CardSkeleton } from './components/CardSkeleton';
 import { ChartSkeleton } from './components/ChartSkeleton';
 import { PageLoader } from './components/PageLoader';
 import { FinancialRecord, Filters, ImportedFile } from './types/financial';
-import { processExcelFile, processCompaniesFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, validateFileFormat } from './utils/excelProcessor';
+import { processExcelFile, processCompaniesFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, processFaturamentoDREFile, processOrcamentoDREFile, validateFileFormat } from './utils/excelProcessor';
 import { filterData, calculateKPIs } from './utils/dataProcessor';
 import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List, Moon, Sun, Eye, EyeOff } from 'lucide-react';
 import { supabase } from './lib/supabase';
@@ -602,7 +602,7 @@ function App() {
         const formattedImports: ImportedFile[] = importsData.map((imp: any) => ({
           id: imp.id,
           name: imp.file_name,
-          type: imp.file_type,
+          type: getTypeFromTableName(imp.file_type), // Converter de português para inglês
           uploadDate: imp.imported_at,
           recordCount: imp.record_count,
           status: 'success',
@@ -635,15 +635,53 @@ function App() {
   };
 
 
+  // Função para converter tipo em inglês para nome da tabela em português
+  const getTableNameFromType = (type: string): string => {
+    const typeMap: Record<string, string> = {
+      'companies': 'empresas',
+      'accounts_payable': 'contas_a_pagar',
+      'revenues': 'receitas',
+      'financial_transactions': 'transacoes_financeiras',
+      'forecasted_entries': 'previstos',
+      'revenues_dre': 'receitas_dre',
+      'cmv_dre': 'cmv_dre',
+      'initial_balances': 'saldos_iniciais',
+      'faturamento_dre': 'faturamento_dre',
+      'orcamento_dre': 'orcamento_dre',
+      'transactions': 'transactions'
+    };
+    return typeMap[type] || type;
+  };
+
+  // Função reversa: converter nome da tabela em português para tipo em inglês
+  const getTypeFromTableName = (tableName: string): ImportedFile['type'] => {
+    const reverseMap: Record<string, ImportedFile['type']> = {
+      'empresas': 'companies',
+      'contas_a_pagar': 'accounts_payable',
+      'receitas': 'revenues',
+      'transacoes_financeiras': 'financial_transactions',
+      'previstos': 'forecasted_entries',
+      'receitas_dre': 'revenues_dre',
+      'cmv_dre': 'cmv_dre',
+      'saldos_iniciais': 'initial_balances',
+      'faturamento_dre': 'faturamento_dre',
+      'orcamento_dre': 'orcamento_dre',
+      'transactions': 'transactions'
+    };
+    return reverseMap[tableName] || 'companies'; // Fallback para um tipo válido
+  };
+
+
   const moveOldImportsToTrash = async (fileType: string) => {
     try {
-      console.log(`🗑️ Movendo imports antigos do tipo ${fileType} para a lixeira`);
+      const tableName = getTableNameFromType(fileType);
+      console.log(`🗑️ Movendo imports antigos do tipo ${tableName} para a lixeira`);
       
       // Buscar todos os imports ativos do mesmo tipo
       const { data: oldImports, error: fetchError } = await supabase
         .from('importacoes')
         .select('id')
-        .eq('file_type', fileType)
+        .eq('file_type', tableName)
         .eq('is_deleted', false);
 
       if (fetchError) throw fetchError;
@@ -680,36 +718,37 @@ function App() {
     try {
       console.log(`🗑️ Deletando dados antigos do import ${importId} (tipo: ${fileType})`);
       
+      // fileType já vem como nome da tabela em português do banco
       // Delete data from the appropriate table based on file type
-      if (fileType === 'accounts_payable') {
+      if (fileType === 'contas_a_pagar') {
         const { error } = await supabase
           .from('contas_a_pagar')
           .delete()
           .eq('import_id', importId);
         if (error) throw error;
         console.log('✅ Dados de contas a pagar deletados');
-      } else if (fileType === 'revenues') {
+      } else if (fileType === 'receitas') {
         const { error } = await supabase
           .from('receitas')
           .delete()
           .eq('import_id', importId);
         if (error) throw error;
         console.log('✅ Dados de receitas deletados');
-      } else if (fileType === 'financial_transactions') {
+      } else if (fileType === 'transacoes_financeiras') {
         const { error } = await supabase
           .from('transacoes_financeiras')
           .delete()
           .eq('import_id', importId);
         if (error) throw error;
         console.log('✅ Dados de transações financeiras deletados');
-      } else if (fileType === 'forecasted_entries') {
+      } else if (fileType === 'previstos') {
         const { error } = await supabase
           .from('previstos')
           .delete()
           .eq('import_id', importId);
         if (error) throw error;
         console.log('✅ Dados de lançamentos previstos deletados');
-      } else if (fileType === 'revenues_dre') {
+      } else if (fileType === 'receitas_dre') {
         const { error } = await supabase
           .from('receitas_dre')
           .delete()
@@ -723,17 +762,31 @@ function App() {
           .eq('import_id', importId);
         if (error) throw error;
         console.log('✅ Dados de CMV DRE deletados');
-      } else if (fileType === 'initial_balances') {
+      } else if (fileType === 'saldos_iniciais') {
         const { error } = await supabase
           .from('saldos_iniciais')
           .delete()
           .eq('import_id', importId);
         if (error) throw error;
         console.log('✅ Dados de saldos iniciais deletados');
-      } else if (fileType === 'companies') {
-        // Para companies, não deletamos por import_id pois não há essa coluna
+      } else if (fileType === 'faturamento_dre') {
+        const { error } = await supabase
+          .from('faturamento_dre')
+          .delete()
+          .eq('import_id', importId);
+        if (error) throw error;
+        console.log('✅ Dados de faturamento DRE deletados');
+      } else if (fileType === 'orcamento_dre') {
+        const { error } = await supabase
+          .from('orcamento_dre')
+          .delete()
+          .eq('import_id', importId);
+        if (error) throw error;
+        console.log('✅ Dados de orçamento DRE deletados');
+      } else if (fileType === 'empresas') {
+        // Para empresas, não deletamos por import_id pois não há essa coluna
         // O upsert na função handleDataImport já atualiza os dados existentes
-        console.log('ℹ️ Companies usa upsert, não é necessário deletar dados antigos');
+        console.log('ℹ️ Empresas usa upsert, não é necessário deletar dados antigos');
       }
 
       // Delete the import record
@@ -754,7 +807,7 @@ function App() {
     }
   };
 
-  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances', currentIndex?: number, totalFiles?: number, shouldOverwrite?: boolean, shouldAccumulate?: boolean) => {
+  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'faturamento_dre' | 'orcamento_dre', currentIndex?: number, totalFiles?: number, shouldOverwrite?: boolean, shouldAccumulate?: boolean) => {
     // Validar formato do arquivo antes de processar
     if (type !== 'transactions') {
       const validation = await validateFileFormat(file, type);
@@ -783,11 +836,12 @@ function App() {
 
     try {
       // Create import record in database first
+      const tableName = getTableNameFromType(type);
       const { data: importRecord, error: importError } = await supabase
         .from('importacoes')
         .insert({
           file_name: file.name,
-          file_type: type,
+          file_type: tableName,
           record_count: 0
         })
         .select()
@@ -815,12 +869,28 @@ function App() {
         const importedCompanies = await processCompaniesFile(file);
         console.log('Empresas importadas:', importedCompanies);
 
-        // Save to Supabase
-        const { error } = await supabase
-          .from('empresas')
-          .upsert(importedCompanies, { onConflict: 'company_code' });
+        // Se deve sobrepor, deletar dados antigos primeiro
+        if (shouldOverwrite && !shouldAccumulate) {
+          // Deletar todas as empresas antes de inserir as novas
+          const { error: deleteError } = await supabase
+            .from('empresas')
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000'); // Deletar todas (condição sempre verdadeira)
+          if (deleteError) throw deleteError;
+        }
 
-        if (error) throw error;
+        // Save to Supabase - usar insert se acumular, upsert se sobrepor
+        if (shouldAccumulate) {
+          const { error } = await supabase
+            .from('empresas')
+            .insert(importedCompanies);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase
+            .from('empresas')
+            .upsert(importedCompanies, { onConflict: 'company_code' });
+          if (error) throw error;
+        }
 
         setCompanies(importedCompanies);
         recordCount = importedCompanies.length;
@@ -829,13 +899,23 @@ function App() {
         const importedAccountsPayable = await processAccountsPayableFile(file);
         console.log('Contas a pagar importadas:', importedAccountsPayable);
 
+        // Se deve sobrepor, deletar dados antigos primeiro
+        if (shouldOverwrite && !shouldAccumulate) {
+          // Deletar todos os registros de contas_a_pagar antes de inserir os novos
+          const { error: deleteError } = await supabase
+            .from('contas_a_pagar')
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000'); // Deletar todas
+          if (deleteError) throw deleteError;
+        }
+
         // Add import_id to each record
         const recordsWithImportId = importedAccountsPayable.map(record => ({
           ...record,
           import_id: importId
         }));
 
-        // Save to Supabase
+        // Save to Supabase - sempre usar insert (acumular ou após deletar)
         const { error } = await supabase
           .from('contas_a_pagar')
           .insert(recordsWithImportId);
@@ -851,13 +931,22 @@ function App() {
         const importedRevenues = await processRevenuesFile(file);
         console.log('Receitas importadas:', importedRevenues);
 
+        // Se deve sobrepor, deletar dados antigos primeiro
+        if (shouldOverwrite && !shouldAccumulate) {
+          const { error: deleteError } = await supabase
+            .from('receitas')
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000');
+          if (deleteError) throw deleteError;
+        }
+
         // Add import_id to each record
         const recordsWithImportId = importedRevenues.map(record => ({
           ...record,
           import_id: importId
         }));
 
-        // Save to Supabase
+        // Save to Supabase - sempre usar insert
         const { error } = await supabase
           .from('receitas')
           .insert(recordsWithImportId);
@@ -873,13 +962,22 @@ function App() {
         const importedTransactions = await processFinancialTransactionsFile(file);
         console.log('Lançamentos financeiros importados:', importedTransactions);
 
+        // Se deve sobrepor, deletar dados antigos primeiro
+        if (shouldOverwrite && !shouldAccumulate) {
+          const { error: deleteError } = await supabase
+            .from('transacoes_financeiras')
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000');
+          if (deleteError) throw deleteError;
+        }
+
         // Add import_id to each record
         const recordsWithImportId = importedTransactions.map(record => ({
           ...record,
           import_id: importId
         }));
 
-        // Save to Supabase
+        // Save to Supabase - sempre usar insert
         const { error } = await supabase
           .from('transacoes_financeiras')
           .insert(recordsWithImportId);
@@ -901,6 +999,15 @@ function App() {
           throw new Error('Nenhum lançamento previsto foi processado. Verifique o formato do arquivo.');
         }
 
+        // Se deve sobrepor, deletar dados antigos primeiro
+        if (shouldOverwrite && !shouldAccumulate) {
+          const { error: deleteError } = await supabase
+            .from('previstos')
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000');
+          if (deleteError) throw deleteError;
+        }
+
         // Add import_id to each record
         const recordsWithImportId = importedEntries.map(record => ({
           ...record,
@@ -909,7 +1016,7 @@ function App() {
 
         console.log('Records to insert:', recordsWithImportId);
 
-        // Save to Supabase PREVISTOS table
+        // Save to Supabase PREVISTOS table - sempre usar insert
         const { data: insertedData, error } = await supabase
           .from('previstos')
           .insert(recordsWithImportId)
@@ -938,6 +1045,15 @@ function App() {
           throw new Error('Nenhuma receita DRE foi processada. Verifique o formato do arquivo.');
         }
 
+        // Se deve sobrepor, deletar dados antigos primeiro
+        if (shouldOverwrite && !shouldAccumulate) {
+          const { error: deleteError } = await supabase
+            .from('receitas_dre')
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000');
+          if (deleteError) throw deleteError;
+        }
+
         // Add import_id to each record
         const recordsWithImportId = importedRevenuesDRE.map(record => ({
           ...record,
@@ -946,7 +1062,7 @@ function App() {
 
         console.log('Records to insert:', recordsWithImportId);
 
-        // Save to Supabase revenues_dre table
+        // Save to Supabase revenues_dre table - sempre usar insert
         const { data: insertedData, error } = await supabase
           .from('receitas_dre')
           .insert(recordsWithImportId)
@@ -974,6 +1090,15 @@ function App() {
           throw new Error('Nenhum CMV DRE foi processado. Verifique o formato do arquivo.');
         }
 
+        // Se deve sobrepor, deletar dados antigos primeiro
+        if (shouldOverwrite && !shouldAccumulate) {
+          const { error: deleteError } = await supabase
+            .from('cmv_dre')
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000');
+          if (deleteError) throw deleteError;
+        }
+
         // Add import_id to each record
         const recordsWithImportId = importedCMVDRE.map(record => ({
           ...record,
@@ -982,7 +1107,7 @@ function App() {
 
         console.log('Records to insert:', recordsWithImportId);
 
-        // Save to Supabase cmv_dre table
+        // Save to Supabase cmv_dre table - sempre usar insert
         const { data: insertedData, error } = await supabase
           .from('cmv_dre')
           .insert(recordsWithImportId)
@@ -1009,13 +1134,22 @@ function App() {
           throw new Error('Nenhum saldo foi processado. Verifique o formato do arquivo.');
         }
 
+        // Se deve sobrepor, deletar dados antigos primeiro
+        if (shouldOverwrite && !shouldAccumulate) {
+          const { error: deleteError } = await supabase
+            .from('saldos_iniciais')
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000');
+          if (deleteError) throw deleteError;
+        }
+
         // Add import_id to each record
         const recordsWithImportId = importedBalances.map(record => ({
           ...record,
           import_id: importId
         }));
 
-        // Save to Supabase initial_balances table
+        // Save to Supabase initial_balances table - sempre usar insert
         const { data: insertedData, error } = await supabase
           .from('saldos_iniciais')
           .insert(recordsWithImportId)
@@ -1032,6 +1166,104 @@ function App() {
         await loadDataFromSupabase();
         recordCount = importedBalances.length;
         console.log('Saved Initial Balances to Supabase');
+      } else if (type === 'faturamento_dre') {
+        console.log('🔄 Starting Faturamento DRE import...');
+        console.log('📁 File info:', { name: file.name, size: file.size, type: file.type });
+        const importedFaturamentoDRE = await processFaturamentoDREFile(file);
+        console.log('✅ Faturamento DRE importado:', importedFaturamentoDRE);
+        console.log('📊 Number of entries:', importedFaturamentoDRE.length);
+
+        if (importedFaturamentoDRE.length === 0) {
+          throw new Error('Nenhum faturamento DRE foi processado. Verifique o formato do arquivo.');
+        }
+
+        // Se deve sobrepor, deletar dados antigos primeiro
+        if (shouldOverwrite && !shouldAccumulate) {
+          const { error: deleteError } = await supabase
+            .from('faturamento_dre')
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000');
+          if (deleteError) throw deleteError;
+        }
+
+        // Add import_id to each record
+        const recordsWithImportId = importedFaturamentoDRE.map(record => ({
+          ...record,
+          import_id: importId
+        }));
+
+        console.log('Records to insert:', recordsWithImportId);
+
+        // Save to Supabase faturamento_dre table - sempre usar insert
+        const { data: insertedData, error } = await supabase
+          .from('faturamento_dre')
+          .insert(recordsWithImportId)
+          .select();
+
+        if (error) {
+          console.error('Supabase insert error:', error);
+          throw error;
+        }
+
+        console.log('Inserted data:', insertedData);
+
+        // Reload from database
+        await loadDataFromSupabase();
+        recordCount = importedFaturamentoDRE.length;
+        console.log('Saved Faturamento DRE to Supabase');
+      } else if (type === 'orcamento_dre') {
+        console.log('🔄 Starting Orçamento DRE import...');
+        console.log('📁 File info:', { name: file.name, size: file.size, type: file.type });
+        const importedOrcamentoDRE = await processOrcamentoDREFile(file);
+        console.log('✅ Orçamento DRE importado:', importedOrcamentoDRE);
+        console.log('📊 Number of entries:', importedOrcamentoDRE.length);
+
+        if (importedOrcamentoDRE.length === 0) {
+          throw new Error('Nenhum orçamento DRE foi processado. Verifique o formato do arquivo.');
+        }
+
+        // Add import_id to each record
+        const recordsWithImportId = importedOrcamentoDRE.map(record => ({
+          ...record,
+          import_id: importId
+        }));
+
+        console.log('Records to insert:', recordsWithImportId);
+
+        // Save to Supabase orcamento_dre table
+        // Se acumular: usar insert (pode criar duplicatas se já existir)
+        // Se sobrepor: usar upsert para atualizar registros existentes
+        let insertedData;
+        if (shouldAccumulate) {
+          const { data, error } = await supabase
+            .from('orcamento_dre')
+            .insert(recordsWithImportId)
+            .select();
+          if (error) {
+            console.error('Supabase insert error:', error);
+            throw error;
+          }
+          insertedData = data;
+        } else {
+          const { data, error } = await supabase
+            .from('orcamento_dre')
+            .upsert(recordsWithImportId, {
+              onConflict: 'business_unit,account_name,period_date'
+            })
+            .select();
+          if (error) {
+            console.error('Supabase upsert error:', error);
+            throw error;
+          }
+          insertedData = data;
+        }
+
+        console.log('Inserted data:', insertedData);
+
+        // Reload from database
+        await loadDataFromSupabase();
+        recordCount = importedOrcamentoDRE.length;
+        console.log('Saved Orçamento DRE to Supabase');
       } else if (type === 'transactions') {
         const processedRecords = await processExcelFile(file);
         setRecords(prev => [...prev, ...processedRecords]);
@@ -1093,7 +1325,7 @@ function App() {
 
   const handleFileSelectWithMode = (
     file: File,
-    type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances',
+    type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'faturamento_dre' | 'orcamento_dre',
     currentIndex?: number,
     totalFiles?: number
   ) => {
@@ -1163,8 +1395,10 @@ function App() {
       const fileType = file?.type;
 
       if (fileType) {
+        // Converter tipo em inglês para nome da tabela em português
+        const tableName = getTableNameFromType(fileType);
         // Usa a função existente que deleta dados relacionados + registro de import
-        await deleteOldImportData(fileId, fileType);
+        await deleteOldImportData(fileId, tableName);
       } else {
         const { error } = await supabase
           .from('importacoes')
