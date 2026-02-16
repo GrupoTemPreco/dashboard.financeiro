@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Line, ComposedChart, LineChart, Legend } from 'recharts';
 import { Check, TrendingUp, Filter, ChevronDown } from 'lucide-react';
+import { DataSourceNote } from './DataSourceNote';
 
 interface MonthlyData {
   month: string;
@@ -1594,6 +1595,22 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
 
   const colors = getMetricColor();
 
+  const sourceTablesForMetric = useMemo(() => {
+    switch (selectedMetric) {
+      case 'revenue':
+        // Receita Direta: receitas realizadas + previstos com "movimento em dinheiro" + transacoes_financeiras
+        return ['receitas', 'previstos', 'transacoes_financeiras', 'empresas'];
+      case 'cogs':
+        // CMV: contas_a_pagar (categoria mercadoria) + empresas (para grupos/lojas)
+        return ['contas_a_pagar', 'empresas'];
+      case 'loans':
+        // Empréstimos: contas_a_pagar (empréstimos/financiamentos) + empresas
+        return ['contas_a_pagar', 'empresas'];
+      default:
+        return ['receitas', 'contas_a_pagar', 'previstos', 'transacoes_financeiras', 'empresas'];
+    }
+  }, [selectedMetric]);
+
   return (
     <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
       <div className="flex items-center justify-between mb-6">
@@ -2115,21 +2132,28 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
       </div>
 
       {!lineViewMode && (
-        <div className={`mt-4 flex items-center justify-center space-x-6 text-sm ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>
-          <div className="flex items-center">
-            <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: colors.current }}></div>
-            <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano Atual</span>
-          </div>
-          <div className="flex items-center">
-            <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: colors.previous }}></div>
-            <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano Anterior</span>
-          </div>
-          {selectedMetric === 'loans' && (
+        <div className="mt-4 flex items-center justify-between text-sm">
+          <DataSourceNote
+            darkMode={darkMode}
+            tables={sourceTablesForMetric}
+            suffix="(dados consolidados por mês/ano)"
+          />
+          <div className={`flex items-center justify-center space-x-6 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>
             <div className="flex items-center">
-              <div className="w-3 h-3 bg-marsala-600 rounded-full mr-2"></div>
-              <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>% Empréstimos/Receita</span>
+              <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: colors.current }}></div>
+              <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano Atual</span>
             </div>
-          )}
+            <div className="flex items-center">
+              <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: colors.previous }}></div>
+              <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano Anterior</span>
+            </div>
+            {selectedMetric === 'loans' && (
+              <div className="flex items-center">
+                <div className="w-3 h-3 bg-marsala-600 rounded-full mr-2"></div>
+                <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>% Empréstimos/Receita</span>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

@@ -12,6 +12,11 @@ interface KPICardProps {
   onViewDetails?: () => void;
   darkMode?: boolean;
   dataSource?: string;
+  loading?: boolean;
+  /** Label da linha Previsto (ex: "Previsto (por vencimento)") */
+  forecastedLabel?: string;
+  /** Label da linha Realizado (ex: "Realizado (por pagamento)") */
+  actualLabel?: string;
 }
 
 export const KPICard: React.FC<KPICardProps> = ({
@@ -24,7 +29,10 @@ export const KPICard: React.FC<KPICardProps> = ({
   section,
   onViewDetails,
   darkMode = false,
-  dataSource
+  dataSource,
+  loading = false,
+  forecastedLabel = 'Previsto',
+  actualLabel = 'Realizado'
 }) => {
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -185,75 +193,90 @@ export const KPICard: React.FC<KPICardProps> = ({
   const isPositive = difference >= 0;
 
   return (
-    <div className={`${colors.bg} rounded-lg p-6 border-l-4 ${colors.border} shadow-[0_18px_40px_rgba(15,23,42,0.18)] ${darkMode ? (colors.glow || '') : 'hover:shadow-[0_22px_55px_rgba(15,23,42,0.28)]'} transition-all duration-300`}>
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center flex-1">
-          <div className={`p-1.5 rounded-lg ${darkMode ? 'bg-slate-950' : 'bg-white'} shadow-sm ${colors.icon}`}>
-            {icon}
+    <div className={`relative ${colors.bg} rounded-lg p-6 border-l-4 ${colors.border} shadow-[0_18px_40px_rgba(15,23,42,0.18)] ${darkMode ? (colors.glow || '') : 'hover:shadow-[0_22px_55px_rgba(15,23,42,0.28)]'} transition-all duration-300`}>
+      {/* Conteúdo principal do card */}
+      <div className={loading ? 'opacity-40 pointer-events-none' : ''}>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center flex-1">
+            <div className={`p-1.5 rounded-lg ${darkMode ? 'bg-slate-950' : 'bg-white'} shadow-sm ${colors.icon}`}>
+              {icon}
+            </div>
+            <h3 className={`text-xs font-semibold ml-2 ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>{title}</h3>
           </div>
-          <h3 className={`text-xs font-semibold ml-2 ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>{title}</h3>
-        </div>
-        <div className="flex items-center gap-2">
-          {onViewDetails && (
-            <button
-              onClick={onViewDetails}
-              className={`p-1.5 rounded-lg shadow-sm border transition-colors ${darkMode ? 'bg-slate-900/80 hover:bg-slate-900 border-slate-700' : 'bg-white/70 hover:bg-white border-slate-200'}`}
-              title="Ver detalhes"
-            >
-              <List className="w-4 h-4 text-gray-600" />
-            </button>
-          )}
-          {isPositive ? (
-            <TrendingUp className="w-4 h-4 text-green-500" />
-          ) : (
-            <TrendingDown className="w-4 h-4 text-red-500" />
-          )}
-        </div>
-      </div>
-      
-      <div className="space-y-2">
-        <div className="flex justify-between items-center">
-          <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>Previsto</span>
-          <span className={`text-sm font-semibold ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
-            {formatCurrency(forecasted)}
-          </span>
+          <div className="flex items-center gap-2">
+            {onViewDetails && (
+              <button
+                onClick={onViewDetails}
+                className={`p-1.5 rounded-lg shadow-sm border transition-colors ${darkMode ? 'bg-slate-900/80 hover:bg-slate-900 border-slate-700' : 'bg-white/70 hover:bg-white border-slate-200'}`}
+                title="Ver detalhes"
+              >
+                <List className="w-4 h-4 text-gray-600" />
+              </button>
+            )}
+            {isPositive ? (
+              <TrendingUp className="w-4 h-4 text-green-500" />
+            ) : (
+              <TrendingDown className="w-4 h-4 text-red-500" />
+            )}
+          </div>
         </div>
         
-        <div className="flex justify-between items-center">
-          <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>Realizado</span>
-          <span className={`text-lg font-bold ${colors.accent}`}>
-            {formatCurrency(actual)}
-          </span>
-        </div>
-        
-        {percentage !== undefined && (
+        <div className="space-y-2">
+          <div className="flex justify-between items-center">
+            <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>{forecastedLabel}</span>
+            <span className={`text-sm font-semibold ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
+              {formatCurrency(forecasted)}
+            </span>
+          </div>
+          
+          <div className="flex justify-between items-center">
+            <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>{actualLabel}</span>
+            <span className={`text-lg font-bold ${colors.accent}`}>
+              {formatCurrency(actual)}
+            </span>
+          </div>
+          
+          {percentage !== undefined && (
+            <div className={`pt-2 border-t ${darkMode ? 'border-slate-700' : 'border-slate-200'}`}>
+              <div className="flex justify-between items-center">
+                <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>% sobre Receita</span>
+                <span className={`text-sm font-semibold ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
+                  {percentage.toFixed(1)}%
+                </span>
+              </div>
+            </div>
+          )}
+          
           <div className={`pt-2 border-t ${darkMode ? 'border-slate-700' : 'border-slate-200'}`}>
             <div className="flex justify-between items-center">
-              <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>% sobre Receita</span>
-              <span className={`text-sm font-semibold ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
-                {percentage.toFixed(1)}%
+              <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>Variação</span>
+              <span className={`text-sm font-semibold ${isPositive ? (darkMode ? 'text-emerald-300' : 'text-emerald-600') : (darkMode ? 'text-rose-300' : 'text-red-600')}`}>
+                {isPositive ? '+' : ''}{formatCurrency(difference)}
               </span>
             </div>
           </div>
-        )}
-        
-        <div className={`pt-2 border-t ${darkMode ? 'border-slate-700' : 'border-slate-200'}`}>
-          <div className="flex justify-between items-center">
-            <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>Variação</span>
-            <span className={`text-sm font-semibold ${isPositive ? (darkMode ? 'text-emerald-300' : 'text-emerald-600') : (darkMode ? 'text-rose-300' : 'text-red-600')}`}>
-              {isPositive ? '+' : ''}{formatCurrency(difference)}
+          
+          {dataSource && (
+            <div className="pt-2">
+              <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
+                {dataSource}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Overlay de carregamento com blur */}
+      {loading && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/35 dark:bg-slate-950/35 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-2">
+            <span className="w-5 h-5 border-2 border-pink-500 border-t-transparent rounded-full animate-spin" />
+            <span className={`text-xs font-medium ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
+              Carregando...
             </span>
           </div>
         </div>
-        
-        {dataSource && (
-          <div className="pt-2">
-            <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
-              {dataSource}
-            </p>
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 };

@@ -1,11 +1,24 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileText, Trash2, CheckCircle, AlertCircle, Download, Info, ChevronDown, ChevronUp } from 'lucide-react';
+import { Upload, FileText, Trash2, CheckCircle, AlertCircle, Download, Info, ChevronDown, ChevronUp, Plus, Edit2 } from 'lucide-react';
 import { ImportedFile } from '../types/financial';
-import * as XLSX from 'xlsx';
+import { CompanyFormModal } from './CompanyFormModal';
+import { CompanyEditModal } from './CompanyEditModal';
+
+interface Company {
+  id: string;
+  company_code: string;
+  company_name: string;
+  name: string;
+  group_name: string;
+}
 
 interface DataImportProps {
-  onFileUpload: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre', currentIndex?: number, totalFiles?: number) => Promise<void>;
-  onFileSelectWithMode?: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre', currentIndex?: number, totalFiles?: number) => void;
+  onFileUpload: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario', currentIndex?: number, totalFiles?: number) => Promise<void>;
+  onFileSelectWithMode?: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario', currentIndex?: number, totalFiles?: number) => void;
+  onSaveCompany?: (company: { company_code: string; company_name: string; name: string; group_name: string }) => Promise<void>;
+  onUpdateCompany?: (id: string, company: { company_code: string; company_name: string; name: string; group_name: string }) => Promise<void>;
+  onRefreshCompanies?: () => Promise<void>;
+  companies?: Company[];
   importedFiles: ImportedFile[];
   onDeleteFile: (fileId: string) => void;
   onRestoreFile: (fileId: string) => void;
@@ -18,6 +31,10 @@ interface DataImportProps {
 export const DataImport: React.FC<DataImportProps> = ({
   onFileUpload,
   onFileSelectWithMode,
+  onSaveCompany,
+  onUpdateCompany,
+  onRefreshCompanies,
+  companies = [],
   importedFiles,
   onDeleteFile,
   onRestoreFile,
@@ -28,8 +45,9 @@ export const DataImport: React.FC<DataImportProps> = ({
 }) => {
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [instructionsOpen, setInstructionsOpen] = useState(false);
-  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [importedFilesOpen, setImportedFilesOpen] = useState(false);
+  const [companyModalOpen, setCompanyModalOpen] = useState(false);
+  const [companyEditModalOpen, setCompanyEditModalOpen] = useState(false);
   const [selectedImportDate, setSelectedImportDate] = useState<string>('');
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     all: true,
@@ -37,7 +55,6 @@ export const DataImport: React.FC<DataImportProps> = ({
   });
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
-  const companiesInputRef = useRef<HTMLInputElement>(null);
   const accountsPayableInputRef = useRef<HTMLInputElement>(null);
   const revenuesInputRef = useRef<HTMLInputElement>(null);
   const financialTransactionsInputRef = useRef<HTMLInputElement>(null);
@@ -56,7 +73,7 @@ export const DataImport: React.FC<DataImportProps> = ({
     setDragOver(null);
   };
 
-  const handleDrop = async (e: React.DragEvent, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre') => {
+  const handleDrop = async (e: React.DragEvent, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario') => {
     e.preventDefault();
     setDragOver(null);
     const files = Array.from(e.dataTransfer.files);
@@ -75,7 +92,7 @@ export const DataImport: React.FC<DataImportProps> = ({
     }
   };
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre') => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario') => {
     const files = Array.from(e.target.files || []);
     if (files.length > 0) {
       // Se onFileSelectWithMode estiver disponível, usar o novo fluxo com modal de escolha
@@ -159,91 +176,6 @@ export const DataImport: React.FC<DataImportProps> = ({
     selectedFileIds.forEach((id) => onDeleteFile(id));
     setSelectedFileIds([]);
     setSelectionMode(false);
-  };
-
-  const downloadCompaniesTemplate = () => {
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['Código', 'Grupo', 'Nome da Empresa'],
-      ['001', 'Grupo A', 'Empresa Exemplo 1'],
-      ['002', 'Grupo A', 'Empresa Exemplo 2'],
-      ['003', 'Grupo B', 'Empresa Exemplo 3']
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Empresas');
-    XLSX.writeFile(wb, 'modelo_empresas.xlsx');
-  };
-
-  const downloadAccountsPayableTemplate = () => {
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['Status', 'Unidade de Negócio', 'Plano de Contas', 'Credor', 'Data de Pagamento', 'Valor'],
-      ['pendente', 'Unidade 1', 'Fornecedores', 'Fornecedor ABC', '15/01/2024', 5000],
-      ['paga', 'Unidade 2', 'Salários', 'Folha de Pagamento', '10/01/2024', 15000],
-      ['pendente', 'Unidade 1', 'Serviços', 'Prestador XYZ', '20/01/2024', 3500]
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Contas a Pagar');
-    XLSX.writeFile(wb, 'modelo_contas_a_pagar.xlsx');
-  };
-
-  const downloadRevenuesTemplate = () => {
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['Status', 'Unidade de Negócio', 'Plano de Contas', 'Data de Pagamento', 'Valor'],
-      ['pendente', 'Unidade 1', 'Vendas', '15/01/2024', 10000],
-      ['recebida', 'Unidade 2', 'Serviços', '10/01/2024', 25000],
-      ['pendente', 'Unidade 1', 'Produtos', '20/01/2024', 15000]
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Receitas');
-    XLSX.writeFile(wb, 'modelo_receitas.xlsx');
-  };
-
-  const downloadFinancialTransactionsTemplate = () => {
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['Status', 'Unidade de Negócio', 'Plano de Contas', 'Data', 'Valor'],
-      ['pendente', 'Unidade 1', 'Vendas', '15/01/2024', 5000],
-      ['paga', 'Unidade 2', 'Fornecedores', '10/01/2024', -3000],
-      ['pendente', 'Unidade 1', 'Serviços', '20/01/2024', 8000],
-      ['paga', 'Unidade 3', 'Despesas', '12/01/2024', -1500]
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Lançamentos');
-    XLSX.writeFile(wb, 'modelo_lancamentos_financeiros.xlsx');
-  };
-
-  const downloadForecastedEntriesTemplate = () => {
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['Status', 'Unidade de Negócio', 'Plano de Contas', 'Credor', 'Data de Vencimento', 'Valor'],
-      ['pendente', 'Unidade 1', 'Fornecedores', 'Fornecedor ABC', '25/01/2024', 7500],
-      ['pendente', 'Unidade 2', 'Serviços', 'Prestador XYZ', '30/01/2024', 4200],
-      ['pendente', 'Unidade 1', 'Salários', 'Folha de Pagamento', '05/02/2024', 18000]
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Lançamentos Previstos');
-    XLSX.writeFile(wb, 'modelo_lancamentos_previstos.xlsx');
-  };
-
-  const downloadRevenuesDRETemplate = () => {
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['Status', 'Unidade de Negócio', 'Plano de Contas', 'Data de Emissão', 'Valor'],
-      ['recebida', 'Unidade 1', 'Vendas Produto A', '15/01/2024', 25000],
-      ['pendente', 'Unidade 2', 'Serviços Mensais', '20/01/2024', 18000],
-      ['recebida', 'Unidade 1', 'Vendas Produto B', '22/01/2024', 32000]
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Receita DRE');
-    XLSX.writeFile(wb, 'modelo_receita_dre.xlsx');
-  };
-
-  const downloadCMVDRETemplate = () => {
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['Status', 'Unidade de Negócio', 'Plano de Contas', 'Data de Emissão', 'Valor'],
-      ['recebida', 'Unidade 1', 'Custo Produto A', '15/01/2024', 12000],
-      ['pendente', 'Unidade 2', 'Custo Serviços', '20/01/2024', 8000],
-      ['recebida', 'Unidade 1', 'Custo Produto B', '22/01/2024', 15000]
-    ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'CMV DRE');
-    XLSX.writeFile(wb, 'modelo_cmv_dre.xlsx');
   };
 
   const renderFormatTooltip = (type: 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre') => {
@@ -336,7 +268,7 @@ export const DataImport: React.FC<DataImportProps> = ({
       revenues_dre: 'Receita DRE',
       cmv_dre: 'CMV DRE',
       initial_balances: 'Saldos Bancários',
-      orcamento_dre: 'Orçamento DRE'
+      orcamento_dre: 'Orçamento DRE',
     };
     return map[type] || type;
   };
@@ -830,11 +762,12 @@ export const DataImport: React.FC<DataImportProps> = ({
                   <h4 className="font-medium mb-2 text-blue-800">3. Receitas</h4>
                   <p className="mb-2 text-xs">Importe o arquivo com as receitas:</p>
                   <ul className="text-xs space-y-1 ml-3">
-                    <li>• Coluna A: Status (recebida ou pendente)</li>
-                    <li>• Coluna B: Unidade de negócio</li>
-                    <li>• Coluna C: Plano de contas</li>
-                    <li>• Coluna D: Data de pagamento</li>
-                    <li>• Coluna E: Valor</li>
+                    <li>• Status (recebida ou pendente)</li>
+                    <li>• Unidade de negócio</li>
+                    <li>• Conta origem (Plano de contas)</li>
+                    <li>• Data hora (Data de pagamento)</li>
+                    <li>• Valor</li>
+                    <li className="text-gray-600">• Opcional: Tipo, Usuário, Conta destino, Conciliação origem, Conciliação destino</li>
                   </ul>
                 </div>
 
@@ -907,126 +840,29 @@ export const DataImport: React.FC<DataImportProps> = ({
           )}
         </div>
 
-        {/* Templates Dropdown */}
+        {/* Cadastrar Empresa Button */}
         <div className="relative flex-1 min-w-[200px]">
           <button
-            onClick={() => setTemplatesOpen(!templatesOpen)}
+            onClick={() => setCompanyModalOpen(true)}
             className="w-full flex items-center justify-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
           >
-            <Download className="w-5 h-5 mr-2" />
-            <span className="font-medium">Modelos de Arquivo</span>
-            {templatesOpen ? (
-              <ChevronUp className="w-4 h-4 ml-2" />
-            ) : (
-              <ChevronDown className="w-4 h-4 ml-2" />
-            )}
+            <Plus className="w-5 h-5 mr-2" />
+            <span className="font-medium">Cadastrar Empresa</span>
           </button>
-          
-          {templatesOpen && (
-            <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-gray-200 rounded-lg shadow-xl z-50 p-6 max-h-[80vh] overflow-y-auto">
-              <h3 className="text-lg font-semibold text-gray-800 mb-4">Modelos de Arquivo</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                <button
-                  onClick={downloadCompaniesTemplate}
-                  className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-left"
-                >
-                  <div className="flex items-center">
-                    <FileText className="w-4 h-4 text-green-600 mr-2 flex-shrink-0" />
-                    <div>
-                      <p className="font-medium text-sm text-gray-800">Modelo - Empresas</p>
-                      <p className="text-xs text-gray-600">Template para cadastro</p>
-                    </div>
-                  </div>
-                  <Download className="w-4 h-4 text-gray-400 flex-shrink-0 ml-2" />
-                </button>
-
-                <button
-                  onClick={downloadAccountsPayableTemplate}
-                  className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-left"
-                >
-                  <div className="flex items-center">
-                    <FileText className="w-4 h-4 text-orange-600 mr-2 flex-shrink-0" />
-                    <div>
-                      <p className="font-medium text-sm text-gray-800">Modelo - Contas a Pagar</p>
-                      <p className="text-xs text-gray-600">Template para despesas</p>
-                    </div>
-                  </div>
-                  <Download className="w-4 h-4 text-gray-400 flex-shrink-0 ml-2" />
-                </button>
-
-                <button
-                  onClick={downloadRevenuesTemplate}
-                  className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-left"
-                >
-                  <div className="flex items-center">
-                    <FileText className="w-4 h-4 text-blue-600 mr-2 flex-shrink-0" />
-                    <div>
-                      <p className="font-medium text-sm text-gray-800">Modelo - Receitas</p>
-                      <p className="text-xs text-gray-600">Template para receitas</p>
-                    </div>
-                  </div>
-                  <Download className="w-4 h-4 text-gray-400 flex-shrink-0 ml-2" />
-                </button>
-
-                <button
-                  onClick={downloadFinancialTransactionsTemplate}
-                  className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-left"
-                >
-                  <div className="flex items-center">
-                    <FileText className="w-4 h-4 text-purple-600 mr-2 flex-shrink-0" />
-                    <div>
-                      <p className="font-medium text-sm text-gray-800">Modelo - Lançamentos</p>
-                      <p className="text-xs text-gray-600">Template para lançamentos</p>
-                    </div>
-                  </div>
-                  <Download className="w-4 h-4 text-gray-400 flex-shrink-0 ml-2" />
-                </button>
-
-                <button
-                  onClick={downloadForecastedEntriesTemplate}
-                  className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-left"
-                >
-                  <div className="flex items-center">
-                    <FileText className="w-4 h-4 text-teal-600 mr-2 flex-shrink-0" />
-                    <div>
-                      <p className="font-medium text-sm text-gray-800">Modelo - Lançamentos Previstos</p>
-                      <p className="text-xs text-gray-600">Template para previstos</p>
-                    </div>
-                  </div>
-                  <Download className="w-4 h-4 text-gray-400 flex-shrink-0 ml-2" />
-                </button>
-
-                <button
-                  onClick={downloadRevenuesDRETemplate}
-                  className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-left"
-                >
-                  <div className="flex items-center">
-                    <FileText className="w-4 h-4 text-cyan-600 mr-2 flex-shrink-0" />
-                    <div>
-                      <p className="font-medium text-sm text-gray-800">Modelo - Receita DRE</p>
-                      <p className="text-xs text-gray-600">Template para receitas</p>
-                    </div>
-                  </div>
-                  <Download className="w-4 h-4 text-gray-400 flex-shrink-0 ml-2" />
-                </button>
-
-                <button
-                  onClick={downloadCMVDRETemplate}
-                  className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-left"
-                >
-                  <div className="flex items-center">
-                    <FileText className="w-4 h-4 text-rose-600 mr-2 flex-shrink-0" />
-                    <div>
-                      <p className="font-medium text-sm text-gray-800">Modelo - CMV DRE</p>
-                      <p className="text-xs text-gray-600">Template para CMV</p>
-                    </div>
-                  </div>
-                  <Download className="w-4 h-4 text-gray-400 flex-shrink-0 ml-2" />
-                </button>
-              </div>
-            </div>
-          )}
         </div>
+
+        {/* Editar Empresa Button - Apenas para Admin */}
+        {isAdmin && (
+          <div className="relative flex-1 min-w-[200px]">
+            <button
+              onClick={() => setCompanyEditModalOpen(true)}
+              className="w-full flex items-center justify-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <Edit2 className="w-5 h-5 mr-2" />
+              <span className="font-medium">Editar Empresa</span>
+            </button>
+          </div>
+        )}
 
         {/* Imported Files Dropdown */}
         <div className="relative flex-1 min-w-[200px]">
@@ -1048,49 +884,7 @@ export const DataImport: React.FC<DataImportProps> = ({
       </div>
 
       {/* Upload Areas */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        {/* Companies Upload */}
-        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
-          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
-            <FileText className="w-5 h-5 mr-2 text-green-600" />
-            1. Cadastro de Empresas
-          </h3>
-          
-          <div
-            className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
-              dragOver === 'companies'
-                ? darkMode
-                  ? 'border-green-400 bg-emerald-950/20'
-                  : 'border-green-400 bg-green-50'
-                : darkMode
-                  ? 'border-slate-600 hover:border-green-400'
-                : 'border-gray-300 hover:border-green-400'
-            }`}
-            onDragOver={(e) => handleDragOver(e, 'companies')}
-            onDragLeave={handleDragLeave}
-            onDrop={(e) => handleDrop(e, 'companies')}
-          >
-            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
-            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
-            <button
-              onClick={() => companiesInputRef.current?.click()}
-              className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-            >
-              Selecionar Arquivos
-            </button>
-            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
-          </div>
-          
-          <input
-            ref={companiesInputRef}
-            type="file"
-            accept=".xlsx,.xls"
-            multiple
-            onChange={(e) => handleFileSelect(e, 'companies')}
-            className="hidden"
-          />
-        </div>
-
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {/* Accounts Payable Upload */}
         <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
           <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
@@ -1431,6 +1225,28 @@ export const DataImport: React.FC<DataImportProps> = ({
           />
         </div>
       </div>
+
+      {/* Company Form Modal */}
+      {onSaveCompany && (
+        <CompanyFormModal
+          isOpen={companyModalOpen}
+          onClose={() => setCompanyModalOpen(false)}
+          onSave={onSaveCompany}
+          darkMode={darkMode}
+        />
+      )}
+
+      {/* Company Edit Modal */}
+      {onUpdateCompany && onRefreshCompanies && (
+        <CompanyEditModal
+          isOpen={companyEditModalOpen}
+          onClose={() => setCompanyEditModalOpen(false)}
+          companies={companies}
+          onUpdate={onUpdateCompany}
+          onRefresh={onRefreshCompanies}
+          darkMode={darkMode}
+        />
+      )}
 
     </div>
   );

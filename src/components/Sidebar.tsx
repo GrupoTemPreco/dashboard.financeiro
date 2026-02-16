@@ -35,6 +35,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [groupDropdownOpen, setGroupDropdownOpen] = React.useState(false);
   const [companyDropdownOpen, setCompanyDropdownOpen] = React.useState(false);
   const [bankDropdownOpen, setBankDropdownOpen] = React.useState(false);
+  const [periodDropdownOpen, setPeriodDropdownOpen] = React.useState(false);
+  const [tempStartDate, setTempStartDate] = React.useState(filters.startDate || '');
+  const [tempEndDate, setTempEndDate] = React.useState(filters.endDate || '');
 
   const handleGroupChange = (newGroups: string[]) => {
     // When groups change, filter out companies that don't belong to selected groups
@@ -288,39 +291,82 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {/* Date Range */}
           <div className="space-y-2">
-            <label className="flex items-center text-xs font-medium text-blue-100">
+            <label className="flex items-center text-xs font-medium text-blue-100 mb-2">
               <Calendar className="w-4 h-4 mr-2" />
               Período
             </label>
-            <div>
-              <label className="text-xs text-blue-200 mb-1 block">Início</label>
-              <input
-                type="date"
-                value={filters.startDate || ''}
-                onChange={(e) => onFiltersChange({ ...filters, startDate: e.target.value })}
-                className="w-full px-2 py-1 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-blue-200 mb-1 block">Fim</label>
-              <input
-                type="date"
-                value={filters.endDate || ''}
-                onChange={(e) => onFiltersChange({ ...filters, endDate: e.target.value })}
-                className="w-full px-2 py-1 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm"
-              />
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setPeriodDropdownOpen(!periodDropdownOpen);
+                  // Sincronizar valores temporários com os filtros atuais ao abrir
+                  setTempStartDate(filters.startDate || '');
+                  setTempEndDate(filters.endDate || '');
+                }}
+                className="w-full px-3 py-2 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm text-left flex items-center justify-between"
+              >
+                <span className="truncate">
+                  {filters.startDate && filters.endDate
+                    ? (() => {
+                        const formatDate = (dateStr: string) => {
+                          const [year, month, day] = dateStr.split('-');
+                          return `${day}/${month}/${year}`;
+                        };
+                        return `${formatDate(filters.startDate)} - ${formatDate(filters.endDate)}`;
+                      })()
+                    : 'Selecione o período...'
+                  }
+                </span>
+                <ChevronDown className={`w-4 h-4 text-blue-200 transition-transform ${periodDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              
+              {periodDropdownOpen && (
+                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg p-3 backdrop-blur-sm">
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-xs text-blue-200 mb-1 block">Data Inicial</label>
+                      <input
+                        type="date"
+                        value={tempStartDate}
+                        onChange={(e) => setTempStartDate(e.target.value)}
+                        className="w-full px-2 py-1 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-blue-200 mb-1 block">Data Final</label>
+                      <input
+                        type="date"
+                        value={tempEndDate}
+                        onChange={(e) => setTempEndDate(e.target.value)}
+                        className="w-full px-2 py-1 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm"
+                      />
+                    </div>
+                    <button
+                      onClick={() => {
+                        onFiltersChange({ ...filters, startDate: tempStartDate, endDate: tempEndDate });
+                        setPeriodDropdownOpen(false);
+                      }}
+                      className="w-full px-3 py-2 bg-pink-600 hover:bg-pink-700 text-white rounded-md text-sm font-medium transition-colors"
+                    >
+                      Aplicar Filtro
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
         )}
 
         {/* Click outside to close dropdowns */}
-        {(groupDropdownOpen || companyDropdownOpen) && (
+        {(groupDropdownOpen || companyDropdownOpen || bankDropdownOpen || periodDropdownOpen) && (
           <div 
             className="fixed inset-0 z-5" 
             onClick={() => {
               setGroupDropdownOpen(false);
               setCompanyDropdownOpen(false);
+              setBankDropdownOpen(false);
+              setPeriodDropdownOpen(false);
             }}
           />
         )}

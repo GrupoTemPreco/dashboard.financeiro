@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { KPICard } from './components/KPICard';
 import { KPIDetailModal } from './components/KPIDetailModal';
@@ -15,11 +15,13 @@ import { ConfirmOverwriteModal } from './components/ConfirmOverwriteModal';
 import { ImportModeModal } from './components/ImportModeModal';
 import { ConfirmAccumulateModal } from './components/ConfirmAccumulateModal';
 import { ErrorModal } from './components/ErrorModal';
-import { CardSkeleton } from './components/CardSkeleton';
 import { ChartSkeleton } from './components/ChartSkeleton';
 import { PageLoader } from './components/PageLoader';
+import { NotificationCenter } from './components/NotificationCenter';
+import { ToastNotification } from './components/ToastNotification';
+import { NotificationProvider, useNotificationContext } from './contexts/NotificationContext';
 import { FinancialRecord, Filters, ImportedFile } from './types/financial';
-import { processExcelFile, processCompaniesFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, processOrcamentoDREFile, validateFileFormat } from './utils/excelProcessor';
+import { processExcelFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, processOrcamentoDREFile, processReceitaCrediarioFile, validateFileFormat } from './utils/excelProcessor';
 import { filterData, calculateKPIs } from './utils/dataProcessor';
 import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List, Moon, Sun, Eye, EyeOff } from 'lucide-react';
 import { supabase } from './lib/supabase';
@@ -30,16 +32,22 @@ const IMPORT_ADMIN_CODE =
 const IMPORT_USER_CODE =
   import.meta.env.VITE_IMPORT_USER_CODE || 'user123';
 
-function App() {
+function AppContent() {
+  // Sistema de notificações
+  const { notifications, addNotification } = useNotificationContext();
+  const [activeToast, setActiveToast] = useState<string | null>(null);
+
   const [records, setRecords] = useState<FinancialRecord[]>([]);
   const [companies, setCompanies] = useState<any[]>([]);
   const [accountsPayable, setAccountsPayable] = useState<any[]>([]);
   const [revenues, setRevenues] = useState<any[]>([]);
+  const [receitaCrediario, setReceitaCrediario] = useState<any[]>([]);
   const [financialTransactions, setFinancialTransactions] = useState<any[]>([]);
   const [forecastedEntries, setForecastedEntries] = useState<any[]>([]);
   const [revenuesDRE, setRevenuesDRE] = useState<any[]>([]);
   const [cmvDRE, setCmvDRE] = useState<any[]>([]);
   const [initialBalances, setInitialBalances] = useState<any[]>([]);
+  const [showLatestInitialBalance, setShowLatestInitialBalance] = useState(false);
   const [currentPage, setCurrentPage] = useState('cashflow');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [presentationMode, setPresentationMode] = useState(false);
@@ -63,17 +71,21 @@ function App() {
     currentIndex?: number;
     totalFiles?: number;
     allCompleted?: boolean;
+    progress?: string;
   }>({
     isLoading: false
   });
   const [dataLoading, setDataLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [importedFiles, setImportedFiles] = useState<ImportedFile[]>([]);
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
     title: string;
     data: any[];
-    type: 'accounts_payable' | 'revenues' | 'transactions' | 'generic' | 'mixed';
+    type: 'accounts_payable' | 'revenues' | 'transactions' | 'generic' | 'mixed' | 'total_inflows' | 'total_outflows';
     loadPaginatedData?: (page: number, pageSize: number, filters: any) => Promise<{ data: any[]; totalCount: number; hasMore: boolean }>;
+    initialStartDate?: string;
+    initialEndDate?: string;
   }>({
     isOpen: false,
     title: '',
@@ -215,16 +227,53 @@ function App() {
     return { start, end };
   };
 
-  // Load data from Supabase on mount and when filters change
+  // Load data from Supabase on mount (carregamento inicial)
   useEffect(() => {
-    loadDataFromSupabase();
-    loadImportsFromSupabase();
+    const loadInitialData = async () => {
+      setInitialLoading(true);
+      await loadDataFromSupabase();
+      await loadImportsFromSupabase();
+      setInitialLoading(false);
+    };
+    
+    loadInitialData();
   }, []);
 
-  // Recarregar dados quando filtros de data, empresas ou grupos mudarem
+  // Recarregar dados quando filtros de empresas ou grupos mudarem (sem loader global)
+  // NOTA: Datas não recarregam automaticamente - só quando o usuário clicar em "Aplicar Filtro"
   useEffect(() => {
-    loadDataFromSupabase();
-  }, [filters.startDate, filters.endDate, filters.companies, filters.groups]);
+    // Só recarrega se não for o carregamento inicial (initialLoading já foi false)
+    // E se não estiver importando dados (evita conflito INSERT + SELECT simultâneos)
+    if (!initialLoading && !loading.isLoading) {
+      loadDataFromSupabase();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.companies, filters.groups, loading.isLoading]);
+
+  // Recarregar dados quando o período for aplicado (via botão "Aplicar Filtro")
+  // Usa uma ref para rastrear os valores anteriores das datas e evitar recarga no primeiro render
+  const prevDatesRef = useRef({ startDate: filters.startDate, endDate: filters.endDate });
+  useEffect(() => {
+    // Só recarrega se:
+    // 1. Não for o carregamento inicial
+    // 2. Não estiver importando dados
+    // 3. As datas não estiverem vazias (filtro foi aplicado)
+    // 4. As datas realmente mudaram (evita recarga no primeiro render ou quando não há mudança)
+    const datesChanged = prevDatesRef.current.startDate !== filters.startDate || 
+                         prevDatesRef.current.endDate !== filters.endDate;
+    
+    if (!initialLoading && !loading.isLoading && filters.startDate && filters.endDate && datesChanged) {
+      loadDataFromSupabase();
+      // Atualiza a referência com os novos valores
+      prevDatesRef.current = { startDate: filters.startDate, endDate: filters.endDate };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.startDate, filters.endDate, loading.isLoading]);
+
+  // Resetar estado quando o período mudar
+  useEffect(() => {
+    setShowLatestInitialBalance(false);
+  }, [filters.startDate, filters.endDate]);
 
   const testSupabaseConnection = async () => {
     console.log('🔌 Testando conexão com Supabase...');
@@ -314,11 +363,17 @@ function App() {
       }
     
       console.log('📅 Carregando dados do período:', { startDate, endDate });
+      console.log('📅 Filtros ativos:', {
+        startDate: filters.startDate,
+        endDate: filters.endDate,
+        companies: filters.companies?.length || 0,
+        groups: filters.groups?.length || 0
+      });
       // Load companies (não filtra por data - sempre carrega tudo)
       console.log('📊 Loading companies...');
       const { data: companiesData, error: companiesError } = await supabase
         .from('empresas')
-        .select('id, company_code, company_name, group_name')
+        .select('id, company_code, company_name, group_name, name')
         .order('created_at', { ascending: false });
 
       if (companiesError) {
@@ -346,35 +401,36 @@ function App() {
       const filteredBusinessUnits = getFilteredBusinessUnits();
 
       // Load accounts payable - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
+      // IMPORTANTE: Incluir registros com payment_date no período OU registros sem payment_date mas com due_date no período
       let apData: any[] | null = [];
       if (hasActiveImports) {
         // Carregar registros do período em lotes
         let allData: any[] = [];
-        const batchSize = 1000;
+        const batchSize = 500;
         let offset = 0;
         let hasMore = true;
         
+        // Query 1: Registros com payment_date no período (status realizado)
         while (hasMore) {
           let query = supabase
             .from('contas_a_pagar')
-            .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, creditor, id')
-            .in('import_id', activeImportIds);
+            .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
+            .in('import_id', activeImportIds)
+            .not('payment_date', 'is', null)
+            .gte('payment_date', startDate)
+            .lte('payment_date', endDate);
           
           // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
           if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
             query = query.in('business_unit', filteredBusinessUnits);
           }
           
-          query = query
-            .gte('payment_date', startDate)
-            .lte('payment_date', endDate)
+          const { data, error } = await query
             .order('payment_date', { ascending: false })
             .range(offset, offset + batchSize - 1);
           
-          const { data, error } = await query;
-          
           if (error) {
-            console.error('❌ Error loading accounts payable batch:', error);
+            console.error('❌ Error loading accounts payable batch (with payment_date):', error);
             throw error;
           }
           
@@ -387,8 +443,46 @@ function App() {
           }
         }
         
+        // Query 2: Registros com due_date no período (para previsto = filtrar por data de vencimento)
+        // Inclui todos com vencimento no período; PAGINADO para não bater no limite padrão do Supabase (1000 linhas)
+        let offset2 = 0;
+        let hasMore2 = true;
+        while (hasMore2) {
+          let query2 = supabase
+            .from('contas_a_pagar')
+            .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
+            .in('import_id', activeImportIds)
+            .gte('due_date', startDate)
+            .lte('due_date', endDate);
+          
+          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+            query2 = query2.in('business_unit', filteredBusinessUnits);
+          }
+          
+          const { data: data2, error: error2 } = await query2
+            .order('due_date', { ascending: false })
+            .range(offset2, offset2 + batchSize - 1);
+          
+          if (error2) {
+            console.error('❌ Error loading accounts payable (due_date in period):', error2);
+            throw error2;
+          }
+          
+          if (data2 && data2.length > 0) {
+            const existingIds = new Set(allData.map(item => item.id));
+            const newData = data2.filter(item => !existingIds.has(item.id));
+            allData = [...allData, ...newData];
+            offset2 += batchSize;
+            hasMore2 = data2.length === batchSize;
+          } else {
+            hasMore2 = false;
+          }
+        }
+        
         apData = allData;
         console.log(`✅ Carregados ${apData.length} registros de contas_a_pagar do período ${startDate} a ${endDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
+        console.log(`   - Com payment_date no período: ${allData.filter(ap => ap.payment_date).length}`);
+        console.log(`   - Com due_date no período: ${allData.filter(ap => ap.due_date).length}`);
       }
       if (apData) {
         setAccountsPayable(apData);
@@ -420,13 +514,47 @@ function App() {
         setRevenues(revenuesData);
       }
 
+      // Load receita_crediario - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO
+      let receitaCrediarioData: any[] | null = [];
+      if (hasActiveImports) {
+        try {
+          let query = supabase
+            .from('receita_crediario')
+            .select('import_id, un_neg_receb, data_receb, recebimento, parcela, id')
+            .in('import_id', activeImportIds);
+
+          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+            query = query.in('un_neg_receb', filteredBusinessUnits);
+          }
+
+          const { data, error } = await query
+            .gte('data_receb', startDate)
+            .lte('data_receb', endDate)
+            .order('data_receb', { ascending: false });
+
+          if (error) {
+            console.warn('⚠️ Erro ao carregar receita_crediario (tabela pode não existir):', error);
+            receitaCrediarioData = [];
+          } else {
+            receitaCrediarioData = data || [];
+            console.log(`✅ Carregados ${receitaCrediarioData.length} registros de receita_crediario do período ${startDate} a ${endDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
+          }
+        } catch (err) {
+          console.warn('⚠️ Exceção ao carregar receita_crediario:', err);
+          receitaCrediarioData = [];
+        }
+      }
+      if (receitaCrediarioData) {
+        setReceitaCrediario(receitaCrediarioData);
+      }
+
       // Load financial transactions - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
       let transactionsData: any[] | null = [];
       if (hasActiveImports) {
         try {
           let query = supabase
             .from('transacoes_financeiras')
-            .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, id')
+            .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
             .in('import_id', activeImportIds);
           
           // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
@@ -553,16 +681,17 @@ function App() {
         setCmvDRE(cmvDREData);
       }
 
-      // Load initial_balances - FILTRADO POR DATA NO BANCO
+      // Load initial_balances - CARREGAR TODOS OS SALDOS (sem filtro de data)
+      // Carregamos todos para poder buscar o saldo do período e também o mais recente antes do período
       // Carregar em bloco separado para garantir execução mesmo se outras tabelas falharem
       try {
         let initialBalancesData: any[] | null = [];
         
-        // Carregar saldos iniciais até a data final do período (pode ter múltiplas datas por banco)
+        // Carregar todos os saldos iniciais (sem filtro de data no banco)
+        // O filtro de data será aplicado depois no código
         let query = supabase
           .from('saldos_iniciais')
           .select('import_id, business_unit, balance_date, balance, bank_name, id')
-          .lte('balance_date', endDate)
           .order('balance_date', { ascending: false });
 
         const { data, error } = await query;
@@ -572,7 +701,7 @@ function App() {
           initialBalancesData = [];
         } else {
           initialBalancesData = data || [];
-          console.log(`✅ Carregados ${initialBalancesData.length} registros de saldos_iniciais até ${endDate}`);
+          console.log(`✅ Carregados ${initialBalancesData.length} registros de saldos_iniciais`);
         }
         
         // Sempre definir o estado, mesmo se vazio
@@ -647,7 +776,8 @@ function App() {
       'cmv_dre': 'cmv_dre',
       'initial_balances': 'saldos_iniciais',
       'orcamento_dre': 'orcamento_dre',
-      'transactions': 'transactions'
+      'transactions': 'transactions',
+      'receita_crediario': 'receita_crediario'
     };
     return typeMap[type] || type;
   };
@@ -664,7 +794,8 @@ function App() {
       'cmv_dre': 'cmv_dre',
       'saldos_iniciais': 'initial_balances',
       'orcamento_dre': 'orcamento_dre',
-      'transactions': 'transactions'
+      'transactions': 'transactions',
+      'receita_crediario': 'receita_crediario'
     };
     return reverseMap[tableName] || 'companies'; // Fallback para um tipo válido
   };
@@ -798,7 +929,159 @@ function App() {
     }
   };
 
-  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre', currentIndex?: number, totalFiles?: number, shouldOverwrite?: boolean, shouldAccumulate?: boolean) => {
+  const handleSaveCompany = async (company: { company_code: string; company_name: string; name: string; group_name: string }) => {
+    try {
+      // Verificar se já existe uma empresa com o mesmo código
+      const { data: existingCompany, error: checkError } = await supabase
+        .from('empresas')
+        .select('company_code')
+        .eq('company_code', company.company_code)
+        .single();
+
+      if (checkError && checkError.code !== 'PGRST116') { // PGRST116 = no rows returned
+        throw new Error(`Erro ao verificar empresa existente: ${checkError.message}`);
+      }
+
+      if (existingCompany) {
+        throw new Error('Já existe uma empresa cadastrada com este código da loja.');
+      }
+
+      // Inserir a nova empresa
+      const { error: insertError } = await supabase
+        .from('empresas')
+        .insert([{
+          company_code: company.company_code,
+          company_name: company.company_name,
+          name: company.name,
+          group_name: company.group_name
+        }]);
+
+      if (insertError) {
+        throw new Error(`Erro ao cadastrar empresa: ${insertError.message}`);
+      }
+
+      // Recarregar empresas do banco
+      const { data: companiesData, error: companiesError } = await supabase
+        .from('empresas')
+        .select('id, company_code, company_name, group_name, name')
+        .order('created_at', { ascending: false });
+
+      if (companiesError) {
+        console.error('Erro ao recarregar empresas:', companiesError);
+      } else {
+        setCompanies(companiesData || []);
+      }
+
+      // Adicionar notificação de sucesso
+      const successNotificationId = addNotification({
+        type: 'success',
+        title: 'Empresa Cadastrada',
+        message: `A empresa "${company.company_name}" (${company.company_code}) foi cadastrada com sucesso.`
+      });
+      setActiveToast(successNotificationId);
+    } catch (error: any) {
+      console.error('Erro ao salvar empresa:', error);
+      
+      // Adicionar notificação de erro
+      const errorNotificationId = addNotification({
+        type: 'error',
+        title: 'Erro ao Cadastrar Empresa',
+        message: error.message || 'Erro ao cadastrar empresa. Tente novamente.'
+      });
+      setActiveToast(errorNotificationId);
+      
+      throw error;
+    }
+  };
+
+  const handleUpdateCompany = async (id: string, company: { company_code: string; company_name: string; name: string; group_name: string }) => {
+    try {
+      // Verificar se já existe outra empresa com o mesmo código
+      const { data: existingCompany, error: checkError } = await supabase
+        .from('empresas')
+        .select('id, company_code')
+        .eq('company_code', company.company_code)
+        .neq('id', id)
+        .single();
+
+      if (checkError && checkError.code !== 'PGRST116') { // PGRST116 = no rows returned
+        throw new Error(`Erro ao verificar empresa existente: ${checkError.message}`);
+      }
+
+      if (existingCompany) {
+        throw new Error('Já existe outra empresa cadastrada com este código da loja.');
+      }
+
+      // Atualizar a empresa
+      const { error: updateError } = await supabase
+        .from('empresas')
+        .update({
+          company_code: company.company_code,
+          company_name: company.company_name,
+          name: company.name,
+          group_name: company.group_name,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id);
+
+      if (updateError) {
+        throw new Error(`Erro ao atualizar empresa: ${updateError.message}`);
+      }
+
+      // Recarregar empresas do banco para atualizar a lista
+      const { data: companiesData, error: companiesError } = await supabase
+        .from('empresas')
+        .select('id, company_code, company_name, group_name, name')
+        .order('created_at', { ascending: false });
+
+      if (companiesError) {
+        console.error('Erro ao recarregar empresas:', companiesError);
+      } else {
+        setCompanies(companiesData || []);
+      }
+
+      // Adicionar notificação de sucesso
+      const successNotificationId = addNotification({
+        type: 'success',
+        title: 'Empresa Atualizada',
+        message: `A empresa "${company.company_name}" (${company.company_code}) foi atualizada com sucesso.`
+      });
+      setActiveToast(successNotificationId);
+    } catch (error: any) {
+      console.error('Erro ao atualizar empresa:', error);
+      
+      // Adicionar notificação de erro
+      const errorNotificationId = addNotification({
+        type: 'error',
+        title: 'Erro ao Atualizar Empresa',
+        message: error.message || 'Erro ao atualizar empresa. Tente novamente.'
+      });
+      setActiveToast(errorNotificationId);
+      
+      throw error;
+    }
+  };
+
+  const handleRefreshCompanies = async () => {
+    try {
+      const { data: companiesData, error: companiesError } = await supabase
+        .from('empresas')
+        .select('id, company_code, company_name, group_name, name')
+        .order('created_at', { ascending: false });
+
+      if (companiesError) {
+        console.error('Erro ao recarregar empresas:', companiesError);
+        throw companiesError;
+      } else {
+        setCompanies(companiesData || []);
+      }
+    } catch (error: any) {
+      console.error('Erro ao recarregar empresas:', error);
+      throw error;
+    }
+  };
+
+  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario', currentIndex?: number, totalFiles?: number, shouldOverwrite?: boolean, shouldAccumulate?: boolean) => {
     // Validar formato do arquivo antes de processar
     if (type !== 'transactions') {
       const validation = await validateFileFormat(file, type);
@@ -825,6 +1108,7 @@ function App() {
       allCompleted: false
     });
 
+    let importId: string | undefined;
     try {
       // Create import record in database first
       const tableName = getTableNameFromType(type);
@@ -840,11 +1124,15 @@ function App() {
 
       if (importError) throw importError;
 
-      const importId = importRecord.id;
+      importId = importRecord.id;
+
+      if (!importId) {
+        throw new Error('Não foi possível criar o registro de importação no banco de dados.');
+      }
 
       // Create new file entry for UI
-      const newFile = {
-        id: importId,
+      const newFile: ImportedFile = {
+        id: importId as string,
         name: file.name,
         type,
         uploadDate: new Date().toISOString(),
@@ -856,102 +1144,734 @@ function App() {
 
       let recordCount = 0;
 
-      if (type === 'companies') {
-        const importedCompanies = await processCompaniesFile(file);
-        console.log('Empresas importadas:', importedCompanies);
+      if (type === 'accounts_payable') {
+        // Obter business units válidas do banco
+        const validBusinessUnits = companies.map(c => normalizeCode(c.company_code));
+        
+        // Atualizar progresso: processando arquivo
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: 'Lendo e validando planilha...'
+        });
+
+        // Processar arquivo com validações
+        const result = await processAccountsPayableFile(file, validBusinessUnits);
+        
+        console.log('📊 RESULTADO DO PROCESSAMENTO:');
+        console.log(`   Total de linhas na planilha: ${result.stats.totalRows}`);
+        console.log(`   Linhas ignoradas (cabeçalho/rodapé): ${result.stats.skippedHeaderFooter}`);
+        console.log(`   Linhas ignoradas (vazias): ${result.stats.skippedEmpty}`);
+        console.log(`   Linhas inválidas: ${result.stats.invalid}`);
+        console.log(`   Linhas processadas com sucesso: ${result.stats.processed}`);
+        console.log(`   Registros válidos para inserir: ${result.data.length}`);
+        console.log(`   Unidades inválidas encontradas: ${result.validationErrors.invalidBusinessUnits.length}`);
+        console.log(`   Linhas com erros: ${result.validationErrors.invalidRows.length}`);
+
+        // Verificar se há erros de validação que impedem a importação
+        if (result.validationErrors.invalidRows.length > 0 || result.validationErrors.invalidBusinessUnits.length > 0) {
+          // Criar notificação de erro
+          const totalErrors = result.validationErrors.invalidRows.length + result.validationErrors.invalidBusinessUnits.length;
+          const notificationId = addNotification({
+            type: 'error',
+            title: 'Erros na Importação',
+            message: `Foram encontrados ${totalErrors} erro(s) na planilha "${file.name}".`,
+            data: {
+              invalidRows: result.validationErrors.invalidRows,
+              invalidBusinessUnits: result.validationErrors.invalidBusinessUnits,
+              fileName: file.name
+            }
+          });
+          setActiveToast(notificationId);
+          
+          // Parar o processamento e não inserir dados
+          setLoading({
+            isLoading: false,
+            allCompleted: false
+          });
+          return;
+        }
+
+        if (result.data.length === 0) {
+          throw new Error('Nenhum registro válido foi encontrado na planilha após a validação.');
+        }
 
         // Se deve sobrepor, deletar dados antigos primeiro
         if (shouldOverwrite && !shouldAccumulate) {
-          // Deletar todas as empresas antes de inserir as novas
-          const { error: deleteError } = await supabase
-            .from('empresas')
-            .delete()
-            .neq('id', '00000000-0000-0000-0000-000000000000'); // Deletar todas (condição sempre verdadeira)
-          if (deleteError) throw deleteError;
-        }
-
-        // Save to Supabase - usar insert se acumular, upsert se sobrepor
-        if (shouldAccumulate) {
-          const { error } = await supabase
-            .from('empresas')
-            .insert(importedCompanies);
-          if (error) throw error;
-        } else {
-          const { error } = await supabase
-            .from('empresas')
-            .upsert(importedCompanies, { onConflict: 'company_code' });
-          if (error) throw error;
-        }
-
-        setCompanies(importedCompanies);
-        recordCount = importedCompanies.length;
-        console.log('Saved companies to Supabase');
-      } else if (type === 'accounts_payable') {
-        const importedAccountsPayable = await processAccountsPayableFile(file);
-        console.log('Contas a pagar importadas:', importedAccountsPayable);
-
-        // Se deve sobrepor, deletar dados antigos primeiro
-        if (shouldOverwrite && !shouldAccumulate) {
+          // Verificar quantos registros existem antes de deletar
+          const { count: countBefore } = await supabase
+            .from('contas_a_pagar')
+            .select('*', { count: 'exact', head: true });
+          
+          console.log(`🗑️ Deletando ${countBefore || 0} registros antigos antes de inserir novos...`);
+          
           // Deletar todos os registros de contas_a_pagar antes de inserir os novos
-          const { error: deleteError } = await supabase
+          const { error: deleteError, count: deletedCount } = await supabase
             .from('contas_a_pagar')
             .delete()
             .neq('id', '00000000-0000-0000-0000-000000000000'); // Deletar todas
+          
           if (deleteError) throw deleteError;
+          
+          console.log(`✅ ${deletedCount || countBefore || 0} registros deletados`);
         }
 
         // Add import_id to each record
-        const recordsWithImportId = importedAccountsPayable.map(record => ({
+        const recordsWithImportId = result.data.map(record => ({
           ...record,
           import_id: importId
         }));
 
-        // Save to Supabase - sempre usar insert (acumular ou após deletar)
-        const { error } = await supabase
-          .from('contas_a_pagar')
-          .insert(recordsWithImportId);
+        console.log(`📊 Total de registros a inserir no banco: ${recordsWithImportId.length}`);
+        console.log(`📊 Resumo: ${result.stats.processed} processados de ${result.stats.totalRows} linhas da planilha`);
+        
+        // Log de amostra das primeiras datas para debug
+        if (recordsWithImportId.length > 0) {
+          const sampleDates = recordsWithImportId.slice(0, 5).map(r => ({
+            due_date: r.due_date,
+            payment_date: r.payment_date || 'NULL',
+            status: r.status
+          }));
+          console.log(`📅 Amostra de datas dos primeiros 5 registros:`, sampleDates);
+          
+          // Estatísticas de datas
+          const datesWithPayment = recordsWithImportId.filter(r => r.payment_date).length;
+          const datesWithoutPayment = recordsWithImportId.filter(r => !r.payment_date).length;
+          const minDueDate = recordsWithImportId.reduce((min, r) => 
+            (!min || (r.due_date && r.due_date < min)) ? (r.due_date || min) : min, null as string | null
+          );
+          const maxDueDate = recordsWithImportId.reduce((max, r) => 
+            (!max || (r.due_date && r.due_date > max)) ? (r.due_date || max) : max, null as string | null
+          );
+          const minPaymentDate = recordsWithImportId
+            .filter(r => r.payment_date)
+            .reduce((min, r) => 
+              (!min || (r.payment_date && r.payment_date < min)) ? r.payment_date : min, null as string | null
+            );
+          const maxPaymentDate = recordsWithImportId
+            .filter(r => r.payment_date)
+            .reduce((max, r) => 
+              (!max || (r.payment_date && r.payment_date > max)) ? r.payment_date : max, null as string | null
+            );
+          
+          console.log(`📅 Estatísticas de datas:`);
+          console.log(`   - Com payment_date: ${datesWithPayment}`);
+          console.log(`   - Sem payment_date: ${datesWithoutPayment}`);
+          console.log(`   - due_date: ${minDueDate} a ${maxDueDate}`);
+          if (minPaymentDate && maxPaymentDate) {
+            console.log(`   - payment_date: ${minPaymentDate} a ${maxPaymentDate}`);
+          }
+        }
 
-        if (error) throw error;
+        // Save to Supabase com progresso real
+        const batchSize = 500;
+        const totalRecords = recordsWithImportId.length;
+        let totalInserted = 0;
+        
+        // Atualizar progresso: iniciando inserção
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: `Inserindo 0/${totalRecords} registros no banco...`
+        });
+        
+        for (let i = 0; i < totalRecords; i += batchSize) {
+          const batch = recordsWithImportId.slice(i, i + batchSize);
+          const current = Math.min(i + batchSize, totalRecords);
+          
+          // Atualizar progresso
+          setLoading({
+            isLoading: true,
+            currentFile: file.name,
+            currentIndex: currentIndex,
+            totalFiles: totalFiles,
+            allCompleted: false,
+            progress: `Inserindo ${current}/${totalRecords} registros no banco...`
+          });
+
+          const { data: insertedData, error } = await supabase
+            .from('contas_a_pagar')
+            .insert(batch)
+            .select('id');
+
+          if (error) {
+            throw new Error(`Erro ao inserir dados no banco de dados (linha ${i + 1}): ${error.message}`);
+          }
+
+          if (insertedData) {
+            totalInserted += insertedData.length;
+            console.log(`✅ Lote ${Math.floor(i / batchSize) + 1}: ${insertedData.length} registros inseridos (total inserido: ${totalInserted}/${totalRecords})`);
+          }
+
+          // Pausa entre lotes para evitar sobrecarga no banco (200-500ms)
+          // Não pausar após o último lote
+          if (i + batchSize < totalRecords) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+        }
+
+        console.log('📊 RESUMO FINAL DA IMPORTAÇÃO:');
+        console.log(`   Linhas na planilha: ${result.stats.totalRows}`);
+        console.log(`   Linhas processadas: ${result.stats.processed}`);
+        console.log(`   Registros válidos: ${result.data.length}`);
+        console.log(`   Registros inseridos no banco: ${totalInserted}`);
+        console.log(`   Diferença (processados - inseridos): ${result.stats.processed - totalInserted}`);
+        
+        if (totalInserted !== result.data.length) {
+          console.warn(`⚠️ ATENÇÃO: ${result.data.length - totalInserted} registros não foram inseridos!`);
+        }
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
         await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
-        recordCount = importedAccountsPayable.length;
-        console.log('Saved accounts payable to Supabase');
+        recordCount = result.data.length;
+        console.log(`Saved ${recordCount} accounts payable records to Supabase`);
+        
+        // Adicionar notificação de sucesso
+        const successNotificationId = addNotification({
+          type: 'success',
+          title: 'Importação Concluída',
+          message: `${recordCount} registro(s) de "${file.name}" foram importados com sucesso.`
+        });
+        setActiveToast(successNotificationId);
+
+        // Mostrar notificação de linhas ignoradas (se houver)
+        if (result.skippedRows && result.skippedRows.length > 0) {
+          const categorySummary = {
+            'cabeçalho': result.skippedRows.filter(r => r.category === 'cabeçalho').length,
+            'rodapé': result.skippedRows.filter(r => r.category === 'rodapé').length,
+            'vazia': result.skippedRows.filter(r => r.category === 'vazia').length,
+            'inválida': result.skippedRows.filter(r => r.category === 'inválida').length,
+            'metadado': result.skippedRows.filter(r => r.category === 'metadado').length
+          };
+          
+          const summaryMessages: string[] = [];
+          if (categorySummary.cabeçalho > 0) {
+            summaryMessages.push(`${categorySummary.cabeçalho} ${categorySummary.cabeçalho === 1 ? 'linha de cabeçalho' : 'linhas de cabeçalho'}`);
+          }
+          if (categorySummary.rodapé > 0) {
+            summaryMessages.push(`${categorySummary.rodapé} ${categorySummary.rodapé === 1 ? 'linha de rodapé' : 'linhas de rodapé'}`);
+          }
+          if (categorySummary.vazia > 0) {
+            summaryMessages.push(`${categorySummary.vazia} ${categorySummary.vazia === 1 ? 'linha vazia' : 'linhas vazias'}`);
+          }
+          if (categorySummary.inválida > 0) {
+            summaryMessages.push(`${categorySummary.inválida} ${categorySummary.inválida === 1 ? 'linha inválida' : 'linhas inválidas'}`);
+          }
+          if (categorySummary.metadado > 0) {
+            summaryMessages.push(`${categorySummary.metadado} ${categorySummary.metadado === 1 ? 'linha de metadado' : 'linhas de metadado'}`);
+          }
+          
+          const summaryText = summaryMessages.length > 0 
+            ? summaryMessages.join(', ')
+            : `${result.skippedRows.length} ${result.skippedRows.length === 1 ? 'linha ignorada' : 'linhas ignoradas'}`;
+          
+          const notificationId = addNotification({
+            type: 'info',
+            title: 'Linhas Ignoradas na Importação',
+            message: `${summaryText} foram ignoradas durante a importação de "${file.name}".`,
+            data: {
+              skippedRows: result.skippedRows,
+              fileName: file.name,
+              stats: result.stats
+            }
+          });
+          setActiveToast(notificationId);
+        }
       } else if (type === 'revenues') {
-        const importedRevenues = await processRevenuesFile(file);
-        console.log('Receitas importadas:', importedRevenues);
+        // Obter business units válidas do banco
+        const validBusinessUnits = companies.map(c => normalizeCode(c.company_code));
+        
+        // Atualizar progresso: processando arquivo
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: 'Lendo e validando planilha...'
+        });
+
+        // Processar arquivo com validações (detecta automaticamente se é receita ou receita_crediario)
+        const result = await processRevenuesFile(file, validBusinessUnits);
+        
+        // Detectar se é receita_crediario verificando propriedades do primeiro registro
+        const isReceitaCrediario = result.data.length > 0 && 'data_receb' in result.data[0] && !('payment_date' in result.data[0]);
+        
+        // Atualizar o tipo de arquivo no registro de importação se necessário
+        if (isReceitaCrediario && importId) {
+          const { error: updateError } = await supabase
+            .from('importacoes')
+            .update({ file_type: 'receita_crediario' })
+            .eq('id', importId);
+          if (updateError) {
+            console.warn('⚠️ Erro ao atualizar tipo de arquivo:', updateError);
+          } else {
+            console.log('✅ Tipo de arquivo atualizado para receita_crediario');
+          }
+        }
+        
+        console.log(`📊 RESULTADO DO PROCESSAMENTO ${isReceitaCrediario ? 'RECEITA CREDIÁRIO' : 'RECEITAS'}:`);
+        console.log(`   Total de linhas na planilha: ${result.stats.totalRows}`);
+        console.log(`   Linhas ignoradas (cabeçalho/rodapé): ${result.stats.skippedHeaderFooter}`);
+        console.log(`   Linhas ignoradas (vazias): ${result.stats.skippedEmpty}`);
+        console.log(`   Linhas inválidas: ${result.stats.invalid}`);
+        console.log(`   Linhas processadas com sucesso: ${result.stats.processed}`);
+        console.log(`   Registros válidos para inserir: ${result.data.length}`);
+        console.log(`   Unidades inválidas encontradas: ${result.validationErrors.invalidBusinessUnits.length}`);
+        console.log(`   Linhas com erros: ${result.validationErrors.invalidRows.length}`);
+        console.log(`   Colunas faltantes: ${result.validationErrors.missingColumns.length}`);
+        
+        // Verificar linhas com status não identificado (apenas para receitas normais)
+        const rowsWithUnidentifiedStatus = !isReceitaCrediario ? ((result as any).rowsWithUnidentifiedStatus || []) : [];
+        if (rowsWithUnidentifiedStatus.length > 0) {
+          console.log(`   Linhas com status não identificado: ${rowsWithUnidentifiedStatus.length}`);
+        }
+
+        // Verificar se há erros de validação que impedem a importação
+        if (result.validationErrors.missingColumns.length > 0 || 
+            result.validationErrors.invalidRows.length > 0 || 
+            result.validationErrors.invalidBusinessUnits.length > 0) {
+          // Criar notificação de erro
+          const totalErrors = result.validationErrors.missingColumns.length + 
+                             result.validationErrors.invalidRows.length + 
+                             result.validationErrors.invalidBusinessUnits.length;
+          const notificationId = addNotification({
+            type: 'error',
+            title: 'Erros na Importação',
+            message: `Foram encontrados ${totalErrors} erro(s) na planilha "${file.name}".`,
+            data: {
+              missingColumns: result.validationErrors.missingColumns,
+              invalidRows: result.validationErrors.invalidRows,
+              invalidBusinessUnits: result.validationErrors.invalidBusinessUnits,
+              fileName: file.name
+            } as any
+          });
+          setActiveToast(notificationId);
+          
+          // Parar o processamento e não inserir dados
+          setLoading({
+            isLoading: false,
+            allCompleted: false
+          });
+          return;
+        }
+
+        if (result.data.length === 0) {
+          throw new Error('Nenhum registro válido foi encontrado na planilha após a validação.');
+        }
+
+        const tableName = isReceitaCrediario ? 'receita_crediario' : 'receitas';
+        const recordTypeName = isReceitaCrediario ? 'receita crediário' : 'receitas';
 
         // Se deve sobrepor, deletar dados antigos primeiro
         if (shouldOverwrite && !shouldAccumulate) {
+          const { count: countBefore } = await supabase
+            .from(tableName)
+            .select('*', { count: 'exact', head: true });
+          
+          console.log(`🗑️ Deletando ${countBefore || 0} registros antigos antes de inserir novos...`);
+          
           const { error: deleteError } = await supabase
-            .from('receitas')
+            .from(tableName)
             .delete()
             .neq('id', '00000000-0000-0000-0000-000000000000');
+          
           if (deleteError) throw deleteError;
+          
+          console.log(`✅ ${countBefore || 0} registros deletados`);
         }
 
         // Add import_id to each record
-        const recordsWithImportId = importedRevenues.map(record => ({
+        const recordsWithImportId = result.data.map((record: any) => ({
           ...record,
           import_id: importId
         }));
 
-        // Save to Supabase - sempre usar insert
-        const { error } = await supabase
-          .from('receitas')
-          .insert(recordsWithImportId);
+        console.log(`📊 Total de registros a inserir no banco: ${recordsWithImportId.length}`);
+        console.log(`📊 Resumo: ${result.stats.processed} processados de ${result.stats.totalRows} linhas da planilha`);
 
-        if (error) throw error;
+        // Save to Supabase com progresso real
+        const batchSize = 500;
+        const totalRecords = recordsWithImportId.length;
+        let totalInserted = 0;
+        
+        // Atualizar progresso: iniciando inserção
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: `Inserindo 0/${totalRecords} ${recordTypeName} no banco...`
+        });
+        
+        for (let i = 0; i < totalRecords; i += batchSize) {
+          const batch = recordsWithImportId.slice(i, i + batchSize);
+          const current = Math.min(i + batchSize, totalRecords);
+          
+          // Atualizar progresso
+          setLoading({
+            isLoading: true,
+            currentFile: file.name,
+            currentIndex: currentIndex,
+            totalFiles: totalFiles,
+            allCompleted: false,
+            progress: `Inserindo ${current}/${totalRecords} ${recordTypeName} no banco...`
+          });
+
+          const { data: insertedData, error } = await supabase
+            .from(tableName)
+            .insert(batch)
+            .select('id');
+
+          if (error) {
+            throw new Error(`Erro ao inserir ${recordTypeName} no banco de dados (linha ${i + 1}): ${error.message}`);
+          }
+
+          if (insertedData) {
+            totalInserted += insertedData.length;
+            console.log(`✅ Lote ${Math.floor(i / batchSize) + 1}: ${insertedData.length} ${recordTypeName} inseridos (total inserido: ${totalInserted}/${totalRecords})`);
+          }
+
+          // Pausa entre lotes para evitar sobrecarga no banco
+          if (i + batchSize < totalRecords) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+        }
+
+        console.log(`📊 RESUMO FINAL DA IMPORTAÇÃO ${isReceitaCrediario ? 'RECEITA CREDIÁRIO' : 'RECEITAS'}:`);
+        console.log(`   Linhas na planilha: ${result.stats.totalRows}`);
+        console.log(`   Linhas processadas: ${result.stats.processed}`);
+        console.log(`   Registros válidos: ${result.data.length}`);
+        console.log(`   Registros inseridos no banco: ${totalInserted}`);
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
-        await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
-        recordCount = importedRevenues.length;
-        console.log('Saved revenues to Supabase');
+        if (!isReceitaCrediario) {
+          await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison apenas para receitas normais
+        }
+        recordCount = result.data.length;
+        console.log(`Saved ${recordCount} ${recordTypeName} records to Supabase`);
+        
+        // Adicionar notificação de sucesso
+        const successNotificationId = addNotification({
+          type: 'success',
+          title: 'Importação Concluída',
+          message: `${recordCount} registro(s) de ${recordTypeName} de "${file.name}" foram importados com sucesso.`
+        });
+        setActiveToast(successNotificationId);
+
+        // Mostrar notificação de linhas ignoradas (se houver)
+        if (result.skippedRows && result.skippedRows.length > 0) {
+          const categorySummary = {
+            'cabeçalho': result.skippedRows.filter(r => r.category === 'cabeçalho').length,
+            'rodapé': result.skippedRows.filter(r => r.category === 'rodapé').length,
+            'vazia': result.skippedRows.filter(r => r.category === 'vazia').length,
+            'inválida': result.skippedRows.filter(r => r.category === 'inválida').length
+          };
+          
+          const summaryMessages: string[] = [];
+          if (categorySummary.cabeçalho > 0) {
+            summaryMessages.push(`${categorySummary.cabeçalho} ${categorySummary.cabeçalho === 1 ? 'linha de cabeçalho' : 'linhas de cabeçalho'}`);
+          }
+          if (categorySummary.rodapé > 0) {
+            summaryMessages.push(`${categorySummary.rodapé} ${categorySummary.rodapé === 1 ? 'linha de rodapé' : 'linhas de rodapé'}`);
+          }
+          if (categorySummary.vazia > 0) {
+            summaryMessages.push(`${categorySummary.vazia} ${categorySummary.vazia === 1 ? 'linha vazia' : 'linhas vazias'}`);
+          }
+          
+          const summaryText = summaryMessages.length > 0 
+            ? summaryMessages.join(', ')
+            : `${result.skippedRows.length} ${result.skippedRows.length === 1 ? 'linha ignorada' : 'linhas ignoradas'}`;
+          
+          const notificationId = addNotification({
+            type: 'info',
+            title: 'Linhas Ignoradas na Importação',
+            message: `${summaryText} foram ignoradas durante a importação de "${file.name}".`,
+            data: {
+              skippedRows: result.skippedRows,
+              fileName: file.name,
+              stats: result.stats
+            }
+          });
+          setActiveToast(notificationId);
+        }
+
+        // Mostrar notificação informativa de status não identificado (se houver)
+        if (rowsWithUnidentifiedStatus.length > 0) {
+          const notificationId = addNotification({
+            type: 'info',
+            title: 'Status não identificado',
+            message: `${rowsWithUnidentifiedStatus.length} linha(s) com status não identificado foram normalizadas para "não identificado".`,
+            data: {
+              invalidRows: rowsWithUnidentifiedStatus.map((r: { lineNumber: number; rowContent: any[] }) => ({
+                lineNumber: r.lineNumber,
+                rowContent: r.rowContent,
+                errors: ['Status não identificado - normalizado para "não identificado"']
+              })),
+              fileName: file.name
+            }
+          });
+          setActiveToast(notificationId);
+        }
+      } else if (type === 'receita_crediario') {
+        // Obter business units válidas do banco
+        const validBusinessUnits = companies.map(c => normalizeCode(c.company_code));
+        
+        // Atualizar progresso: processando arquivo
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: 'Lendo e validando planilha...'
+        });
+
+        // Processar arquivo com validações
+        const result = await processReceitaCrediarioFile(file, validBusinessUnits);
+        
+        console.log('📊 RESULTADO DO PROCESSAMENTO RECEITA CREDIÁRIO:');
+        console.log(`   Total de linhas na planilha: ${result.stats.totalRows}`);
+        console.log(`   Linhas ignoradas (cabeçalho/rodapé): ${result.stats.skippedHeaderFooter}`);
+        console.log(`   Linhas ignoradas (vazias): ${result.stats.skippedEmpty}`);
+        console.log(`   Linhas inválidas: ${result.stats.invalid}`);
+        console.log(`   Linhas processadas com sucesso: ${result.stats.processed}`);
+        console.log(`   Registros válidos para inserir: ${result.data.length}`);
+        console.log(`   Unidades inválidas encontradas: ${result.validationErrors.invalidBusinessUnits.length}`);
+        console.log(`   Linhas com erros: ${result.validationErrors.invalidRows.length}`);
+
+        // Verificar se há erros de validação que impedem a importação
+        if (result.validationErrors.invalidRows.length > 0 || result.validationErrors.invalidBusinessUnits.length > 0) {
+          // Criar notificação de erro
+          const totalErrors = result.validationErrors.invalidRows.length + result.validationErrors.invalidBusinessUnits.length;
+          const notificationId = addNotification({
+            type: 'error',
+            title: 'Erros na Importação',
+            message: `Foram encontrados ${totalErrors} erro(s) na planilha "${file.name}".`,
+            data: {
+              invalidRows: result.validationErrors.invalidRows,
+              invalidBusinessUnits: result.validationErrors.invalidBusinessUnits,
+              fileName: file.name
+            }
+          });
+          setActiveToast(notificationId);
+          
+          // Parar o processamento e não inserir dados
+          setLoading({
+            isLoading: false,
+            allCompleted: false
+          });
+          return;
+        }
+
+        if (result.data.length === 0) {
+          throw new Error('Nenhum registro válido foi encontrado na planilha após a validação.');
+        }
+
+        // Se deve sobrepor, deletar dados antigos primeiro
+        if (shouldOverwrite && !shouldAccumulate) {
+          const { count: countBefore } = await supabase
+            .from('receita_crediario')
+            .select('*', { count: 'exact', head: true });
+          
+          console.log(`🗑️ Deletando ${countBefore || 0} registros antigos antes de inserir novos...`);
+          
+          const { error: deleteError } = await supabase
+            .from('receita_crediario')
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000');
+          
+          if (deleteError) throw deleteError;
+          
+          console.log(`✅ ${countBefore || 0} registros deletados`);
+        }
+
+        // Add import_id to each record
+        const recordsWithImportId = result.data.map(record => ({
+          ...record,
+          import_id: importId
+        }));
+
+        console.log(`📊 Total de registros a inserir no banco: ${recordsWithImportId.length}`);
+        console.log(`📊 Resumo: ${result.stats.processed} processados de ${result.stats.totalRows} linhas da planilha`);
+
+        // Save to Supabase com progresso real
+        const batchSize = 500;
+        const totalRecords = recordsWithImportId.length;
+        let totalInserted = 0;
+        
+        // Atualizar progresso: iniciando inserção
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: `Inserindo 0/${totalRecords} registros no banco...`
+        });
+        
+        for (let i = 0; i < totalRecords; i += batchSize) {
+          const batch = recordsWithImportId.slice(i, i + batchSize);
+          const current = Math.min(i + batchSize, totalRecords);
+          
+          // Atualizar progresso
+          setLoading({
+            isLoading: true,
+            currentFile: file.name,
+            currentIndex: currentIndex,
+            totalFiles: totalFiles,
+            allCompleted: false,
+            progress: `Inserindo ${current}/${totalRecords} registros no banco...`
+          });
+
+          const { data: insertedData, error } = await supabase
+            .from('receita_crediario')
+            .insert(batch)
+            .select('id');
+
+          if (error) {
+            throw new Error(`Erro ao inserir registros no banco de dados (linha ${i + 1}): ${error.message}`);
+          }
+
+          if (insertedData) {
+            totalInserted += insertedData.length;
+            console.log(`✅ Lote ${Math.floor(i / batchSize) + 1}: ${insertedData.length} registros inseridos (total inserido: ${totalInserted}/${totalRecords})`);
+          }
+
+          // Pausa entre lotes para evitar sobrecarga no banco
+          if (i + batchSize < totalRecords) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+        }
+
+        console.log('📊 RESUMO FINAL DA IMPORTAÇÃO RECEITA CREDIÁRIO:');
+        console.log(`   Linhas na planilha: ${result.stats.totalRows}`);
+        console.log(`   Linhas processadas: ${result.stats.processed}`);
+        console.log(`   Registros válidos: ${result.data.length}`);
+        console.log(`   Registros inseridos no banco: ${totalInserted}`);
+
+        // Reload from database to get proper IDs
+        await loadDataFromSupabase();
+        recordCount = result.data.length;
+        console.log(`Saved ${recordCount} receita crediário records to Supabase`);
+        
+        // Adicionar notificação de sucesso
+        const successNotificationId = addNotification({
+          type: 'success',
+          title: 'Importação Concluída',
+          message: `${recordCount} registro(s) de receita crediário de "${file.name}" foram importados com sucesso.`
+        });
+        setActiveToast(successNotificationId);
+
+        // Mostrar notificação de linhas ignoradas (se houver)
+        if (result.skippedRows && result.skippedRows.length > 0) {
+          const categorySummary = {
+            'cabeçalho': result.skippedRows.filter(r => r.category === 'cabeçalho').length,
+            'rodapé': result.skippedRows.filter(r => r.category === 'rodapé').length,
+            'vazia': result.skippedRows.filter(r => r.category === 'vazia').length,
+            'inválida': result.skippedRows.filter(r => r.category === 'inválida').length
+          };
+          
+          const summaryMessages: string[] = [];
+          if (categorySummary.cabeçalho > 0) {
+            summaryMessages.push(`${categorySummary.cabeçalho} ${categorySummary.cabeçalho === 1 ? 'linha de cabeçalho' : 'linhas de cabeçalho'}`);
+          }
+          if (categorySummary.rodapé > 0) {
+            summaryMessages.push(`${categorySummary.rodapé} ${categorySummary.rodapé === 1 ? 'linha de rodapé' : 'linhas de rodapé'}`);
+          }
+          if (categorySummary.vazia > 0) {
+            summaryMessages.push(`${categorySummary.vazia} ${categorySummary.vazia === 1 ? 'linha vazia' : 'linhas vazias'}`);
+          }
+          
+          const summaryText = summaryMessages.length > 0 
+            ? summaryMessages.join(', ')
+            : `${result.skippedRows.length} ${result.skippedRows.length === 1 ? 'linha ignorada' : 'linhas ignoradas'}`;
+          
+          const notificationId = addNotification({
+            type: 'info',
+            title: 'Linhas Ignoradas na Importação',
+            message: `${summaryText} foram ignoradas durante a importação de "${file.name}".`,
+            data: {
+              skippedRows: result.skippedRows,
+              fileName: file.name,
+              stats: result.stats
+            }
+          });
+          setActiveToast(notificationId);
+        }
       } else if (type === 'financial_transactions') {
-        const importedTransactions = await processFinancialTransactionsFile(file);
-        console.log('Lançamentos financeiros importados:', importedTransactions);
+        // Buscar business units válidas do banco
+        const { data: companiesData } = await supabase
+          .from('companies')
+          .select('company_code');
+        const validBusinessUnits = companiesData?.map(c => c.company_code) || [];
+
+        const result = await processFinancialTransactionsFile(file, validBusinessUnits);
+        console.log('📊 RESULTADO DO PROCESSAMENTO LANÇAMENTOS FINANCEIROS:');
+        console.log(`   Total de linhas na planilha: ${result.stats.totalRows}`);
+        console.log(`   Linhas ignoradas (cabeçalho/rodapé): ${result.stats.skippedHeaderFooter}`);
+        console.log(`   Linhas ignoradas (vazias): ${result.stats.skippedEmpty}`);
+        console.log(`   Linhas inválidas: ${result.stats.invalid}`);
+        console.log(`   Linhas processadas com sucesso: ${result.stats.processed}`);
+        console.log(`   Registros válidos para inserir: ${result.data.length}`);
+        console.log(`   Unidades inválidas encontradas: ${result.validationErrors.invalidBusinessUnits.length}`);
+        console.log(`   Linhas com erros: ${result.validationErrors.invalidRows.length}`);
+        console.log(`   Colunas faltantes: ${result.validationErrors.missingColumns.length}`);
+
+        // Verificar erros críticos que impedem a importação
+        if (result.validationErrors.missingColumns.length > 0 ||
+            result.validationErrors.invalidRows.length > 0 ||
+            result.validationErrors.invalidBusinessUnits.length > 0) {
+          const totalErrors = result.validationErrors.missingColumns.length +
+                              result.validationErrors.invalidRows.length +
+                              result.validationErrors.invalidBusinessUnits.length;
+          const notificationId = addNotification({
+            type: 'error',
+            title: 'Erros na Importação',
+            message: `Foram encontrados ${totalErrors} erro(s) na planilha "${file.name}".`,
+            data: {
+              missingColumns: result.validationErrors.missingColumns,
+              invalidRows: result.validationErrors.invalidRows,
+              invalidBusinessUnits: result.validationErrors.invalidBusinessUnits,
+              fileName: file.name,
+              skippedRows: result.skippedRows || [],
+              stats: result.stats
+            }
+          });
+          setActiveToast(notificationId);
+          setLoading({
+            isLoading: false,
+            allCompleted: false
+          });
+          return;
+        }
+
+        if (result.data.length === 0) {
+          addNotification({
+            type: 'error',
+            title: 'Importação Cancelada',
+            message: `Nenhum registro válido de lançamentos financeiros foi encontrado no arquivo "${file.name}".`,
+            data: {
+              fileName: file.name,
+              skippedRows: result.skippedRows || [],
+              stats: result.stats
+            }
+          });
+          setLoading({
+            isLoading: false,
+            allCompleted: false
+          });
+          return;
+        }
 
         // Se deve sobrepor, deletar dados antigos primeiro
         if (shouldOverwrite && !shouldAccumulate) {
@@ -963,23 +1883,125 @@ function App() {
         }
 
         // Add import_id to each record
-        const recordsWithImportId = importedTransactions.map(record => ({
+        const recordsWithImportId = result.data.map(record => ({
           ...record,
           import_id: importId
         }));
 
-        // Save to Supabase - sempre usar insert
-        const { error } = await supabase
-          .from('transacoes_financeiras')
-          .insert(recordsWithImportId);
+        // Save to Supabase em lotes para evitar sobrecarga
+        const batchSize = 500;
+        const totalRecords = recordsWithImportId.length;
+        let totalInserted = 0;
 
-        if (error) throw error;
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: `Inserindo 0/${totalRecords} transações no banco...`
+        });
+
+        for (let i = 0; i < totalRecords; i += batchSize) {
+          const batch = recordsWithImportId.slice(i, i + batchSize);
+          const current = Math.min(i + batchSize, totalRecords);
+
+          setLoading({
+            isLoading: true,
+            currentFile: file.name,
+            currentIndex: currentIndex,
+            totalFiles: totalFiles,
+            allCompleted: false,
+            progress: `Inserindo ${current}/${totalRecords} transações no banco...`
+          });
+
+          const { data: insertedData, error } = await supabase
+            .from('transacoes_financeiras')
+            .insert(batch)
+            .select('id');
+
+          if (error) {
+            throw new Error(`Erro ao inserir transações no banco de dados (linha ${i + 1}): ${error.message}`);
+          }
+
+          if (insertedData) {
+            totalInserted += insertedData.length;
+            console.log(`✅ Lote ${Math.floor(i / batchSize) + 1}: ${insertedData.length} transações inseridas (total inserido: ${totalInserted}/${totalRecords})`);
+          }
+
+          // Pausa entre lotes (200-500ms)
+          if (i + batchSize < totalRecords) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+        }
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
         await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
-        recordCount = importedTransactions.length;
+        recordCount = result.data.length;
         console.log('Saved financial transactions to Supabase');
+
+        // Mostrar notificação de linhas ignoradas (se houver)
+        if (result.skippedRows && result.skippedRows.length > 0) {
+          const categorySummary = {
+            'cabeçalho': result.skippedRows.filter(r => r.category === 'cabeçalho').length,
+            'rodapé': result.skippedRows.filter(r => r.category === 'rodapé').length,
+            'vazia': result.skippedRows.filter(r => r.category === 'vazia').length,
+            'inválida': result.skippedRows.filter(r => r.category === 'inválida').length,
+            'metadado': result.skippedRows.filter(r => r.category === 'metadado').length
+          };
+          
+          const summaryMessages: string[] = [];
+          if (categorySummary.cabeçalho > 0) {
+            summaryMessages.push(`${categorySummary.cabeçalho} ${categorySummary.cabeçalho === 1 ? 'linha de cabeçalho' : 'linhas de cabeçalho'}`);
+          }
+          if (categorySummary.rodapé > 0) {
+            summaryMessages.push(`${categorySummary.rodapé} ${categorySummary.rodapé === 1 ? 'linha de rodapé' : 'linhas de rodapé'}`);
+          }
+          if (categorySummary.vazia > 0) {
+            summaryMessages.push(`${categorySummary.vazia} ${categorySummary.vazia === 1 ? 'linha vazia' : 'linhas vazias'}`);
+          }
+          if (categorySummary.inválida > 0) {
+            summaryMessages.push(`${categorySummary.inválida} ${categorySummary.inválida === 1 ? 'linha inválida' : 'linhas inválidas'}`);
+          }
+          if (categorySummary.metadado > 0) {
+            summaryMessages.push(`${categorySummary.metadado} ${categorySummary.metadado === 1 ? 'linha de metadado' : 'linhas de metadado'}`);
+          }
+          
+          const summaryText = summaryMessages.length > 0 
+            ? summaryMessages.join(', ')
+            : `${result.skippedRows.length} ${result.skippedRows.length === 1 ? 'linha ignorada' : 'linhas ignoradas'}`;
+          
+          const notificationId = addNotification({
+            type: 'info',
+            title: 'Linhas Ignoradas na Importação',
+            message: `${summaryText} foram ignoradas durante a importação de "${file.name}".`,
+            data: {
+              skippedRows: result.skippedRows,
+              fileName: file.name,
+              stats: result.stats
+            }
+          });
+          setActiveToast(notificationId);
+        }
+        
+        // Adicionar notificação de sucesso
+        let successMessage = `${recordCount} registro(s) de transações financeiras de "${file.name}" foram importados com sucesso.`;
+        if (result.skippedRows && result.skippedRows.length > 0) {
+          successMessage += ` ${result.skippedRows.length} linha(s) foram ignoradas.`;
+        }
+        
+        const successNotificationId = addNotification({
+          type: 'success',
+          title: 'Importação Concluída',
+          message: successMessage,
+          data: result.skippedRows && result.skippedRows.length > 0 ? {
+            skippedRows: result.skippedRows,
+            fileName: file.name,
+            stats: result.stats
+          } : undefined
+        });
+        setActiveToast(successNotificationId);
       } else if (type === 'forecasted_entries') {
         console.log('Starting forecasted entries import...');
         const importedEntries = await processForecastedEntriesFile(file);
@@ -1007,24 +2029,69 @@ function App() {
 
         console.log('Records to insert:', recordsWithImportId);
 
-        // Save to Supabase PREVISTOS table - sempre usar insert
-        const { data: insertedData, error } = await supabase
-          .from('previstos')
-          .insert(recordsWithImportId)
-          .select();
+        // Save to Supabase em lotes para evitar sobrecarga
+        const batchSize = 500;
+        const totalRecords = recordsWithImportId.length;
+        let totalInserted = 0;
 
-        if (error) {
-          console.error('Supabase insert error:', error);
-          throw error;
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: `Inserindo 0/${totalRecords} previstos no banco...`
+        });
+
+        for (let i = 0; i < totalRecords; i += batchSize) {
+          const batch = recordsWithImportId.slice(i, i + batchSize);
+          const current = Math.min(i + batchSize, totalRecords);
+
+          setLoading({
+            isLoading: true,
+            currentFile: file.name,
+            currentIndex: currentIndex,
+            totalFiles: totalFiles,
+            allCompleted: false,
+            progress: `Inserindo ${current}/${totalRecords} previstos no banco...`
+          });
+
+          const { data: insertedData, error } = await supabase
+            .from('previstos')
+            .insert(batch)
+            .select();
+
+          if (error) {
+            console.error('Supabase insert error:', error);
+            throw new Error(`Erro ao inserir previstos no banco de dados (linha ${i + 1}): ${error.message}`);
+          }
+
+          if (insertedData) {
+            totalInserted += insertedData.length;
+            console.log(`✅ Lote ${Math.floor(i / batchSize) + 1}: ${insertedData.length} previstos inseridos (total inserido: ${totalInserted}/${totalRecords})`);
+          }
+
+          // Pausa entre lotes (200-500ms)
+          if (i + batchSize < totalRecords) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
         }
 
-        console.log('Inserted data:', insertedData);
+        console.log('Inserted data:', { total: totalInserted });
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
         await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
         recordCount = importedEntries.length;
         console.log('Saved forecasted entries to Supabase');
+        
+        // Adicionar notificação de sucesso
+        const successNotificationId = addNotification({
+          type: 'success',
+          title: 'Importação Concluída',
+          message: `${recordCount} registro(s) de previstos de "${file.name}" foram importados com sucesso.`
+        });
+        setActiveToast(successNotificationId);
       } else if (type === 'revenues_dre') {
         console.log('🔵 Starting revenues DRE import...');
         console.log('📁 File info:', { name: file.name, size: file.size, type: file.type });
@@ -1053,24 +2120,69 @@ function App() {
 
         console.log('Records to insert:', recordsWithImportId);
 
-        // Save to Supabase revenues_dre table - sempre usar insert
-        const { data: insertedData, error } = await supabase
-          .from('receitas_dre')
-          .insert(recordsWithImportId)
-          .select();
+        // Save to Supabase em lotes para evitar sobrecarga
+        const batchSize = 500;
+        const totalRecords = recordsWithImportId.length;
+        let totalInserted = 0;
 
-        if (error) {
-          console.error('Supabase insert error:', error);
-          throw error;
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: `Inserindo 0/${totalRecords} receitas DRE no banco...`
+        });
+
+        for (let i = 0; i < totalRecords; i += batchSize) {
+          const batch = recordsWithImportId.slice(i, i + batchSize);
+          const current = Math.min(i + batchSize, totalRecords);
+
+          setLoading({
+            isLoading: true,
+            currentFile: file.name,
+            currentIndex: currentIndex,
+            totalFiles: totalFiles,
+            allCompleted: false,
+            progress: `Inserindo ${current}/${totalRecords} receitas DRE no banco...`
+          });
+
+          const { data: insertedData, error } = await supabase
+            .from('receitas_dre')
+            .insert(batch)
+            .select();
+
+          if (error) {
+            console.error('Supabase insert error:', error);
+            throw new Error(`Erro ao inserir receitas DRE no banco de dados (linha ${i + 1}): ${error.message}`);
+          }
+
+          if (insertedData) {
+            totalInserted += insertedData.length;
+            console.log(`✅ Lote ${Math.floor(i / batchSize) + 1}: ${insertedData.length} receitas DRE inseridas (total inserido: ${totalInserted}/${totalRecords})`);
+          }
+
+          // Pausa entre lotes (200-500ms)
+          if (i + batchSize < totalRecords) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
         }
 
-        console.log('Inserted data:', insertedData);
+        console.log('Inserted data:', { total: totalInserted });
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
         await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
         recordCount = importedRevenuesDRE.length;
         console.log('Saved revenues DRE to Supabase');
+        
+        // Adicionar notificação de sucesso
+        const successNotificationId = addNotification({
+          type: 'success',
+          title: 'Importação Concluída',
+          message: `${recordCount} registro(s) de receitas DRE de "${file.name}" foram importados com sucesso.`
+        });
+        setActiveToast(successNotificationId);
       } else if (type === 'cmv_dre') {
         console.log('Starting CMV DRE import...');
         const importedCMVDRE = await processCMVDREFile(file);
@@ -1098,24 +2210,69 @@ function App() {
 
         console.log('Records to insert:', recordsWithImportId);
 
-        // Save to Supabase cmv_dre table - sempre usar insert
-        const { data: insertedData, error } = await supabase
-          .from('cmv_dre')
-          .insert(recordsWithImportId)
-          .select();
+        // Save to Supabase em lotes para evitar sobrecarga
+        const batchSize = 500;
+        const totalRecords = recordsWithImportId.length;
+        let totalInserted = 0;
 
-        if (error) {
-          console.error('Supabase insert error:', error);
-          throw error;
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: `Inserindo 0/${totalRecords} CMV DRE no banco...`
+        });
+
+        for (let i = 0; i < totalRecords; i += batchSize) {
+          const batch = recordsWithImportId.slice(i, i + batchSize);
+          const current = Math.min(i + batchSize, totalRecords);
+
+          setLoading({
+            isLoading: true,
+            currentFile: file.name,
+            currentIndex: currentIndex,
+            totalFiles: totalFiles,
+            allCompleted: false,
+            progress: `Inserindo ${current}/${totalRecords} CMV DRE no banco...`
+          });
+
+          const { data: insertedData, error } = await supabase
+            .from('cmv_dre')
+            .insert(batch)
+            .select();
+
+          if (error) {
+            console.error('Supabase insert error:', error);
+            throw new Error(`Erro ao inserir CMV DRE no banco de dados (linha ${i + 1}): ${error.message}`);
+          }
+
+          if (insertedData) {
+            totalInserted += insertedData.length;
+            console.log(`✅ Lote ${Math.floor(i / batchSize) + 1}: ${insertedData.length} CMV DRE inseridos (total inserido: ${totalInserted}/${totalRecords})`);
+          }
+
+          // Pausa entre lotes (200-500ms)
+          if (i + batchSize < totalRecords) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
         }
 
-        console.log('Inserted data:', insertedData);
+        console.log('Inserted data:', { total: totalInserted });
 
         // Reload from database to get proper IDs
         await loadDataFromSupabase();
         await loadMonthlyComparisonData(); // Recarregar dados do MonthlyComparison
         recordCount = importedCMVDRE.length;
         console.log('Saved CMV DRE to Supabase');
+        
+        // Adicionar notificação de sucesso
+        const successNotificationId = addNotification({
+          type: 'success',
+          title: 'Importação Concluída',
+          message: `${recordCount} registro(s) de CMV DRE de "${file.name}" foram importados com sucesso.`
+        });
+        setActiveToast(successNotificationId);
       } else if (type === 'initial_balances') {
         console.log('Starting Initial Balances import...');
         const importedBalances = await processInitialBalancesFile(file);
@@ -1140,23 +2297,68 @@ function App() {
           import_id: importId
         }));
 
-        // Save to Supabase initial_balances table - sempre usar insert
-        const { data: insertedData, error } = await supabase
-          .from('saldos_iniciais')
-          .insert(recordsWithImportId)
-          .select();
+        // Save to Supabase em lotes para evitar sobrecarga
+        const batchSize = 500;
+        const totalRecords = recordsWithImportId.length;
+        let totalInserted = 0;
 
-        if (error) {
-          console.error('Supabase insert error:', error);
-          throw error;
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: `Inserindo 0/${totalRecords} saldos iniciais no banco...`
+        });
+
+        for (let i = 0; i < totalRecords; i += batchSize) {
+          const batch = recordsWithImportId.slice(i, i + batchSize);
+          const current = Math.min(i + batchSize, totalRecords);
+
+          setLoading({
+            isLoading: true,
+            currentFile: file.name,
+            currentIndex: currentIndex,
+            totalFiles: totalFiles,
+            allCompleted: false,
+            progress: `Inserindo ${current}/${totalRecords} saldos iniciais no banco...`
+          });
+
+          const { data: insertedData, error } = await supabase
+            .from('saldos_iniciais')
+            .insert(batch)
+            .select();
+
+          if (error) {
+            console.error('Supabase insert error:', error);
+            throw new Error(`Erro ao inserir saldos iniciais no banco de dados (linha ${i + 1}): ${error.message}`);
+          }
+
+          if (insertedData) {
+            totalInserted += insertedData.length;
+            console.log(`✅ Lote ${Math.floor(i / batchSize) + 1}: ${insertedData.length} saldos inseridos (total inserido: ${totalInserted}/${totalRecords})`);
+          }
+
+          // Pausa entre lotes (200-500ms)
+          if (i + batchSize < totalRecords) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
         }
 
-        console.log('Inserted data:', insertedData);
+        console.log('Inserted data:', { total: totalInserted });
 
         // Reload from database
         await loadDataFromSupabase();
         recordCount = importedBalances.length;
         console.log('Saved Initial Balances to Supabase');
+        
+        // Adicionar notificação de sucesso
+        const successNotificationId = addNotification({
+          type: 'success',
+          title: 'Importação Concluída',
+          message: `${recordCount} registro(s) de saldos iniciais de "${file.name}" foram importados com sucesso.`
+        });
+        setActiveToast(successNotificationId);
       } else if (type === 'orcamento_dre') {
         console.log('🔄 Starting Orçamento DRE import...');
         console.log('📁 File info:', { name: file.name, size: file.size, type: file.type });
@@ -1176,40 +2378,85 @@ function App() {
 
         console.log('Records to insert:', recordsWithImportId);
 
-        // Save to Supabase orcamento_dre table
-        // Se acumular: usar insert (pode criar duplicatas se já existir)
-        // Se sobrepor: usar upsert para atualizar registros existentes
-        let insertedData;
-        if (shouldAccumulate) {
-          const { data, error } = await supabase
-            .from('orcamento_dre')
-            .insert(recordsWithImportId)
-            .select();
-          if (error) {
-            console.error('Supabase insert error:', error);
-            throw error;
+        // Save to Supabase em lotes para evitar sobrecarga
+        const batchSize = 500;
+        const totalRecords = recordsWithImportId.length;
+        let totalInserted = 0;
+
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: `Inserindo 0/${totalRecords} orçamento DRE no banco...`
+        });
+
+        for (let i = 0; i < totalRecords; i += batchSize) {
+          const batch = recordsWithImportId.slice(i, i + batchSize);
+          const current = Math.min(i + batchSize, totalRecords);
+
+          setLoading({
+            isLoading: true,
+            currentFile: file.name,
+            currentIndex: currentIndex,
+            totalFiles: totalFiles,
+            allCompleted: false,
+            progress: `Inserindo ${current}/${totalRecords} orçamento DRE no banco...`
+          });
+
+          // Se acumular: usar insert (pode criar duplicatas se já existir)
+          // Se sobrepor: usar upsert para atualizar registros existentes
+          let insertedData;
+          if (shouldAccumulate) {
+            const { data, error } = await supabase
+              .from('orcamento_dre')
+              .insert(batch)
+              .select();
+            if (error) {
+              console.error('Supabase insert error:', error);
+              throw new Error(`Erro ao inserir orçamento DRE no banco de dados (linha ${i + 1}): ${error.message}`);
+            }
+            insertedData = data;
+          } else {
+            const { data, error } = await supabase
+              .from('orcamento_dre')
+              .upsert(batch, {
+                onConflict: 'business_unit,account_name,period_date'
+              })
+              .select();
+            if (error) {
+              console.error('Supabase upsert error:', error);
+              throw new Error(`Erro ao inserir orçamento DRE no banco de dados (linha ${i + 1}): ${error.message}`);
+            }
+            insertedData = data;
           }
-          insertedData = data;
-        } else {
-          const { data, error } = await supabase
-            .from('orcamento_dre')
-            .upsert(recordsWithImportId, {
-              onConflict: 'business_unit,account_name,period_date'
-            })
-            .select();
-          if (error) {
-            console.error('Supabase upsert error:', error);
-            throw error;
+
+          if (insertedData) {
+            totalInserted += insertedData.length;
+            console.log(`✅ Lote ${Math.floor(i / batchSize) + 1}: ${insertedData.length} orçamento DRE inseridos (total inserido: ${totalInserted}/${totalRecords})`);
           }
-          insertedData = data;
+
+          // Pausa entre lotes (200-500ms)
+          if (i + batchSize < totalRecords) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
         }
 
-        console.log('Inserted data:', insertedData);
+        console.log('Inserted data:', { total: totalInserted });
 
         // Reload from database
         await loadDataFromSupabase();
         recordCount = importedOrcamentoDRE.length;
         console.log('Saved Orçamento DRE to Supabase');
+        
+        // Adicionar notificação de sucesso
+        const successNotificationId = addNotification({
+          type: 'success',
+          title: 'Importação Concluída',
+          message: `${recordCount} registro(s) de orçamento DRE de "${file.name}" foram importados com sucesso.`
+        });
+        setActiveToast(successNotificationId);
       } else if (type === 'transactions') {
         const processedRecords = await processExcelFile(file);
         setRecords(prev => [...prev, ...processedRecords]);
@@ -1234,16 +2481,61 @@ function App() {
     } catch (error) {
       console.error('❌ Error processing file:', error);
       console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+      
       const errorMessage = error instanceof Error ? error.message : 'Erro ao processar arquivo';
-      alert(`Erro ao importar arquivo: ${errorMessage}\n\nVeja o console (F12) para mais detalhes.`);
+      
+      // Identificar tipo de erro
+      let errorType = 'sistema';
+      if (errorMessage.includes('Colunas obrigatórias') || 
+          errorMessage.includes('unidades de negócio') || 
+          errorMessage.includes('linha(s) inválida') ||
+          errorMessage.includes('formato')) {
+        errorType = 'planilha';
+      } else if (errorMessage.includes('banco de dados') || 
+                 errorMessage.includes('Supabase') ||
+                 errorMessage.includes('insert') ||
+                 errorMessage.includes('update') ||
+                 errorMessage.includes('delete')) {
+        errorType = 'banco de dados';
+      }
 
-      setImportedFiles(prev =>
-        prev.map(f =>
-          f.id === Date.now().toString()
-            ? { ...f, status: 'error' as const }
-            : f
-        )
-      );
+      // Atualizar registro de importação com erro (sem colunas de erro por enquanto)
+      if (importId) {
+        try {
+          await supabase
+            .from('importacoes')
+            .update({ 
+              record_count: 0
+            })
+            .eq('id', importId);
+        } catch (updateError) {
+          console.error('Erro ao atualizar registro de importação:', updateError);
+        }
+      }
+
+      // Mostrar mensagem de erro detalhada
+      const errorTitle = errorType === 'planilha' 
+        ? 'Erro na Planilha' 
+        : errorType === 'banco de dados'
+        ? 'Erro no Banco de Dados'
+        : 'Erro no Sistema';
+      
+      setErrorModal({
+        isOpen: true,
+        title: errorTitle,
+        message: `${errorMessage}\n\nTipo de erro: ${errorType}\n\nVeja o console (F12) para mais detalhes.`
+      });
+
+      // Atualizar status do arquivo na UI
+      if (importId) {
+        setImportedFiles(prev =>
+          prev.map(f =>
+            f.id === importId
+              ? { ...f, status: 'error' as const }
+              : f
+          )
+        );
+      }
     } finally {
       // Se este é o último arquivo, marcar como completo
       if (currentIndex && totalFiles && currentIndex === totalFiles) {
@@ -1271,7 +2563,7 @@ function App() {
 
   const handleFileSelectWithMode = (
     file: File,
-    type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre',
+    type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario',
     currentIndex?: number,
     totalFiles?: number
   ) => {
@@ -1383,6 +2675,7 @@ function App() {
     setCompanies([]);
     setAccountsPayable([]);
     setRevenues([]);
+    setReceitaCrediario([]);
     setFinancialTransactions([]);
     setRevenuesDRE([]);
     setCmvDRE([]);
@@ -1444,16 +2737,6 @@ function App() {
     return accountsPayable;
   }, [accountsPayable]);
 
-  const getFilteredOperationalPayments = useMemo(() => {
-    return getFilteredAccountsPayable.filter(ap => {
-      // Exclude non-operational accounts
-      const isOperational = !nonOperationalAccounts.some(account =>
-        ap.chart_of_accounts?.toLowerCase() === account.toLowerCase()
-      );
-      return isOperational;
-    });
-  }, [getFilteredAccountsPayable]);
-
   // Dados já vêm filtrados do banco por data e business_unit quando há filtros ativos
   // Não precisa refiltrar aqui - apenas retorna os dados como estão
   const getFilteredForecastedEntries = useMemo(() => {
@@ -1464,12 +2747,6 @@ function App() {
     return forecastedEntries;
   }, [forecastedEntries]);
 
-  const getFilteredRevenuesFromForecasted = useMemo(() => {
-    return getFilteredForecastedEntries.filter(entry =>
-      entry.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro')
-    );
-  }, [getFilteredForecastedEntries]);
-
   // Dados já vêm filtrados do banco por data e business_unit quando há filtros ativos
   // Não precisa refiltrar aqui - apenas retorna os dados como estão
   const getFilteredRevenues = useMemo(() => {
@@ -1479,6 +2756,11 @@ function App() {
     // Então apenas retornamos os dados como estão
     return revenues;
   }, [revenues]);
+
+  // Dados já vêm filtrados do banco por data e business_unit quando há filtros ativos
+  const getFilteredReceitaCrediario = useMemo(() => {
+    return receitaCrediario;
+  }, [receitaCrediario]);
 
   // Dados já vêm filtrados do banco por data e business_unit quando há filtros ativos
   // Não precisa refiltrar aqui - apenas retorna os dados como estão
@@ -1547,14 +2829,14 @@ function App() {
   const getFilteredInitialBalancesRaw = useMemo(() => {
     let filtered = initialBalances;
 
-    // Filtrar por data do saldo (balance_date) - considera saldos dentro ou antes do período
-    // Se há filtro de data inicial, considera apenas saldos com balance_date <= endDate
-    // (ou seja, saldos válidos até o final do período)
-    if (filters.endDate) {
+    // Filtrar por data do saldo (balance_date) - pega saldos até o início do período
+    // Se há filtro de data inicial, considera apenas saldos com balance_date <= startDate
+    // (ou seja, o saldo que estava no início do período filtrado)
+    if (filters.startDate) {
       filtered = filtered.filter(bal => {
         const balanceDate = bal.balance_date;
         if (!balanceDate) return true; // Se não tem data, mantém
-        return balanceDate <= filters.endDate;
+        return balanceDate <= filters.startDate;
       });
     }
 
@@ -1585,7 +2867,7 @@ function App() {
       const normalizedBU = normalizeCode(bal.business_unit);
       return normalizedCompanyCodes.includes(normalizedBU);
     });
-  }, [initialBalances, companies, filters.groups, filters.companies, filters.endDate]);
+  }, [initialBalances, companies, filters.groups, filters.companies, filters.startDate]);
 
   // Dados detalhados para Saldo Inicial (saldos bancários) - agrupados por banco e filtrados por empresas/grupos
   const getFilteredInitialBalances = useMemo(() => {
@@ -1624,7 +2906,7 @@ function App() {
     }));
   }, [getFilteredInitialBalancesRaw]);
 
-  // Dados detalhados para Total de Recebimentos (receitas + transações positivas)
+  // Dados detalhados para Total de Recebimentos (receitas + receita_crediario + transações positivas)
   const getFilteredTotalInflows = useMemo(() => {
     const revenuesData = getFilteredRevenues.map(r => ({
       ...r,
@@ -1632,37 +2914,49 @@ function App() {
       type: 'Receita'
     }));
 
+    const crediarioData = getFilteredReceitaCrediario.map(rc => ({
+      id: rc.id,
+      source: 'receita_crediario',
+      type: 'Receita Crediário',
+      business_unit: rc.un_neg_receb,
+      payment_date: rc.data_receb,
+      amount: Number(rc.recebimento) || 0,
+      chart_of_accounts: rc.parcela ? `Parcela ${rc.parcela}` : 'Receita Crediário',
+      status: 'realizado',
+      import_id: rc.import_id
+    }));
+
     const transactionsData = getFilteredTransactions
-      .filter(t => t.amount > 0)
+      .filter(t => (Number(t.amount) || 0) > 0)
       .map(t => ({
         ...t,
         source: 'transactions',
         type: 'Transação Financeira',
-        amount: Math.abs(t.amount)
+        amount: Math.abs(Number(t.amount) || 0)
       }));
 
-    return [...revenuesData, ...transactionsData];
-  }, [getFilteredRevenues, getFilteredTransactions]);
+    return [...revenuesData, ...crediarioData, ...transactionsData];
+  }, [getFilteredRevenues, getFilteredReceitaCrediario, getFilteredTransactions]);
 
-  // Dados detalhados para Total de Pagamentos (pagamentos + transações negativas)
+  // Dados detalhados para Total de Pagamentos (contas_a_pagar + transações negativas)
   const getFilteredTotalOutflows = useMemo(() => {
-    const apData = getFilteredOperationalPayments.map(ap => ({
+    const apData = getFilteredAccountsPayable.map(ap => ({
       ...ap,
       source: 'accounts_payable',
       type: 'Conta a Pagar'
     }));
 
     const transactionsData = getFilteredTransactions
-      .filter(t => t.amount < 0)
+      .filter(t => (Number(t.amount) || 0) < 0)
       .map(t => ({
         ...t,
         source: 'transactions',
         type: 'Transação Financeira',
-        amount: Math.abs(t.amount)
+        amount: Math.abs(Number(t.amount) || 0)
       }));
 
     return [...apData, ...transactionsData];
-  }, [getFilteredOperationalPayments, getFilteredTransactions]);
+  }, [getFilteredAccountsPayable, getFilteredTransactions]);
 
   // Dados detalhados para Saldo Final (composição: inicial + recebimentos - pagamentos)
   const getFilteredFinalBalance = useMemo(() => {
@@ -1694,17 +2988,17 @@ function App() {
 
   // Função para carregar dados paginados do banco para o modal
   const loadPaginatedDataForModal = async (
-    type: 'accounts_payable' | 'revenues' | 'transactions' | 'mixed',
+    type: 'accounts_payable' | 'revenues' | 'transactions' | 'mixed' | 'total_inflows' | 'total_outflows',
     page: number,
     pageSize: number,
     filters: {
-      status?: string;
-      businessUnit?: string;
+      status?: string | string[];
+      businessUnit?: string | string[];
       startDate?: string;
       endDate?: string;
       searchTerm?: string;
     }
-  ): Promise<{ data: any[]; totalCount: number; hasMore: boolean }> => {
+  ): Promise<{ data: any[]; totalCount: number; hasMore: boolean; totalSum?: number }> => {
     try {
       // Buscar imports ativos
       const { data: importsData } = await supabase
@@ -1747,12 +3041,14 @@ function App() {
       if (type === 'accounts_payable') {
         let query = supabase
           .from('contas_a_pagar')
-          .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, creditor, id', { count: 'exact' })
+          .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id', { count: 'exact' })
           .in('import_id', activeImportIds);
 
         // Aplicar filtros de business_unit (do filtro global ou do modal)
         if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
           query = query.in('business_unit', filteredBusinessUnits);
+        } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+          query = query.in('business_unit', filters.businessUnit);
         } else if (filters.businessUnit && filters.businessUnit !== 'all') {
           query = query.eq('business_unit', filters.businessUnit);
         }
@@ -1797,6 +3093,8 @@ function App() {
 
         if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
           query = query.in('business_unit', filteredBusinessUnits);
+        } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+          query = query.in('business_unit', filters.businessUnit);
         } else if (filters.businessUnit && filters.businessUnit !== 'all') {
           query = query.eq('business_unit', filters.businessUnit);
         }
@@ -1832,11 +3130,13 @@ function App() {
       } else if (type === 'transactions') {
         let query = supabase
           .from('transacoes_financeiras')
-          .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, id', { count: 'exact' })
+          .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id', { count: 'exact' })
           .in('import_id', activeImportIds);
 
         if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
           query = query.in('business_unit', filteredBusinessUnits);
+        } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+          query = query.in('business_unit', filters.businessUnit);
         } else if (filters.businessUnit && filters.businessUnit !== 'all') {
           query = query.eq('business_unit', filters.businessUnit);
         }
@@ -1869,6 +3169,218 @@ function App() {
           totalCount: count || 0,
           hasMore: (count || 0) > offset + pageSize
         };
+      } else if (type === 'total_inflows') {
+        // Total de Recebimentos: receitas + receita_crediario + transacoes_financeiras (apenas positivas)
+        const [revenuesResult, crediarioResult, transactionsResult] = await Promise.all([
+          (async () => {
+            let query = supabase
+              .from('receitas')
+              .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, id')
+              .in('import_id', activeImportIds);
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+              query = query.in('business_unit', filters.businessUnit);
+            } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+              query = query.eq('business_unit', filters.businessUnit);
+            }
+            if (baseStartDate) query = query.gte('payment_date', baseStartDate);
+            if (baseEndDate) query = query.lte('payment_date', baseEndDate);
+            if (filters.status && filters.status !== 'all') {
+              query = query.eq('status', filters.status === 'realizado' ? 'realizado' : 'previsto');
+            }
+            const { data: d, error } = await query.order('payment_date', { ascending: false });
+            if (error) throw error;
+            return (d || []).map(r => ({ ...r, source: 'revenues', type: 'Receita' }));
+          })(),
+          (async () => {
+            let query = supabase
+              .from('receita_crediario')
+              .select('import_id, un_neg_receb, data_receb, recebimento, parcela, id')
+              .in('import_id', activeImportIds);
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('un_neg_receb', filteredBusinessUnits);
+            } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+              query = query.in('un_neg_receb', filters.businessUnit);
+            } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+              query = query.eq('un_neg_receb', filters.businessUnit);
+            }
+            if (baseStartDate) query = query.gte('data_receb', baseStartDate);
+            if (baseEndDate) query = query.lte('data_receb', baseEndDate);
+            const { data: d, error } = await query.order('data_receb', { ascending: false });
+            if (error) return [];
+            return (d || []).map(rc => ({
+              id: rc.id,
+              source: 'receita_crediario',
+              type: 'Receita Crediário',
+              business_unit: rc.un_neg_receb,
+              payment_date: rc.data_receb,
+              amount: Number(rc.recebimento) || 0,
+              chart_of_accounts: rc.parcela ? `Parcela ${rc.parcela}` : 'Receita Crediário',
+              status: 'realizado',
+              import_id: rc.import_id
+            }));
+          })(),
+          (async () => {
+            let query = supabase
+              .from('transacoes_financeiras')
+              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
+              .in('import_id', activeImportIds)
+              .gt('amount', 0);
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+              query = query.in('business_unit', filters.businessUnit);
+            } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+              query = query.eq('business_unit', filters.businessUnit);
+            }
+            if (baseStartDate) query = query.gte('transaction_date', baseStartDate);
+            if (baseEndDate) query = query.lte('transaction_date', baseEndDate);
+            if (filters.status && filters.status !== 'all') {
+              query = query.eq('status', filters.status === 'realizado' ? 'realizado' : 'previsto');
+            }
+            const { data: d, error } = await query.order('transaction_date', { ascending: false });
+            if (error) throw error;
+            return (d || []).map(t => ({
+              ...t,
+              source: 'transactions',
+              type: 'Transação Financeira',
+              payment_date: t.transaction_date,
+              amount: Math.abs(t.amount || 0)
+            }));
+          })()
+        ]);
+
+        const allData = [...revenuesResult, ...crediarioResult, ...transactionsResult];
+        allData.sort((a: any, b: any) => {
+          const dateA = a.payment_date || a.transaction_date || '';
+          const dateB = b.payment_date || b.transaction_date || '';
+          return dateB.localeCompare(dateA);
+        });
+
+        let filteredData = allData;
+        if (filters.searchTerm && filters.searchTerm.trim() !== '') {
+          const searchLower = filters.searchTerm.toLowerCase();
+          filteredData = allData.filter(item =>
+            JSON.stringify(item).toLowerCase().includes(searchLower)
+          );
+        }
+
+        const paginatedData = filteredData.slice(offset, offset + pageSize);
+        return {
+          data: paginatedData,
+          totalCount: filteredData.length,
+          hasMore: filteredData.length > offset + pageSize
+        };
+      } else if (type === 'total_outflows') {
+        // Total de Pagamentos: contas_a_pagar + transacoes_financeiras (apenas negativas)
+        // Buscar em lotes para não bater no limite 1000 do Supabase; busca (searchTerm) no BD
+        const BATCH = 1000;
+        const searchTerm = filters.searchTerm?.trim() || '';
+        const searchPattern = searchTerm ? `%${searchTerm.toLowerCase()}%` : '';
+
+        const fetchAllAP = async (): Promise<any[]> => {
+          let all: any[] = [];
+          let from = 0;
+          let hasMore = true;
+          while (hasMore) {
+            let q = supabase
+              .from('contas_a_pagar')
+              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
+              .in('import_id', activeImportIds);
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              q = q.in('business_unit', filteredBusinessUnits);
+            } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+              q = q.in('business_unit', filters.businessUnit);
+            } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+              q = q.eq('business_unit', filters.businessUnit);
+            }
+            if (baseStartDate) q = q.gte('payment_date', baseStartDate);
+            if (baseEndDate) q = q.lte('payment_date', baseEndDate);
+            if (Array.isArray(filters.status) && filters.status.length > 0) {
+              q = q.in('status', filters.status);
+            } else if (filters.status && filters.status !== 'all') {
+              q = q.eq('status', filters.status === 'realizado' ? 'realizado' : 'previsto');
+            }
+            if (searchPattern) {
+              q = q.or(`chart_of_accounts.ilike.${searchPattern},creditor.ilike.${searchPattern},business_unit.ilike.${searchPattern}`);
+            }
+            const { data, error } = await q.order('payment_date', { ascending: false }).range(from, from + BATCH - 1);
+            if (error) throw error;
+            if (data && data.length > 0) {
+              all = [...all, ...data.map((ap: any) => ({ ...ap, source: 'accounts_payable', type: 'Conta a Pagar' }))];
+              from += BATCH;
+              hasMore = data.length === BATCH;
+            } else {
+              hasMore = false;
+            }
+          }
+          return all;
+        };
+
+        const fetchAllTrans = async (): Promise<any[]> => {
+          let all: any[] = [];
+          let from = 0;
+          let hasMore = true;
+          while (hasMore) {
+            let q = supabase
+              .from('transacoes_financeiras')
+              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
+              .in('import_id', activeImportIds)
+              .lt('amount', 0);
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              q = q.in('business_unit', filteredBusinessUnits);
+            } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+              q = q.in('business_unit', filters.businessUnit);
+            } else if (filters.businessUnit && filters.businessUnit !== 'all') {
+              q = q.eq('business_unit', filters.businessUnit);
+            }
+            if (baseStartDate) q = q.gte('transaction_date', baseStartDate);
+            if (baseEndDate) q = q.lte('transaction_date', baseEndDate);
+            if (Array.isArray(filters.status) && filters.status.length > 0) {
+              q = q.in('status', filters.status);
+            } else if (filters.status && filters.status !== 'all') {
+              q = q.eq('status', filters.status === 'realizado' ? 'realizado' : 'previsto');
+            }
+            if (searchPattern) {
+              q = q.or(`chart_of_accounts.ilike.${searchPattern},descricao.ilike.${searchPattern},business_unit.ilike.${searchPattern}`);
+            }
+            const { data, error } = await q.order('transaction_date', { ascending: false }).range(from, from + BATCH - 1);
+            if (error) throw error;
+            if (data && data.length > 0) {
+              all = [...all, ...data.map((t: any) => ({
+                ...t,
+                source: 'transactions',
+                type: 'Transação Financeira',
+                payment_date: t.transaction_date,
+                amount: Math.abs(Number(t.amount) || 0)
+              }))];
+              from += BATCH;
+              hasMore = data.length === BATCH;
+            } else {
+              hasMore = false;
+            }
+          }
+          return all;
+        };
+
+        const [apResult, transactionsResult] = await Promise.all([fetchAllAP(), fetchAllTrans()]);
+        const allData = [...apResult, ...transactionsResult];
+        allData.sort((a: any, b: any) => {
+          const dateA = a.payment_date || a.transaction_date || '';
+          const dateB = b.payment_date || b.transaction_date || '';
+          return dateB.localeCompare(dateA);
+        });
+
+        const totalCount = allData.length;
+        const totalSum = allData.reduce((s: number, i: any) => s + Math.abs(Number(i.amount) || 0), 0);
+        const paginatedData = allData.slice(offset, offset + pageSize);
+        return {
+          data: paginatedData,
+          totalCount,
+          hasMore: totalCount > offset + pageSize,
+          totalSum
+        };
       } else if (type === 'mixed') {
         // Para mixed, carregar de múltiplas fontes e combinar
         // Por enquanto, vamos carregar todas as fontes e combinar
@@ -1878,11 +3390,13 @@ function App() {
           (async () => {
             let query = supabase
               .from('receitas')
-              .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, id', { count: 'exact' })
+              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, id', { count: 'exact' })
               .in('import_id', activeImportIds);
 
             if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
               query = query.in('business_unit', filteredBusinessUnits);
+            } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+              query = query.in('business_unit', filters.businessUnit);
             } else if (filters.businessUnit && filters.businessUnit !== 'all') {
               query = query.eq('business_unit', filters.businessUnit);
             }
@@ -1901,11 +3415,13 @@ function App() {
           (async () => {
             let query = supabase
               .from('contas_a_pagar')
-              .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, creditor, id', { count: 'exact' })
+              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id', { count: 'exact' })
               .in('import_id', activeImportIds);
 
             if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
               query = query.in('business_unit', filteredBusinessUnits);
+            } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+              query = query.in('business_unit', filters.businessUnit);
             } else if (filters.businessUnit && filters.businessUnit !== 'all') {
               query = query.eq('business_unit', filters.businessUnit);
             }
@@ -1924,11 +3440,13 @@ function App() {
           (async () => {
             let query = supabase
               .from('transacoes_financeiras')
-              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, id', { count: 'exact' })
+              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id', { count: 'exact' })
               .in('import_id', activeImportIds);
 
             if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
               query = query.in('business_unit', filteredBusinessUnits);
+            } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+              query = query.in('business_unit', filters.businessUnit);
             } else if (filters.businessUnit && filters.businessUnit !== 'all') {
               query = query.eq('business_unit', filters.businessUnit);
             }
@@ -1952,6 +3470,8 @@ function App() {
 
             if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
               query = query.in('business_unit', filteredBusinessUnits);
+            } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+              query = query.in('business_unit', filters.businessUnit);
             } else if (filters.businessUnit && filters.businessUnit !== 'all') {
               query = query.eq('business_unit', filters.businessUnit);
             }
@@ -1975,6 +3495,8 @@ function App() {
 
             if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
               query = query.in('business_unit', filteredBusinessUnits);
+            } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
+              query = query.in('business_unit', filters.businessUnit);
             } else if (filters.businessUnit && filters.businessUnit !== 'all') {
               query = query.eq('business_unit', filters.businessUnit);
             }
@@ -2046,8 +3568,11 @@ function App() {
     }
   };
 
-  const openKPIDetail = (title: string, data: any[], type: 'accounts_payable' | 'revenues' | 'transactions' | 'mixed') => {
-    // Criar função de carregamento paginado para o modal
+  const openKPIDetail = (title: string, data: any[], type: 'accounts_payable' | 'revenues' | 'transactions' | 'mixed' | 'total_inflows' | 'total_outflows') => {
+    // Período atual do dashboard (mesmo que está filtrado no card)
+    const periodStart = filters.startDate?.trim() || getDefaultPeriod().start;
+    const periodEnd = filters.endDate?.trim() || getDefaultPeriod().end;
+
     const loadPaginatedData = async (
       page: number,
       pageSize: number,
@@ -2065,9 +3590,11 @@ function App() {
     setModalState({
       isOpen: true,
       title,
-      data: data, // Manter para compatibilidade com código que ainda não usa paginação
+      data: data,
       type,
-      loadPaginatedData
+      loadPaginatedData,
+      initialStartDate: periodStart,
+      initialEndDate: periodEnd
     });
   };
 
@@ -2077,30 +3604,47 @@ function App() {
       title: '',
       data: [],
       type: 'generic',
-      loadPaginatedData: undefined
+      loadPaginatedData: undefined,
+      initialStartDate: undefined,
+      initialEndDate: undefined
     });
   };
 
-  // Calculate totals from accounts payable (usando dados filtrados por empresas/grupos)
+  // Total de Pagamentos: contas_a_pagar
+  // Realizado = payment_date no período + status realizado/pago
+  // Previsto  = due_date no período + status pendente/previsto
   const accountsPayableTotals = useMemo(() => {
-    // Realizado: soma os valores filtrados por empresas/grupos
-    const actual = getFilteredAccountsPayable
-      .filter(ap => ap.status?.toLowerCase() === 'realizado')
-      .reduce((sum, ap) => {
-        const amount = parseFloat(ap.amount || 0);
-        return sum + (isNaN(amount) ? 0 : amount);
-      }, 0);
+    const periodStart = filters.startDate?.trim() || getDefaultPeriod().start;
+    const periodEnd = filters.endDate?.trim() || getDefaultPeriod().end;
+    // Normaliza qualquer valor de data (string ISO, Date, ou YYYY-MM-DD) para YYYY-MM-DD para comparação
+    const toYYYYMMDD = (val: string | Date | null | undefined): string | null => {
+      if (val == null) return null;
+      if (typeof val === 'string' && !val.trim()) return null;
+      if (val instanceof Date) return format(val, 'yyyy-MM-dd');
+      const s = String(val).trim();
+      if (s.indexOf('T') !== -1) return s.slice(0, 10);
+      return s.length >= 10 ? s.slice(0, 10) : s;
+    };
+    const inPeriod = (dateStr: string | Date | null | undefined, start: string, end: string) => {
+      const d = toYYYYMMDD(dateStr);
+      if (!d) return false;
+      return d >= start && d <= end;
+    };
+    const statusLower = (s: string) => String(s || '').toLowerCase().trim();
+    const isPrevisto = (ap: any) => ['previsto', 'pendente'].includes(statusLower(ap.status));
+    const isRealizado = (ap: any) => ['realizado', 'pago'].includes(statusLower(ap.status));
+    const num = (v: any) => Math.abs(Number(v) || 0);
 
-    // Previsto: soma os valores filtrados por empresas/grupos
+    const actual = getFilteredAccountsPayable
+      .filter(ap => isRealizado(ap) && inPeriod(ap.payment_date, periodStart, periodEnd))
+      .reduce((sum, ap) => sum + num(ap.amount), 0);
+
     const forecasted = getFilteredAccountsPayable
-      .filter(ap => ap.status?.toLowerCase() === 'previsto')
-      .reduce((sum, ap) => {
-        const amount = parseFloat(ap.amount || 0);
-        return sum + (isNaN(amount) ? 0 : amount);
-      }, 0);
+      .filter(ap => isPrevisto(ap) && inPeriod(ap.due_date, periodStart, periodEnd))
+      .reduce((sum, ap) => sum + num(ap.amount), 0);
 
     return { forecasted, actual };
-  }, [getFilteredAccountsPayable]);
+  }, [getFilteredAccountsPayable, filters.startDate, filters.endDate]);
 
   // Calculate totals from forecasted entries
   // Dados já vêm filtrados do banco por data e business_unit
@@ -2140,15 +3684,18 @@ function App() {
       .filter(rev => rev.status?.toLowerCase() === 'previsto' || rev.status?.toLowerCase() === 'pendente')
       .reduce((sum, rev) => sum + (rev.amount || 0), 0);
 
-    const forecastedFromEntries = getFilteredRevenuesFromForecasted
-      .reduce((sum, entry) => sum + (entry.amount || 0), 0);
-
     const actual = revenues
       .filter(rev => rev.status?.toLowerCase() === 'realizado')
       .reduce((sum, rev) => sum + (rev.amount || 0), 0);
 
-    return { forecasted: forecasted + forecastedFromEntries, actual };
-  }, [revenues, getFilteredRevenuesFromForecasted]);
+    return { forecasted, actual };
+  }, [revenues]);
+
+  // Totais de receita crediário (todos considerados realizados - não há status na tabela)
+  const receitaCrediarioTotals = useMemo(() => {
+    const actual = receitaCrediario.reduce((sum, r) => sum + (Number(r.recebimento) || 0), 0);
+    return { forecasted: 0, actual };
+  }, [receitaCrediario]);
 
   // Dados já vêm filtrados do banco por data e business_unit
   // Apenas calcula totais por status e tipo (inflow/outflow), excluindo contas não operacionais
@@ -2167,23 +3714,30 @@ function App() {
       return isOperational;
     });
 
-    // Forecasted
+    // Previsto = previsto ou pendente; Realizado = realizado ou pago (null tratado como realizado para inflows)
+    const statusLower = (s: string) => String(s || '').toLowerCase().trim();
+    const isPrevisto = (t: any) => ['previsto', 'pendente'].includes(statusLower(t.status));
+    const isRealizadoStrict = (t: any) => ['realizado', 'pago'].includes(statusLower(t.status));
+    const isRealizadoOrNull = (t: any) => isRealizadoStrict(t) || !t.status?.trim();
+    const num = (v: any) => Number(v) || 0;
+
+    // Inflows (positivos): previsto/realizado
     const forecastedInflows = filtered
-      .filter(t => t.status?.toLowerCase() === 'previsto' && t.amount > 0)
-      .reduce((sum, t) => sum + (t.amount || 0), 0);
+      .filter(t => isPrevisto(t) && num(t.amount) > 0)
+      .reduce((sum, t) => sum + num(t.amount), 0);
 
-    const forecastedOutflows = Math.abs(filtered
-      .filter(t => t.status?.toLowerCase() === 'previsto' && t.amount < 0)
-      .reduce((sum, t) => sum + (t.amount || 0), 0));
-
-    // Actual
     const actualInflows = filtered
-      .filter(t => t.status?.toLowerCase() === 'realizado' && t.amount > 0)
-      .reduce((sum, t) => sum + (t.amount || 0), 0);
+      .filter(t => isRealizadoOrNull(t) && num(t.amount) > 0)
+      .reduce((sum, t) => sum + num(t.amount), 0);
+
+    // Outflows (negativos) para Total de Pagamentos: previsto/pendente → previsto; realizado/pago → realizado
+    const forecastedOutflows = Math.abs(filtered
+      .filter(t => isPrevisto(t) && num(t.amount) < 0)
+      .reduce((sum, t) => sum + num(t.amount), 0));
 
     const actualOutflows = Math.abs(filtered
-      .filter(t => t.status?.toLowerCase() === 'realizado' && t.amount < 0)
-      .reduce((sum, t) => sum + (t.amount || 0), 0));
+      .filter(t => isRealizadoStrict(t) && num(t.amount) < 0)
+      .reduce((sum, t) => sum + num(t.amount), 0));
 
     return {
       inflows: { forecasted: forecastedInflows, actual: actualInflows },
@@ -2288,14 +3842,14 @@ function App() {
     const totalRevenueActual = revenueTotals.actual;
 
     // Add accounts payable to forecasted and actual outflows
-    // Add revenues to forecasted and actual inflows
-    // Add financial transactions (positive to inflows, negative to outflows)
-    // Total de Recebimentos = Receitas + Transações positivas
-    const totalInflowsForecasted = revenueTotals.forecasted + transactionTotals.inflows.forecasted;
-    const totalInflowsActual = revenueTotals.actual + transactionTotals.inflows.actual;
+    // Add revenues + receita_crediario to forecasted and actual inflows
+    // Add financial transactions (apenas valores positivos para recebimentos)
+    // Total de Recebimentos = Receitas + Receita Crediário + Transações positivas
+    const totalInflowsForecasted = revenueTotals.forecasted + receitaCrediarioTotals.forecasted + transactionTotals.inflows.forecasted;
+    const totalInflowsActual = revenueTotals.actual + receitaCrediarioTotals.actual + transactionTotals.inflows.actual;
     
-    // Total de Pagamentos = Contas a Pagar + Transações negativas
-    // Deve corresponder a getFilteredTotalOutflows (getFilteredOperationalPayments + transações negativas)
+    // Total de Pagamentos = Contas a Pagar + Transações negativas (previsto/realizado)
+    // Deve corresponder a getFilteredTotalOutflows (getFilteredAccountsPayable + transações negativas)
     const totalOutflowsForecasted = accountsPayableTotals.forecasted + transactionTotals.outflows.forecasted;
     const totalOutflowsActual = accountsPayableTotals.actual + transactionTotals.outflows.actual;
 
@@ -2391,59 +3945,206 @@ function App() {
       }
     };
 
-    // Calculate initial balance from database - pega o saldo inicial mais recente disponível
-    // Como o saldo inicial é atualizado manualmente todos os dias, devemos sempre pegar o mais recente
-    // independente do filtro de período (o saldo inicial é dinâmico e atualizado diariamente)
+    // Calculate initial balance from database - pega o saldo inicial do início do período filtrado
+    // Primeiro, vamos separar saldos DENTRO do período (>= startDate) dos saldos ANTES do período (< startDate)
+    // Se filters.startDate estiver vazio, usar o período padrão (mês atual) - mesma lógica do loadDataFromSupabase
+    let startDateStr = filters.startDate || '';
+    if (!startDateStr || startDateStr.trim() === '') {
+      const defaultPeriod = getDefaultPeriod();
+      startDateStr = defaultPeriod.start;
+    }
+    const startDateObj = startDateStr ? new Date(startDateStr) : null;
+    
+    console.log('🔍 DEBUG Saldo Inicial - Estado dos filtros:');
+    console.log(`  - filters.startDate: "${filters.startDate}"`);
+    console.log(`  - filters.endDate: "${filters.endDate}"`);
+    console.log(`  - startDateStr (usado no cálculo): "${startDateStr}"`);
+    console.log(`  - startDateObj:`, startDateObj);
+    
+    // Para buscar saldos dentro do período, usa os dados filtrados
     const allBalances = (getFilteredInitialBalancesRaw || [])
       .filter(bal => {
         const balanceDate = bal.balance_date;
         return !!balanceDate; // Apenas filtra saldos com data válida
       });
 
-    // Agrupar por bank_name + business_unit e pegar o mais recente de cada grupo
-    const latestBalancesByBankAndUnit = allBalances.reduce((acc, bal) => {
+    // Separar saldos dentro do período (>= startDate) dos saldos antes do período (< startDate)
+    const balancesInPeriod = allBalances.filter(bal => {
+      if (!startDateObj) return false;
+      const balanceDateObj = new Date(bal.balance_date);
+      return balanceDateObj >= startDateObj;
+    });
+
+    // Para buscar saldos ANTES do período, usa TODOS os saldos (não apenas os filtrados)
+    // porque precisamos encontrar o mais recente, mesmo que seja muito antigo
+    const allBalancesForBeforePeriod = (initialBalances || [])
+      .filter(bal => {
+        const balanceDate = bal.balance_date;
+        return !!balanceDate; // Apenas filtra saldos com data válida
+      });
+
+    console.log('🔍 DEBUG Saldo Inicial - Busca antes do período:');
+    console.log(`  - Total de saldos carregados: ${initialBalances?.length || 0}`);
+    console.log(`  - Saldos com data válida: ${allBalancesForBeforePeriod.length}`);
+
+    // Aplicar filtros de empresas/grupos se houver (mas sem filtro de data)
+    let balancesBeforePeriod = allBalancesForBeforePeriod;
+    if (companies.length > 0) {
+      const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
+      if (hasActiveFilters) {
+        const filteredCompanyCodes = companies
+          .filter(c => {
+            const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
+            const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
+            return groupMatch && companyMatch;
+          })
+          .map(c => c.company_code);
+        const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
+        balancesBeforePeriod = allBalancesForBeforePeriod.filter(bal => {
+          const normalizedBU = normalizeCode(bal.business_unit);
+          return normalizedCompanyCodes.includes(normalizedBU);
+        });
+        console.log(`  - Após filtro de empresas/grupos: ${balancesBeforePeriod.length} saldos`);
+      } else {
+        console.log(`  - Sem filtros de empresas/grupos ativos`);
+      }
+    } else {
+      console.log(`  - Nenhuma empresa cadastrada, usando todos os saldos`);
+    }
+
+    // Filtrar apenas saldos antes do período (balance_date < startDate)
+    // IMPORTANTE: Se não há startDate, não podemos filtrar por data
+    let balancesBeforePeriodFiltered: any[] = [];
+    if (startDateObj) {
+      balancesBeforePeriodFiltered = balancesBeforePeriod.filter(bal => {
+        const balanceDateObj = new Date(bal.balance_date);
+        const isBefore = balanceDateObj < startDateObj;
+        return isBefore;
+      });
+      console.log(`  - Saldos antes do período (${startDateStr}): ${balancesBeforePeriodFiltered.length}`);
+      if (balancesBeforePeriodFiltered.length > 0) {
+        const dates = balancesBeforePeriodFiltered.map(b => b.balance_date).sort().reverse();
+        console.log(`  - Datas encontradas (mais recente primeiro):`, dates.slice(0, 5));
+      }
+    } else {
+      console.log(`  - ⚠️ ATENÇÃO: startDateObj é null! Não é possível filtrar saldos antes do período.`);
+      console.log(`  - Isso significa que filters.startDate está vazio ou inválido.`);
+    }
+
+    balancesBeforePeriod = balancesBeforePeriodFiltered;
+
+    // Agrupar saldos DENTRO do período por bank_name + business_unit e pegar o mais próximo do início
+    const initialBalancesByBankAndUnit = balancesInPeriod.reduce((acc, bal) => {
       const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
       const existing = acc[key];
       
       if (!existing) {
         acc[key] = bal;
       } else {
-        // Se já existe, compara as datas e pega o mais recente
+        // Compara as datas e pega o mais próximo do início do período (menor data >= startDate)
         const existingDate = existing.balance_date || '';
         const currentDate = bal.balance_date || '';
-        if (currentDate > existingDate) {
-          acc[key] = bal;
+        if (currentDate < existingDate) {
+          acc[key] = bal; // Pega o mais próximo do início (menor data)
         }
       }
       
       return acc;
     }, {} as Record<string, any>);
 
-    // Somar os valores dos saldos mais recentes de cada banco/empresa
-    const calculatedInitialBalance = Object.values(latestBalancesByBankAndUnit)
-      .reduce((sum: number, bal: any) => {
-        const balanceValue = bal?.balance;
-        if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
-          return sum;
+    // Verificar se há saldo DENTRO do período (não apenas antes dele)
+    const hasBalanceInPeriod = Object.keys(initialBalancesByBankAndUnit).length > 0;
+
+    // Se não houver saldo no período e o usuário não pediu para mostrar o mais recente,
+    // retornar indicador de que não há saldo
+    if (!hasBalanceInPeriod && !showLatestInitialBalance) {
+      result.initialBalance = {
+        forecasted: 0,
+        actual: 0,
+        date: filters.startDate || new Date().toISOString().split('T')[0],
+        hasBalance: false
+      };
+    } else {
+      // Se não houver saldo no período mas o usuário pediu para mostrar o mais recente,
+      // buscar o saldo mais recente antes do período
+      let balancesToUse = initialBalancesByBankAndUnit;
+      let isLatestBeforePeriod = false;
+
+      if (!hasBalanceInPeriod && showLatestInitialBalance) {
+        console.log('🔍 DEBUG - Buscando saldo mais recente antes do período:');
+        console.log(`  - Saldos disponíveis antes do período: ${balancesBeforePeriod.length}`);
+        
+        // Usar os saldos antes do período que já foram separados
+        // Agrupar por bank_name + business_unit e pegar o mais recente de cada grupo
+        balancesToUse = balancesBeforePeriod.reduce((acc, bal) => {
+          const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
+          const existing = acc[key];
+          
+          if (!existing) {
+            acc[key] = bal;
+          } else {
+            const existingDate = existing.balance_date || '';
+            const currentDate = bal.balance_date || '';
+            // Comparar datas como strings (formato YYYY-MM-DD)
+            if (currentDate > existingDate) {
+              acc[key] = bal; // Pega o mais recente antes do período
+            }
+          }
+          
+          return acc;
+        }, {} as Record<string, any>);
+        
+        console.log(`  - Saldos agrupados por banco/empresa: ${Object.keys(balancesToUse).length}`);
+        console.log(`  - Chaves encontradas:`, Object.keys(balancesToUse));
+        
+        // Verificar se realmente há saldos antes do período
+        isLatestBeforePeriod = Object.keys(balancesToUse).length > 0;
+        
+        console.log(`  - isLatestBeforePeriod: ${isLatestBeforePeriod}`);
+        
+        // Se não houver saldos antes do período, retornar indicador de que não há saldo
+        if (!isLatestBeforePeriod) {
+          console.log('⚠️ Nenhum saldo encontrado antes do período após agrupamento');
+          result.initialBalance = {
+            forecasted: 0,
+            actual: 0,
+            date: filters.startDate || new Date().toISOString().split('T')[0],
+            hasBalance: false,
+            isLatestBeforePeriod: false
+          };
+          return result;
         }
-        const parsed = parseFloat(String(balanceValue));
-        return sum + (isNaN(parsed) ? 0 : parsed);
-      }, 0);
+      }
 
-    // Get the latest balance date for display - pega a data mais recente dos saldos usados
-    const balanceDates = Object.values(latestBalancesByBankAndUnit)
-      .map((bal: any) => bal.balance_date)
-      .filter(date => date) // Remove datas vazias
-      .sort()
-      .reverse(); // Ordena do mais recente para o mais antigo
+      // Somar os valores dos saldos do início do período de cada banco/empresa
+      const calculatedInitialBalance = Object.values(balancesToUse)
+        .reduce((sum: number, bal: any) => {
+          const balanceValue = bal?.balance;
+          if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
+            return sum;
+          }
+          const parsed = parseFloat(String(balanceValue));
+          return sum + (isNaN(parsed) ? 0 : parsed);
+        }, 0);
 
-    const calculatedInitialBalanceDate = balanceDates.length > 0 ? balanceDates[0] : (filters.startDate || new Date().toISOString().split('T')[0]);
+      // Get the balance date for display - pega a data do saldo usado
+      const balanceDates = Object.values(balancesToUse)
+        .map((bal: any) => bal.balance_date)
+        .filter(date => date) // Remove datas vazias
+        .sort()
+        .reverse(); // Ordena do mais recente para o mais antigo
 
-    result.initialBalance = {
-      forecasted: calculatedInitialBalance || 0,
-      actual: calculatedInitialBalance || 0,
-      date: calculatedInitialBalanceDate
-    };
+      // A data exibida é a mais próxima do início do período (a mais recente dos saldos usados)
+      const calculatedInitialBalanceDate = balanceDates.length > 0 ? balanceDates[0] : (filters.startDate || new Date().toISOString().split('T')[0]);
+
+      result.initialBalance = {
+        forecasted: calculatedInitialBalance || 0,
+        actual: calculatedInitialBalance || 0,
+        date: calculatedInitialBalanceDate,
+        hasBalance: hasBalanceInPeriod,
+        isLatestBeforePeriod: isLatestBeforePeriod
+      };
+    }
     
     // Saldo Final = Saldo Inicial + Total de Recebimentos - Total de Pagamentos
     // Usa os valores exatos dos cards para garantir consistência
@@ -2453,7 +4154,7 @@ function App() {
     };
 
     return result;
-  }, [filteredData, accountsPayableTotals, forecastedEntriesTotals, revenueTotals, transactionTotals, cmvTotals, getFilteredInitialBalancesRaw, companies, filters]);
+  }, [filteredData, accountsPayableTotals, forecastedEntriesTotals, revenueTotals, receitaCrediarioTotals, transactionTotals, cmvTotals, getFilteredInitialBalancesRaw, companies, filters, showLatestInitialBalance, initialBalances]);
 
 
   // Saldo inicial para o calendário (SEM filtro de período, apenas empresas/grupos)
@@ -2571,15 +4272,11 @@ function App() {
           .filter(r => filterByCompany(r) && r.payment_date <= dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente'))
           .reduce((sum, r) => sum + (r.amount || 0), 0);
 
-        const forecastedFromEntries = forecastedEntries
-          .filter(e => filterByCompany(e) && e.due_date <= dateStr && e.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro'))
-          .reduce((sum, e) => sum + (e.amount || 0), 0);
-
         const forecastedTransactionsInflows = financialTransactions
           .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
           .reduce((sum, t) => sum + (t.amount || 0), 0);
 
-        dayForecastedInflows = forecastedRevenues + forecastedFromEntries + forecastedTransactionsInflows;
+        dayForecastedInflows = forecastedRevenues + forecastedTransactionsInflows;
 
         // Recebimentos Realizados acumulados até dateStr
         const actualRevenues = revenues
@@ -2593,8 +4290,14 @@ function App() {
         dayActualInflows = actualRevenues + actualTransactionsInflows;
 
         // Pagamentos Previstos acumulados até dateStr
+        // Para status "previsto", usar due_date se payment_date for NULL
         const forecastedOutflowsAccountsPayable = accountsPayable
-          .filter(ap => filterByCompany(ap) && ap.payment_date <= dateStr && ap.status?.toLowerCase() === 'previsto')
+          .filter(ap => {
+            if (!filterByCompany(ap) || ap.status?.toLowerCase() !== 'previsto') return false;
+            // Se tem payment_date, usar ele. Se não tem, usar due_date
+            const dateToCompare = ap.payment_date || ap.due_date;
+            return dateToCompare && dateToCompare <= dateStr;
+          })
           .reduce((sum, ap) => {
             const amount = parseFloat(ap.amount || 0);
             return sum + (isNaN(amount) ? 0 : amount);
@@ -2646,9 +4349,6 @@ function App() {
         dayForecastedInflows = revenues
           .filter(r => filterByCompany(r) && r.payment_date === dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente'))
           .reduce((sum, r) => sum + (r.amount || 0), 0) +
-          forecastedEntries
-            .filter(e => filterByCompany(e) && e.due_date === dateStr && e.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro'))
-            .reduce((sum, e) => sum + (e.amount || 0), 0) +
           financialTransactions
             .filter(t => filterByCompany(t) && t.transaction_date === dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
             .reduce((sum, t) => sum + (t.amount || 0), 0);
@@ -2867,7 +4567,7 @@ function App() {
         try {
           // Carregar receitas em lotes para evitar limite do Supabase
           let allRevenues: any[] = [];
-          const batchSize = 1000;
+          const batchSize = 500;
           let offset = 0;
           let hasMore = true;
           
@@ -2909,14 +4609,14 @@ function App() {
         try {
           // Carregar contas_a_pagar em lotes para evitar limite do Supabase
           let allAP: any[] = [];
-          const batchSize = 1000;
+          const batchSize = 500;
           let offset = 0;
           let hasMore = true;
           
           while (hasMore) {
             let query = supabase
               .from('contas_a_pagar')
-              .select('import_id, business_unit, payment_date, amount, status, chart_of_accounts, creditor, id')
+              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
               .in('import_id', activeImportIds);
             
             // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
@@ -2951,7 +4651,7 @@ function App() {
         try {
           // Carregar transacoes_financeiras em lotes para evitar limite do Supabase
           let allTransactions: any[] = [];
-          const batchSize = 1000;
+          const batchSize = 500;
           let offset = 0;
           let hasMore = true;
           
@@ -2993,7 +4693,7 @@ function App() {
         try {
           // Carregar previstos em lotes para evitar limite do Supabase
           let allForecasted: any[] = [];
-          const batchSize = 1000;
+          const batchSize = 500;
           let offset = 0;
           let hasMore = true;
           
@@ -3035,7 +4735,7 @@ function App() {
         try {
           // Carregar cmv_dre em lotes para evitar limite do Supabase
           let allCMVDRE: any[] = [];
-          const batchSize = 1000;
+          const batchSize = 500;
           let offset = 0;
           let hasMore = true;
           
@@ -3406,7 +5106,17 @@ function App() {
   };
 
   return (
-    <div className={`flex h-screen ${darkMode ? 'bg-slate-950 text-slate-50' : 'bg-[#ECF7FA] text-slate-900'} ${presentationMode ? 'fixed inset-0 z-50' : ''}`}>
+    <div className={`flex h-screen relative ${darkMode ? 'bg-slate-950 text-slate-50' : 'bg-[#ECF7FA] text-slate-900'} ${presentationMode ? 'fixed inset-0 z-50' : ''}`}>
+      {/* Loader global de tela inteira apenas no carregamento inicial */}
+      {initialLoading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/95">
+          <div className="flex flex-col items-center gap-4">
+            <div className="w-12 h-12 border-2 border-pink-500 border-t-transparent rounded-full animate-spin" />
+            <p className="text-sm font-medium text-slate-100">Carregando Dashboard...</p>
+          </div>
+        </div>
+      )}
+
       {!presentationMode && (
       <Sidebar
         filters={filters}
@@ -3425,7 +5135,7 @@ function App() {
       )}
       
       <div className="flex-1 overflow-auto scrollbar-vertical">
-        <div className={`${presentationMode ? 'p-4' : 'p-8'}`}>
+        <div className={`${presentationMode ? 'p-4' : 'p-8'} ${(initialLoading || loading.isLoading) ? 'pointer-events-none select-none' : ''}`}>
           {presentationMode && (
             <div className="flex justify-between items-center mb-4">
               <h1 className={`text-2xl font-bold ${darkMode ? 'text-slate-100' : 'text-gray-900'}`}>Dashboard Financeiro - Rede Tem Preço & X Brother</h1>
@@ -3515,6 +5225,11 @@ function App() {
                       Arquivo {loading.currentIndex} de {loading.totalFiles}
                     </p>
                   )}
+                  {loading.progress && (
+                    <p className="text-marsala-700 text-sm mt-1 font-semibold">
+                      {loading.progress}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -3554,46 +5269,97 @@ function App() {
                         </div>
                         <h3 className={`text-xs font-semibold ml-2 ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>Saldo Inicial</h3>
                       </div>
-                      <button
-                        onClick={() => openKPIDetail('Detalhes: Saldo Inicial', getFilteredInitialBalances, 'mixed')}
-                        className={`p-1.5 rounded-lg shadow-sm transition-colors ${
-                          darkMode ? 'bg-slate-900 hover:bg-slate-800' : 'bg-white hover:bg-gray-100'
-                        }`}
-                        title="Ver detalhes"
-                      >
-                        <List className="w-4 h-4 text-gray-600" />
-                      </button>
+                      {(kpiData.initialBalance?.hasBalance !== false || showLatestInitialBalance) && (
+                        <button
+                          onClick={() => openKPIDetail('Detalhes: Saldo Inicial', getFilteredInitialBalances, 'mixed')}
+                          className={`p-1.5 rounded-lg shadow-sm transition-colors ${
+                            darkMode ? 'bg-slate-900 hover:bg-slate-800' : 'bg-white hover:bg-gray-100'
+                          }`}
+                          title="Ver detalhes"
+                        >
+                          <List className="w-4 h-4 text-gray-600" />
+                        </button>
+                      )}
                     </div>
                     <div className="space-y-3">
-                      <div>
-                        <label className={`text-xs block mb-1 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Data do Saldo</label>
-                        <p className={`text-sm font-medium ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
-                          {kpiData.initialBalance.date
-                            ? new Date(kpiData.initialBalance.date).toLocaleDateString('pt-BR')
-                            : new Date().toLocaleDateString('pt-BR')}
-                        </p>
-                      </div>
-                      <div>
-                        <label className={`text-xs block mb-1 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Saldo Inicial</label>
-                        <p className={`text-xl font-bold ${darkMode ? 'text-sky-300' : 'text-blue-700'}`}>
-                          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(kpiData.initialBalance?.actual || 0)}
-                        </p>
-                      </div>
-                      <div className="pt-2">
-                        <p className="text-xs text-gray-500">
-                          Carregado da planilha de saldos bancários
-                        </p>
-                      </div>
+                      {(kpiData.initialBalance?.hasBalance === false && !showLatestInitialBalance) || 
+                       (showLatestInitialBalance && kpiData.initialBalance?.hasBalance === false && !kpiData.initialBalance?.isLatestBeforePeriod) ? (
+                        <>
+                          <div className="py-4">
+                            <p className={`text-sm font-medium text-center ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>
+                              {showLatestInitialBalance 
+                                ? 'Não há saldo disponível antes do período selecionado'
+                                : 'Saldo não existente para período selecionado'}
+                            </p>
+                          </div>
+                          {!showLatestInitialBalance && (
+                            <button
+                              onClick={() => setShowLatestInitialBalance(true)}
+                              className={`w-full py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
+                                darkMode 
+                                  ? 'bg-sky-600 hover:bg-sky-700 text-white' 
+                                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+                              }`}
+                            >
+                              Mostrar saldo mais recente
+                            </button>
+                          )}
+                          {showLatestInitialBalance && (
+                            <button
+                              onClick={() => setShowLatestInitialBalance(false)}
+                              className={`w-full py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
+                                darkMode 
+                                  ? 'bg-slate-600 hover:bg-slate-700 text-white' 
+                                  : 'bg-gray-600 hover:bg-gray-700 text-white'
+                              }`}
+                            >
+                              Voltar
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <div>
+                            <label className={`text-xs block mb-1 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
+                              Data do Saldo
+                              {kpiData.initialBalance?.isLatestBeforePeriod && (
+                                <span className={`ml-2 text-xs ${darkMode ? 'text-amber-400' : 'text-amber-600'}`}>
+                                  (mais recente antes do período)
+                                </span>
+                              )}
+                            </label>
+                            <p className={`text-sm font-medium ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
+                              {kpiData.initialBalance.date
+                                ? new Date(kpiData.initialBalance.date).toLocaleDateString('pt-BR')
+                                : new Date().toLocaleDateString('pt-BR')}
+                            </p>
+                          </div>
+                          <div>
+                            <label className={`text-xs block mb-1 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Saldo Inicial</label>
+                            <p className={`text-xl font-bold ${darkMode ? 'text-sky-300' : 'text-blue-700'}`}>
+                              {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(kpiData.initialBalance?.actual || 0)}
+                            </p>
+                          </div>
+                          <div className="pt-2">
+                            <p className="text-xs text-gray-500">
+                              {kpiData.initialBalance?.isLatestBeforePeriod 
+                                ? 'Saldo mais recente antes do período selecionado'
+                                : 'Carregado da planilha de saldos bancários'}
+                            </p>
+                            {kpiData.initialBalance?.isLatestBeforePeriod && (
+                              <button
+                                onClick={() => setShowLatestInitialBalance(false)}
+                                className={`mt-2 text-xs underline ${darkMode ? 'text-sky-400 hover:text-sky-300' : 'text-blue-600 hover:text-blue-700'}`}
+                              >
+                                Voltar ao período selecionado
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
-                  {dataLoading ? (
-                    <>
-                      <CardSkeleton darkMode={darkMode} />
-                      <CardSkeleton darkMode={darkMode} />
-                      <CardSkeleton darkMode={darkMode} />
-                    </>
-                  ) : (
-                    <>
+                  <>
                       <KPICard
                         title="Total de Recebimentos"
                         forecasted={kpiData.totalInflows.forecasted}
@@ -3602,8 +5368,9 @@ function App() {
                         color="green"
                         section="cashflow"
                         darkMode={darkMode}
-                        onViewDetails={() => openKPIDetail('Detalhes: Total de Recebimentos', getFilteredTotalInflows, 'mixed')}
-                        dataSource="Carregado das planilhas de receitas e transações financeiras"
+                        onViewDetails={() => openKPIDetail('Detalhes: Total de Recebimentos', getFilteredTotalInflows, 'total_inflows')}
+                        dataSource="Carregado das planilhas de receitas, receita crediário e transações financeiras (apenas valores positivos)"
+                      loading={dataLoading}
                       />
                       <KPICard
                         title="Total de Pagamentos"
@@ -3613,8 +5380,11 @@ function App() {
                         color="red"
                         section="cashflow"
                         darkMode={darkMode}
-                        onViewDetails={() => openKPIDetail('Detalhes: Total de Pagamentos', getFilteredTotalOutflows, 'mixed')}
-                        dataSource="Carregado das planilhas de contas a pagar e transações financeiras"
+                        onViewDetails={() => openKPIDetail('Detalhes: Total de Pagamentos', getFilteredTotalOutflows, 'total_outflows')}
+                        dataSource="Carregado das planilhas de contas a pagar e transações financeiras (valores negativos)"
+                        forecastedLabel="Previsto (por vencimento)"
+                        actualLabel="Realizado (por pagamento)"
+                      loading={dataLoading}
                       />
                       <KPICard
                         title="Saldo Final"
@@ -3626,9 +5396,9 @@ function App() {
                         darkMode={darkMode}
                         onViewDetails={() => openKPIDetail('Detalhes: Saldo Final', getFilteredFinalBalance, 'mixed')}
                         dataSource="Calculado: Saldo Inicial + Recebimentos - Pagamentos"
+                      loading={dataLoading}
                       />
-                    </>
-                  )}
+                  </>
                 </div>
               </div>
 
@@ -3636,15 +5406,7 @@ function App() {
               <div className="mb-8">
                 <h2 className={`text-lg font-bold mb-4 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Entrega de Resultado</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {dataLoading ? (
-                    <>
-                      <CardSkeleton darkMode={darkMode} />
-                      <CardSkeleton darkMode={darkMode} />
-                      <CardSkeleton darkMode={darkMode} />
-                      <CardSkeleton darkMode={darkMode} />
-                    </>
-                  ) : (
-                    <>
+                  <>
                       <KPICard
                         title="Receita Direta"
                         forecasted={kpiData.directRevenue.forecasted}
@@ -3655,6 +5417,7 @@ function App() {
                         darkMode={darkMode}
                         onViewDetails={() => openKPIDetail('Detalhes: Receita Direta', getFilteredRevenues, 'revenues')}
                         dataSource="Carregado da planilha de receitas"
+                      loading={dataLoading}
                       />
                       <KPICard
                         title="CMV DRE"
@@ -3667,6 +5430,7 @@ function App() {
                         darkMode={darkMode}
                         onViewDetails={() => openKPIDetail('Detalhes: CMV', getFilteredCMVDRE, 'mixed')}
                         dataSource="Carregado de contas a pagar (categoria: 04.0DESPESAS COM MERCADORIA)"
+                      loading={dataLoading}
                       />
                       <KPICard
                         title="Total de Despesas"
@@ -3678,6 +5442,7 @@ function App() {
                         darkMode={darkMode}
                         onViewDetails={() => openKPIDetail('Detalhes: Total de Despesas', getFilteredExpenses, 'mixed')}
                         dataSource="Carregado das planilhas de contas a pagar, previstos e transações financeiras"
+                      loading={dataLoading}
                       />
                       <KPICard
                         title="Resultado Operacional"
@@ -3690,9 +5455,9 @@ function App() {
                         darkMode={darkMode}
                         onViewDetails={() => openKPIDetail('Detalhes: Resultado Operacional', getFilteredOperationalResult, 'mixed')}
                         dataSource="Calculado: Receita Direta - CMV - Total de Despesas"
+                      loading={dataLoading}
                       />
-                    </>
-                  )}
+                  </>
                 </div>
               </div>
 
@@ -3923,6 +5688,10 @@ function App() {
                 <DataImport
                   onFileUpload={handleDataImport}
                   onFileSelectWithMode={handleFileSelectWithMode}
+                  onSaveCompany={handleSaveCompany}
+                  onUpdateCompany={handleUpdateCompany}
+                  onRefreshCompanies={handleRefreshCompanies}
+                  companies={companies}
                   importedFiles={importedFiles}
                   onDeleteFile={handleDeleteFile}
                   onRestoreFile={handleRestoreFile}
@@ -3944,6 +5713,8 @@ function App() {
         data={modalState.data}
         type={modalState.type}
         loadPaginatedData={modalState.loadPaginatedData}
+        initialStartDate={modalState.initialStartDate}
+        initialEndDate={modalState.initialEndDate}
       />
 
       <ImportModeModal
@@ -4023,6 +5794,17 @@ function App() {
         message={errorModal.message}
       />
 
+      {/* Sistema de Notificações */}
+      <NotificationCenter />
+      
+      {/* Toast Notification (aparece por 10 segundos) */}
+      {activeToast && notifications.find(n => n.id === activeToast) && (
+        <ToastNotification
+          notification={notifications.find(n => n.id === activeToast)!}
+          onDismiss={() => setActiveToast(null)}
+        />
+      )}
+
       {/* Botão discreto de desbloqueio permanente */}
       <button
         type="button"
@@ -4035,6 +5817,14 @@ function App() {
         aria-label=""
       />
     </div>
+  );
+}
+
+function App() {
+  return (
+    <NotificationProvider>
+      <AppContent />
+    </NotificationProvider>
   );
 }
 

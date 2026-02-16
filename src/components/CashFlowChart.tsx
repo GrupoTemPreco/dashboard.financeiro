@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 import { AlertTriangle, ChevronDown, Loader2 } from 'lucide-react';
+import { DataSourceNote } from './DataSourceNote';
 
 interface CashFlowData {
   date: string;
@@ -21,9 +22,17 @@ interface CashFlowChartProps {
   data: CashFlowData[];
   darkMode?: boolean;
   alerts?: AlertData[];
+  sourceTables?: string[];
+  sourceSuffix?: string;
 }
 
-export const CashFlowChart: React.FC<CashFlowChartProps> = ({ data, darkMode = false, alerts = [] }) => {
+export const CashFlowChart: React.FC<CashFlowChartProps> = ({
+  data,
+  darkMode = false,
+  alerts = [],
+  sourceTables,
+  sourceSuffix
+}) => {
   const [alertsDropdownOpen, setAlertsDropdownOpen] = useState(false);
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -75,6 +84,15 @@ export const CashFlowChart: React.FC<CashFlowChartProps> = ({ data, darkMode = f
           </div>
         </div>
       </div>
+
+      <DataSourceNote
+        darkMode={darkMode}
+        tables={
+          sourceTables ?? ['saldos_iniciais', 'receitas', 'contas_a_pagar', 'previstos', 'transacoes_financeiras']
+        }
+        suffix={sourceSuffix}
+        className="mb-3"
+      />
 
       <div className="h-56 overflow-x-auto scrollbar-horizontal">
         {!data || data.length === 0 ? (

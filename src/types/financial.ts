@@ -19,6 +19,8 @@ export interface KPIData {
     forecasted: number;
     actual: number;
     date?: string;
+    hasBalance?: boolean;
+    isLatestBeforePeriod?: boolean;
   };
   finalBalance: {
     forecasted: number;
@@ -66,7 +68,8 @@ export interface ImportedFile {
     | 'revenues_dre'
     | 'cmv_dre'
     | 'initial_balances'
-    | 'orcamento_dre';
+    | 'orcamento_dre'
+    | 'receita_crediario';
   uploadDate: string;
   recordCount: number;
   status: 'success' | 'error' | 'processing';
@@ -81,6 +84,7 @@ export interface AccountsPayable {
   chart_of_accounts: string;
   creditor: string;
   payment_date: string;
+  due_date?: string; // Data de vencimento (opcional para compatibilidade)
   amount: number;
   created_at: string;
   updated_at: string;
@@ -88,22 +92,53 @@ export interface AccountsPayable {
 
 export interface Revenue {
   id: string;
-  status: 'realizado' | 'previsto';
+  status: 'realizado' | 'previsto' | 'não identificado';
   business_unit: string;
   chart_of_accounts: string;
   payment_date: string;
   amount: number;
+  tipo?: string;
+  usuario?: string;
+  conta_destino?: string;
+  conciliacao_origem?: string;
+  conciliacao_destino?: string;
   created_at: string;
   updated_at: string;
 }
 
 export interface FinancialTransaction {
   id: string;
-  status: 'realizado' | 'previsto';
+  status: 'realizado' | 'previsto' | null;
   business_unit: string;
   chart_of_accounts: string;
   transaction_date: string;
   amount: number;
+  num_doc?: string;
+  conta_corrente?: string;
+  origem?: string;
+  descricao?: string;
+  data_hora_inclusao?: string;
+  usuario?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReceitaCrediario {
+  id: string;
+  data_receb: string;
+  un_neg_receb: string;
+  parcela?: string;
+  recebimento: number;
+  percentual_total?: number;
+  juros?: number;
+  percentual_juros?: number;
+  multa?: number;
+  percentual_multa?: number;
+  taxa_conv?: number;
+  percentual_taxa_conv?: number;
+  dias_receb?: number;
+  dias_atraso?: number;
+  import_id?: string;
   created_at: string;
   updated_at: string;
 }
