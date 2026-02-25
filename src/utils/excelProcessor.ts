@@ -2343,7 +2343,7 @@ const processReceitaCrediarioFromRevenues = (
 
       const receitaCrediario: any = {
         data_receb: dataReceb,
-        un_neg_receb: unNegReceb,
+        business_unit: unNegReceb,
         parcela: parcela,
         recebimento: recebimento,
         dias_receb: diasReceb,
@@ -4628,7 +4628,7 @@ export const processReceitaCrediarioFile = (
 
           const receitaCrediario: any = {
             data_receb: dataReceb,
-            un_neg_receb: unNegReceb,
+            business_unit: unNegReceb,
             recebimento: recebimento
           };
 

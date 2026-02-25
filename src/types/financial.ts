@@ -126,7 +126,7 @@ export interface FinancialTransaction {
 export interface ReceitaCrediario {
   id: string;
   data_receb: string;
-  un_neg_receb: string;
+  business_unit: string;
   parcela?: string;
   recebimento: number;
   percentual_total?: number;

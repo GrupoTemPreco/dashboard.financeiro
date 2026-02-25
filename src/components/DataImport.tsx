@@ -64,6 +64,14 @@ export const DataImport: React.FC<DataImportProps> = ({
   const initialBalancesInputRef = useRef<HTMLInputElement>(null);
   const orcamentoDREInputRef = useRef<HTMLInputElement>(null);
 
+  // Importadores ocultos na interface (ver docs/OCULTOS.md)
+  const IMPORTADORES_OCULTOS: Record<string, boolean> = {
+    revenues: true,
+    forecasted_entries: true,
+    initial_balances: true,
+    orcamento_dre: true
+  };
+
   const handleDragOver = (e: React.DragEvent, type: string) => {
     e.preventDefault();
     setDragOver(type);
@@ -758,6 +766,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                   </ul>
                 </div>
 
+                {!IMPORTADORES_OCULTOS.revenues && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                   <h4 className="font-medium mb-2 text-blue-800">3. Receitas</h4>
                   <p className="mb-2 text-xs">Importe o arquivo com as receitas:</p>
@@ -770,6 +779,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                     <li className="text-gray-600">• Opcional: Tipo, Usuário, Conta destino, Conciliação origem, Conciliação destino</li>
                   </ul>
                 </div>
+                )}
 
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                   <h4 className="font-medium mb-2 text-blue-800">4. Lançamentos Financeiros</h4>
@@ -783,6 +793,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                   </ul>
                 </div>
 
+                {!IMPORTADORES_OCULTOS.forecasted_entries && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                   <h4 className="font-medium mb-2 text-blue-800">5. Lançamentos Previstos</h4>
                   <p className="mb-2 text-xs">Importe o arquivo com os lançamentos previstos:</p>
@@ -795,6 +806,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                     <li>• Coluna F: Valor</li>
                   </ul>
                 </div>
+                )}
 
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                   <h4 className="font-medium mb-2 text-blue-800">6. Receita DRE</h4>
@@ -820,6 +832,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                   </ul>
                 </div>
 
+                {!IMPORTADORES_OCULTOS.initial_balances && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                   <h4 className="font-medium mb-2 text-blue-800">8. Saldos Bancários</h4>
                   <p className="mb-2 text-xs">Importe o arquivo com os saldos iniciais:</p>
@@ -830,6 +843,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                     <li>• Coluna D: Data do saldo</li>
                   </ul>
                 </div>
+                )}
               </div>
               
               <div className="mt-4 bg-blue-100 rounded-md p-3">
@@ -927,7 +941,7 @@ export const DataImport: React.FC<DataImportProps> = ({
           />
         </div>
 
-        {/* Revenues Upload */}
+        {!IMPORTADORES_OCULTOS.revenues && (
         <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
           <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-blue-600" />
@@ -968,6 +982,7 @@ export const DataImport: React.FC<DataImportProps> = ({
             className="hidden"
           />
         </div>
+        )}
 
         {/* Financial Transactions Upload */}
         <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
@@ -1011,7 +1026,7 @@ export const DataImport: React.FC<DataImportProps> = ({
           />
         </div>
 
-        {/* Forecasted Entries Upload */}
+        {!IMPORTADORES_OCULTOS.forecasted_entries && (
         <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
           <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-teal-600" />
@@ -1052,6 +1067,7 @@ export const DataImport: React.FC<DataImportProps> = ({
             className="hidden"
           />
         </div>
+        )}
 
         {/* Revenues DRE Upload */}
         <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
@@ -1139,7 +1155,7 @@ export const DataImport: React.FC<DataImportProps> = ({
           />
         </div>
 
-        {/* Initial Balances Upload */}
+        {!IMPORTADORES_OCULTOS.initial_balances && (
         <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
           <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-emerald-600" />
@@ -1181,8 +1197,9 @@ export const DataImport: React.FC<DataImportProps> = ({
             className="hidden"
           />
         </div>
+        )}
 
-        {/* Orçamento DRE Upload */}
+        {!IMPORTADORES_OCULTOS.orcamento_dre && (
         <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
           <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-purple-600" />
@@ -1224,6 +1241,7 @@ export const DataImport: React.FC<DataImportProps> = ({
             className="hidden"
           />
         </div>
+        )}
       </div>
 
       {/* Company Form Modal */}

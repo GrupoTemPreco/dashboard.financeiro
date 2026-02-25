@@ -1,10 +1,16 @@
-import React, { useRef } from 'react';
-import { Upload, Building2, Users, Calendar, Filter, BarChart3, TrendingUp, Activity, FileText, ChevronLeft, ChevronRight, Maximize, ChevronDown, Check, RefreshCw } from 'lucide-react';
+import React, { useRef, useEffect, useMemo } from 'react';
+import { Upload, Building2, Users, Calendar, Filter, BarChart3, TrendingUp, Activity, FileText, ChevronLeft, ChevronRight, Maximize, ChevronDown, Check, RefreshCw, X } from 'lucide-react';
 import { Filters } from '../types/financial';
+
+// Filtros ocultos por enquanto — cards respondem apenas ao filtro de Empresas (business_unit)
+const SHOW_GROUPS_FILTER = false;
+const SHOW_BANKS_FILTER = false;
 
 interface SidebarProps {
   filters: Filters;
   onFiltersChange: (filters: Filters) => void;
+  /** Chamado ao clicar em "Aplicar filtro" para o App sempre recarregar (mesmo ao aplicar de novo com a mesma seleção) */
+  onFilterApply?: () => void;
   onFileUpload: (file: File) => void;
   companies: { name: string; group: string; code: string }[];
   groups: string[];
@@ -20,6 +26,7 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({
   filters,
   onFiltersChange,
+  onFilterApply,
   onFileUpload,
   companies,
   groups,
@@ -38,14 +45,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [periodDropdownOpen, setPeriodDropdownOpen] = React.useState(false);
   const [tempStartDate, setTempStartDate] = React.useState(filters.startDate || '');
   const [tempEndDate, setTempEndDate] = React.useState(filters.endDate || '');
+  // Estado pendente: só aplicado ao clicar em "Aplicar filtro" (evita re-render a cada mudança)
+  const [pendingCompanies, setPendingCompanies] = React.useState<string[]>(filters.companies);
+
+  // Sincronizar pendentes quando os filtros aplicados mudarem (ex.: após Aplicar ou Limpar)
+  useEffect(() => {
+    setPendingCompanies(filters.companies);
+    setTempStartDate(filters.startDate || '');
+    setTempEndDate(filters.endDate || '');
+  }, [filters.companies, filters.startDate, filters.endDate]);
 
   const handleGroupChange = (newGroups: string[]) => {
-    // When groups change, filter out companies that don't belong to selected groups
-    const availableCompanies = getAvailableCompanies();
-    const validCompanies = filters.companies.filter(company => 
-      availableCompanies.some(c => c.name === company)
+    const validCompanies = filters.companies.filter(code =>
+      availableCompanies.some(c => codeMatches(c.code, code))
     );
-    
     onFiltersChange({
       ...filters,
       groups: newGroups,
@@ -54,19 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const handleCompanyChange = (newCompanies: string[]) => {
-    console.log('Company change:', newCompanies);
-    console.log('Available companies:', getAvailableCompanies());
-
-    // When companies change, filter banks accordingly
-    const validBanks = filters.banks.filter(bank =>
-      banks.includes(bank)
-    );
-
-    onFiltersChange({
-      ...filters,
-      companies: newCompanies,
-      banks: validBanks
-    });
+    setPendingCompanies(newCompanies);
   };
 
   const handleBankChange = (newBanks: string[]) => {
@@ -76,21 +77,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
     });
   };
 
-  const getAvailableCompanies = () => {
-    console.log('Obtendo empresas disponíveis. Grupos selecionados:', filters.groups);
-    console.log('Todas as empresas:', companies);
-    console.log('Estrutura das empresas:', companies.map(c => ({ nome: c.name, grupo: c.group })));
-    if (filters.groups.length === 0) {
-      console.log('Nenhum grupo selecionado, retornando todas as empresas');
-      return companies;
-    }
-    const filtered = companies.filter(company => {
-      console.log(`Verificando empresa: ${company.name}, grupo: ${company.group}, grupos selecionados:`, filters.groups);
-      return filters.groups.includes(company.group);
-    });
-    console.log('Empresas filtradas:', filtered);
-    return filtered;
+  const availableCompanies = useMemo(() => {
+    if (filters.groups.length === 0) return companies;
+    return companies.filter(c => filters.groups.includes(c.group));
+  }, [companies, filters.groups]);
+
+  const normalizeCode = (code: string) => {
+    const s = String(code || '').trim();
+    const n = parseInt(s, 10);
+    return isNaN(n) ? s : String(n);
   };
+  const codeMatches = (a: string, b: string) => a === b || normalizeCode(a) === normalizeCode(b);
+  const isCompanySelected = (code: string) => pendingCompanies.some(c => codeMatches(c, code));
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -144,6 +142,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             Filtros
           </div>
 
+          {SHOW_GROUPS_FILTER && (
+          <>
           {/* Group Filter */}
           <div>
             <label className="flex items-center text-xs font-medium text-blue-100 mb-2">
@@ -190,6 +190,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
             </div>
           </div>
+          </>
+          )}
 
           {/* Company Filter */}
           <div>
@@ -203,36 +205,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="w-full px-3 py-2 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm text-left flex items-center justify-between"
               >
                 <span className="truncate">
-                  {filters.companies.length === 0 
-                    ? 'Selecionar empresas...' 
-                    : `${filters.companies.length} empresa(s) selecionada(s)`
+                  {pendingCompanies.length === 0
+                    ? 'Selecionar empresas...'
+                    : `${pendingCompanies.length} empresa(s) selecionada(s)`
                   }
                 </span>
                 <ChevronDown className={`w-4 h-4 text-blue-200 transition-transform ${companyDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
               
               {companyDropdownOpen && (
-                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg max-h-40 overflow-y-auto scrollbar-vertical backdrop-blur-sm">
-                  {getAvailableCompanies().map((company, index) => (
+                <div className="absolute z-10 w-full mt-1 bg-blue-950/90 border border-blue-800 rounded-md shadow-lg max-h-72 overflow-y-auto scrollbar-vertical backdrop-blur-sm">
+                  {availableCompanies.map((company, index) => (
                     <label key={`${company.code}-${company.group}-${index}`} className="flex items-center px-3 py-2 hover:bg-blue-800 cursor-pointer text-sm">
                       <input
                         type="checkbox"
-                        checked={filters.companies.includes(company.name)}
+                        checked={isCompanySelected(company.code)}
                         onChange={(e) => {
                           if (e.target.checked) {
-                            handleCompanyChange([...filters.companies, company.name]);
+                            handleCompanyChange([...pendingCompanies, String(company.code ?? '').trim()]);
                           } else {
-                            handleCompanyChange(filters.companies.filter(c => c !== company.name));
+                            handleCompanyChange(pendingCompanies.filter(c => !codeMatches(c, company.code)));
                           }
                         }}
                         className="mr-2 rounded"
                       />
-                      <span className="text-white">{company.name}</span>
+                      <span className="text-white">{company.name} <span className="text-blue-200">({company.code})</span></span>
                     </label>
                   ))}
                 </div>
               )}
-              {getAvailableCompanies().length === 0 && (
+              {availableCompanies.length === 0 && (
                 <div className="px-3 py-2 text-xs text-blue-200">
                   {companies.length === 0 ? 'Importe a planilha de empresas primeiro' : 'Nenhuma empresa disponível para os grupos selecionados'}
                 </div>
@@ -240,7 +242,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           </div>
 
-          {/* Bank Filter */}
+          {SHOW_BANKS_FILTER && (
           <div>
             <label className="flex items-center text-xs font-medium text-blue-100 mb-2">
               <Building2 className="w-4 h-4 mr-2" />
@@ -288,6 +290,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
             </div>
           </div>
+          )}
 
           {/* Date Range */}
           <div className="space-y-2">
@@ -341,19 +344,53 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         className="w-full px-2 py-1 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm"
                       />
                     </div>
-                    <button
-                      onClick={() => {
-                        onFiltersChange({ ...filters, startDate: tempStartDate, endDate: tempEndDate });
-                        setPeriodDropdownOpen(false);
-                      }}
-                      className="w-full px-3 py-2 bg-pink-600 hover:bg-pink-700 text-white rounded-md text-sm font-medium transition-colors"
-                    >
-                      Aplicar Filtro
-                    </button>
+                    <p className="text-xs text-blue-200">Use &quot;Aplicar filtro&quot; abaixo para aplicar período e demais filtros.</p>
                   </div>
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Botões globais: aplicam todos os filtros de uma vez (evita re-renders desnecessários) */}
+          <div className="flex gap-2 mt-3">
+            <button
+              onClick={() => {
+                onFiltersChange({
+                  ...filters,
+                  companies: [...pendingCompanies],
+                  startDate: tempStartDate.trim(),
+                  endDate: tempEndDate.trim()
+                });
+                onFilterApply?.();
+                setPeriodDropdownOpen(false);
+                setCompanyDropdownOpen(false);
+              }}
+              className="flex-1 px-3 py-1.5 bg-sky-500 hover:bg-sky-400 text-white rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-1"
+            >
+              <Filter className="w-4 h-4" />
+              Aplicar filtro
+            </button>
+            <button
+              onClick={() => {
+                onFiltersChange({
+                  ...filters,
+                  companies: [],
+                  startDate: '',
+                  endDate: '',
+                  banks: []
+                });
+                setPendingCompanies([]);
+                setTempStartDate('');
+                setTempEndDate('');
+                setPeriodDropdownOpen(false);
+                setCompanyDropdownOpen(false);
+              }}
+              className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-1"
+              title="Limpar filtro"
+            >
+              <X className="w-4 h-4" />
+              Limpar
+            </button>
           </div>
         </div>
         )}

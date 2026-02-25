@@ -117,7 +117,7 @@ export const DREPage: React.FC<DREPageProps> = ({
     const filteredCompanyCodes = companies
       .filter(c => {
         const groupMatch = filters.groups.length === 0 || filters.groups.includes(c.group_name);
-        const companyMatch = filters.companies.length === 0 || filters.companies.includes(c.company_name);
+        const companyMatch = filters.companies.length === 0 || filters.companies.some((code: string) => String(code).trim() === String(c.company_code ?? '').trim() || normalizeCode(code) === normalizeCode(c.company_code ?? ''));
         return groupMatch && companyMatch;
       })
       .map(c => c.company_code);
@@ -131,52 +131,21 @@ export const DREPage: React.FC<DREPageProps> = ({
 
   // Calcula a receita DRE
   const calculateRevenue = (startDate: string, endDate: string) => {
-    console.log('🔵 Calculando Receita DRE:', { startDate, endDate, totalRecords: revenuesDRE.length });
-    console.log('📊 Dados revenuesDRE:', revenuesDRE);
-    
     const filtered = revenuesDRE.filter(r => {
       const dateMatch = r.issue_date >= startDate && r.issue_date <= endDate;
       const companyMatch = isCompanyFiltered(r.business_unit);
       const result = dateMatch && companyMatch;
       
-      if (!dateMatch) {
-        console.log('❌ Data não corresponde:', { 
-          issue_date: r.issue_date, 
-          startDate, 
-          endDate,
-          business_unit: r.business_unit,
-          amount: r.amount 
-        });
-      }
-      if (!companyMatch) {
-        console.log('❌ Empresa não corresponde:', { 
-          business_unit: r.business_unit,
-          selectedBusinessUnit,
-          companies: companies.map(c => ({ code: c.company_code, name: c.company_name }))
-        });
-      }
-      
       return result;
     });
-    
-    console.log('✅ Receita DRE filtrada:', { count: filtered.length, records: filtered });
-    
+
     const total = filtered.reduce((sum, r) => sum + parseFloat(r.amount || 0), 0);
-    console.log('💰 Total Receita DRE:', total);
-    
     return total;
   };
 
   // Calcula o CMV DRE - alimentado pela tabela cmv_dre
   // Os dados vêm da prop cmvDRE que é carregada do banco de dados (tabela cmv_dre)
   const calculateCMV = (startDate: string, endDate: string) => {
-    console.log('🔴 Calculando CMV DRE (tabela cmv_dre):', { 
-      startDate, 
-      endDate, 
-      totalRecords: cmvDRE.length,
-      cmvDREIsArray: Array.isArray(cmvDRE)
-    });
-    
     if (!cmvDRE || !Array.isArray(cmvDRE) || cmvDRE.length === 0) {
       console.warn('⚠️ Nenhum dado de CMV DRE disponível na tabela cmv_dre!', {
         cmvDRE,
@@ -185,17 +154,7 @@ export const DREPage: React.FC<DREPageProps> = ({
       });
       return 0;
     }
-    
-    // Mostrar amostra dos dados
-    console.log('📊 Amostra cmvDRE (primeiros 5):', cmvDRE.slice(0, 5).map(c => ({
-      issue_date: c.issue_date,
-      business_unit: c.business_unit,
-      amount: c.amount,
-      chart_of_accounts: c.chart_of_accounts,
-      amountType: typeof c.amount,
-      amountParsed: parseFloat(c.amount || 0)
-    })));
-    
+
     const filtered = cmvDRE.filter(c => {
       if (!c || !c.issue_date) {
         console.warn('⚠️ Registro CMV inválido (sem issue_date):', c);
@@ -211,52 +170,7 @@ export const DREPage: React.FC<DREPageProps> = ({
       const companyMatch = isCompanyFiltered(c.business_unit);
       const result = dateMatch && companyMatch;
       
-      // Log detalhado para debug
-      if (!dateMatch && cmvDRE.length > 0 && cmvDRE.length < 100) {
-        // Só logar se houver poucos registros para não poluir o console
-        console.log('📅 Data não corresponde (CMV):', {
-          recordDate,
-          startDateStr,
-          endDateStr,
-          dateMatch,
-          record: c
-        });
-      }
-      
-      if (!result && dateMatch) {
-        console.log('❌ Empresa não corresponde (CMV):', { 
-          issue_date: c.issue_date,
-          business_unit: c.business_unit,
-          selectedBusinessUnit,
-          filters: {
-            groups: filters.groups,
-            companies: filters.companies
-          },
-          companies: companies.map(c => ({ code: c.company_code, name: c.company_name }))
-        });
-      }
-      
       return result;
-    });
-    
-    // Mostrar todas as datas disponíveis nos dados para debug
-    const allDates = [...new Set(cmvDRE.map(c => String(c.issue_date).split('T')[0]))].sort();
-    const datesInRange = allDates.filter(d => d >= String(startDate).split('T')[0] && d <= String(endDate).split('T')[0]);
-    
-    console.log('✅ CMV DRE filtrado:', { 
-      count: filtered.length, 
-      totalRecords: cmvDRE.length,
-      dateRange: { 
-        startDate: String(startDate).split('T')[0], 
-        endDate: String(endDate).split('T')[0] 
-      },
-      allDatesAvailable: allDates.slice(0, 10), // Primeiras 10 datas
-      datesInRange: datesInRange,
-      sampleFiltered: filtered.slice(0, 3).map(c => ({
-        issue_date: c.issue_date,
-        business_unit: c.business_unit,
-        amount: c.amount
-      }))
     });
     
     const total = filtered.reduce((sum, c) => {
@@ -267,16 +181,7 @@ export const DREPage: React.FC<DREPageProps> = ({
       }
       return sum + amount;
     }, 0);
-    
-    console.log('💰 Total CMV DRE calculado:', total, {
-      filteredCount: filtered.length,
-      sumBreakdown: filtered.slice(0, 5).map(c => ({
-        issue_date: c.issue_date,
-        amount: c.amount,
-        parsed: parseFloat(c.amount || 0)
-      }))
-    });
-    
+
     // Se não encontrou dados mas há registros, mostrar aviso
     if (total === 0 && cmvDRE.length > 0) {
       console.warn('⚠️ CMV DRE: Nenhum registro encontrado no período, mas há dados disponíveis!', {
@@ -896,11 +801,6 @@ export const DREPage: React.FC<DREPageProps> = ({
   // Calcula despesas operacionais (Total de Despesas - igual ao fluxo de caixa)
   // Usa a mesma lógica do card "Total de Despesas" da tela de fluxo de caixa
   const calculateOperatingExpenses = (startDate: string, endDate: string) => {
-    console.log('🟠 Calculando Despesas Operacionais:', { startDate, endDate });
-    console.log('📊 Total accountsPayable:', accountsPayable.length);
-    console.log('📊 Total financialTransactions:', financialTransactions.length);
-    console.log('📊 Total forecastedEntries:', forecastedEntries?.length || 0);
-    
     if (accountsPayable.length === 0 && financialTransactions.length === 0 && (!forecastedEntries || forecastedEntries.length === 0)) {
       console.warn('⚠️ Nenhum dado de despesas disponível!');
       return 0;
@@ -971,26 +871,6 @@ export const DREPage: React.FC<DREPageProps> = ({
       .reduce((sum, ft) => sum + Math.abs(parseFloat(ft.amount || 0)), 0);
 
     const total = apExpenses + feExpenses + ftExpenses;
-    console.log('💰 Despesas Operacionais:', { 
-      apExpenses, 
-      feExpenses, 
-      ftExpenses, 
-      total,
-      dateRange: { startDate, endDate },
-      accountsPayableFiltered: accountsPayable.filter(ap => {
-        const dateMatch = ap.payment_date >= startDate && ap.payment_date <= endDate;
-        return dateMatch;
-      }).length,
-      forecastedEntriesFiltered: forecastedEntries?.filter(entry => {
-        const dateMatch = entry.due_date >= startDate && entry.due_date <= endDate;
-        return dateMatch;
-      }).length || 0,
-      transactionsFiltered: financialTransactions.filter(ft => {
-        const dateMatch = ft.transaction_date >= startDate && ft.transaction_date <= endDate;
-        return dateMatch;
-      }).length
-    });
-
     return total;
   };
 
@@ -1025,57 +905,9 @@ export const DREPage: React.FC<DREPageProps> = ({
   const currentMonthDates = getCurrentMonthDates();
   const previousMonthDates = getPreviousMonthDates();
   
-  // Debug: Log das datas e dados disponíveis
-  useEffect(() => {
-    console.log('📅 DRE Debug Info:', {
-      selectedMonth: format(selectedMonth, 'yyyy-MM-dd'),
-      currentMonthDates,
-      previousMonthDates,
-      selectedBusinessUnit,
-      totalRevenuesDRE: revenuesDRE.length,
-      totalCmvDRE: cmvDRE.length,
-      totalAccountsPayable: accountsPayable.length,
-      totalFinancialTransactions: financialTransactions.length,
-      companies: companies.map(c => ({ code: c.company_code, name: c.company_name })),
-      filters: {
-        groups: filters.groups,
-        companies: filters.companies,
-        startDate: filters.startDate,
-        endDate: filters.endDate
-      }
-    });
-    
-    // Mostrar amostra dos dados brutos
-    if (revenuesDRE.length > 0) {
-      console.log('📊 Sample revenuesDRE (first 5):', revenuesDRE.slice(0, 5));
-    }
-    if (cmvDRE.length > 0) {
-      console.log('📊 Sample cmvDRE (first 5):', cmvDRE.slice(0, 5));
-    }
-    
-    // Mostrar informações sobre filtros de empresa
-    const hasActiveFilters = filters.groups.length > 0 || filters.companies.length > 0;
-    console.log('🔍 Filter Status:', {
-      hasActiveFilters,
-      selectedGroups: filters.groups,
-      selectedCompanies: filters.companies,
-      totalCompanies: companies.length
-    });
-  }, [selectedMonth, selectedBusinessUnit, revenuesDRE, cmvDRE, accountsPayable, financialTransactions, companies, filters]);
-
   // Usar filtros globais se disponíveis, senão usar o mês selecionado
   const effectiveStartDate = filters.startDate || currentMonthDates.start;
   const effectiveEndDate = filters.endDate || currentMonthDates.end;
-  
-  console.log('📅 Datas efetivas para cálculo:', {
-    filtersStartDate: filters.startDate,
-    filtersEndDate: filters.endDate,
-    currentMonthStart: currentMonthDates.start,
-    currentMonthEnd: currentMonthDates.end,
-    effectiveStartDate,
-    effectiveEndDate,
-    selectedMonth: format(selectedMonth, 'yyyy-MM-dd')
-  });
 
   const currentRevenue = calculateRevenue(effectiveStartDate, effectiveEndDate);
   const currentCmv = calculateCMV(effectiveStartDate, effectiveEndDate);
@@ -1089,17 +921,6 @@ export const DREPage: React.FC<DREPageProps> = ({
   const previousOperatingExpenses = calculateOperatingExpenses(previousMonthDates.start, previousMonthDates.end);
   const previousEbitda = calculateEBITDA(previousRevenue, previousCmv, previousOperatingExpenses);
   const previousNetProfit = calculateNetProfit(previousEbitda);
-  
-  console.log('💰 Valores calculados:', {
-    currentRevenue,
-    currentCmv,
-    currentOperatingExpenses,
-    currentEbitda,
-    currentNetProfit,
-    previousRevenue,
-    previousCmv,
-    previousOperatingExpenses
-  });
 
   // DRE data com valores calculados
   const dreData: DREData[] = [

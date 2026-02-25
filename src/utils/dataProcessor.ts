@@ -7,8 +7,12 @@ export const filterData = (records: FinancialRecord[], filters: Filters): Financ
     const startDate = new Date(filters.startDate);
     const endDate = new Date(filters.endDate);
     
+    const recordCode = (record as { company?: string; company_code?: string }).company_code ?? (record as { company?: string }).company;
+    const companyMatch = filters.companies.length === 0 || filters.companies.some((code: string) =>
+      String(code).trim() === String(recordCode ?? '').trim()
+    );
     return (
-      (filters.companies.length === 0 || filters.companies.includes(record.company)) &&
+      companyMatch &&
       (filters.groups.length === 0 || filters.groups.includes(record.group)) &&
       recordDate >= startDate &&
       recordDate <= endDate
