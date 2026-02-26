@@ -165,6 +165,32 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     return null;
   };
 
+  // Para cada conta com formula === 'sum', lista de account_key dos descendentes (folhas) para somar orçamentos
+  const descendantAccountKeysMap = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    const getDescendantKeys = (parentIdOrName: string | undefined): string[] => {
+      if (!parentIdOrName) return [];
+      const keys: string[] = [];
+      for (const acc of DESPESAS_OP_STRUCTURE) {
+        const parent = (acc as any).parent;
+        if (parent !== parentIdOrName) continue;
+        const key = getAccountKey(acc);
+        if (key) keys.push(key);
+        else {
+          const subId = (acc as any).id ?? (acc as any).name;
+          keys.push(...getDescendantKeys(subId));
+        }
+      }
+      return keys;
+    };
+    for (const account of DESPESAS_OP_STRUCTURE) {
+      if (account.formula !== 'sum') continue;
+      const idOrName = (account as any).id ?? (account as any).name;
+      map[idOrName] = getDescendantKeys(idOrName);
+    }
+    return map;
+  }, []);
+
   const { currentStart, currentEnd, prevStart, prevEnd } = useMemo(() => {
     const current = getCurrentPeriod();
     const previous = getPreviousPeriod();
@@ -355,8 +381,18 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     const revenueDiffPercentage = forecastedValue !== 0 ? ((currentValue - forecastedValue) / forecastedValue) * 100 : 0;
 
     const accountKey = getAccountKey(account);
-    const orcamento = accountKey ? (orcamentoData[accountKey]?.orcamento ?? 0) : 0;
-    const orcamentoEstrategico = accountKey ? (orcamentoData[accountKey]?.orcamento_estrategico ?? 0) : 0;
+    const isSumRow = account.formula === 'sum';
+    const descendantKeys = isSumRow ? (descendantAccountKeysMap[(account as any).id ?? (account as any).name] ?? []) : [];
+    const orcamento = accountKey
+      ? (orcamentoData[accountKey]?.orcamento ?? 0)
+      : isSumRow
+        ? descendantKeys.reduce((s, k) => s + (orcamentoData[k]?.orcamento ?? 0), 0)
+        : 0;
+    const orcamentoEstrategico = accountKey
+      ? (orcamentoData[accountKey]?.orcamento_estrategico ?? 0)
+      : isSumRow
+        ? descendantKeys.reduce((s, k) => s + (orcamentoData[k]?.orcamento_estrategico ?? 0), 0)
+        : 0;
     const isEditingThis = editingOrcamento?.accountKey === accountKey;
     const isEditingOrc = isEditingThis && editingOrcamento?.field === 'orcamento';
     const isEditingEstrat = isEditingThis && editingOrcamento?.field === 'orcamento_estrategico';
@@ -368,9 +404,17 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     const hasExpandIcon = account.expandable;
 
     const renderOrcamentoCell = (field: 'orcamento' | 'orcamento_estrategico') => {
-      if (!accountKey) return <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-500' : 'border-gray-200 text-gray-400'}`}>-</td>;
-      const isEditing = field === 'orcamento' ? isEditingOrc : isEditingEstrat;
       const displayValue = field === 'orcamento' ? orcamento : orcamentoEstrategico;
+      if (!accountKey && !isSumRow) return <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-500' : 'border-gray-200 text-gray-400'}`}>-</td>;
+      if (isSumRow) {
+        return (
+          <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+            {formatCurrency(displayValue)}
+          </td>
+        );
+      }
+      const isEditing = field === 'orcamento' ? isEditingOrc : isEditingEstrat;
+      const key = accountKey as string;
       return (
         <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
           {isEditing ? (
@@ -380,12 +424,12 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
               onChange={e => setEditValue(e.target.value)}
               onBlur={() => {
                 const num = parseFloat(String(editValue).replace(',', '.').replace(/\s/g, '')) || 0;
-                saveOrcamento(accountKey, field, num);
+                saveOrcamento(key, field, num);
               }}
               onKeyDown={e => {
                 if (e.key === 'Enter') {
                   const num = parseFloat(String(editValue).replace(',', '.').replace(/\s/g, '')) || 0;
-                  saveOrcamento(accountKey, field, num);
+                  saveOrcamento(key, field, num);
                 }
                 if (e.key === 'Escape') setEditingOrcamento(null);
               }}
@@ -396,7 +440,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
             <button
               type="button"
               onClick={() => {
-                setEditingOrcamento({ accountKey, field });
+                setEditingOrcamento({ accountKey: key, field });
                 setEditValue(displayValue === 0 ? '' : String(displayValue).replace('.', ','));
               }}
               disabled={savingOrcamento}
@@ -434,13 +478,13 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
         {renderOrcamentoCell('orcamento')}
         <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}>
           <div className="flex items-center justify-end gap-1">
-            {accountKey && orcamento > 0 && forecastedValue > orcamento && (
+            {orcamento > 0 && forecastedValue > orcamento && (
               <span title="Previsto acima do orçamento">
                 <AlertTriangle className={`w-4 h-4 shrink-0 ${darkMode ? 'text-red-400' : 'text-red-600'}`} aria-hidden />
               </span>
             )}
             <span className={
-              accountKey && orcamento > 0
+              orcamento > 0
                 ? forecastedValue > orcamento
                   ? darkMode ? 'text-red-400' : 'text-red-600'
                   : forecastedValue < orcamento

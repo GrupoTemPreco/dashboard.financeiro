@@ -206,8 +206,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <span className="truncate">
                   {pendingCompanies.length === 0
-                    ? 'Selecionar empresas...'
-                    : `${pendingCompanies.length} empresa(s) selecionada(s)`
+                    ? 'Selecionar empresa...'
+                    : (() => {
+                        const code = pendingCompanies[0];
+                        const c = availableCompanies.find(x => codeMatches(x.code, code));
+                        return c ? c.name : code;
+                      })()
                   }
                 </span>
                 <ChevronDown className={`w-4 h-4 text-blue-200 transition-transform ${companyDropdownOpen ? 'rotate-180' : ''}`} />
@@ -218,16 +222,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {availableCompanies.map((company, index) => (
                     <label key={`${company.code}-${company.group}-${index}`} className="flex items-center px-3 py-2 hover:bg-blue-800 cursor-pointer text-sm">
                       <input
-                        type="checkbox"
+                        type="radio"
+                        name="company-filter"
                         checked={isCompanySelected(company.code)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            handleCompanyChange([...pendingCompanies, String(company.code ?? '').trim()]);
+                        onChange={() => {
+                          // Seleção única: ao clicar, seleciona só esta empresa (ou desmarca se já era a selecionada)
+                          if (isCompanySelected(company.code)) {
+                            handleCompanyChange([]);
                           } else {
-                            handleCompanyChange(pendingCompanies.filter(c => !codeMatches(c, company.code)));
+                            handleCompanyChange([String(company.code ?? '').trim()]);
                           }
                         }}
-                        className="mr-2 rounded"
+                        className="mr-2"
                       />
                       <span className="text-white">{company.name} <span className="text-blue-200">({company.code})</span></span>
                     </label>
