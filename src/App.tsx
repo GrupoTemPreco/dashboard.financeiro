@@ -2768,6 +2768,17 @@ function AppContent() {
     return accountsPayable;
   }, [accountsPayable]);
 
+  // Data/hora da última importação de contas a pagar (para indicador na tabela Despesas Operacionais)
+  const lastAccountsPayableImportAt = useMemo(() => {
+    const apImports = importedFiles.filter(f => f.type === 'accounts_payable' && !f.isDeleted);
+    if (apImports.length === 0) return null;
+    const latest = apImports.reduce((best, f) => {
+      const d = f.uploadDate ? new Date(f.uploadDate).getTime() : 0;
+      return d > best.getTime() ? new Date(f.uploadDate!) : best;
+    }, new Date(0));
+    return latest.getTime() > 0 ? latest.toISOString() : null;
+  }, [importedFiles]);
+
   // Dados já vêm filtrados do banco por data e business_unit quando há filtros ativos
   // Não precisa refiltrar aqui - apenas retorna os dados como estão
   const getFilteredForecastedEntries = useMemo(() => {
@@ -5441,6 +5452,7 @@ function AppContent() {
                 companies={companies}
                 darkMode={darkMode}
                 onRefresh={refreshWithCurrentFilters}
+                lastAccountsPayableImportAt={lastAccountsPayableImportAt}
               />
 
               {/* Result Delivery Cards */}

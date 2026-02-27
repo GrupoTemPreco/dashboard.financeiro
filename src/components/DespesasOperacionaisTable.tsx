@@ -82,6 +82,8 @@ export interface DespesasOperacionaisTableProps {
   companies: any[];
   darkMode?: boolean;
   onRefresh?: () => void;
+  /** Data/hora da última importação de contas a pagar (ISO string), para exibir "Última atualização" */
+  lastAccountsPayableImportAt?: string | null;
 }
 
 const normalizeCode = (code: any): string => {
@@ -117,12 +119,28 @@ function segmentMatchesAccount(segment: string, account: any): boolean {
   return segment === name || segment.toLowerCase() === name.toLowerCase();
 }
 
+function formatLastUpdate(isoString: string): string {
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '';
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const aa = String(d.getFullYear()).slice(-2);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${dd}/${mm}/${aa} às ${hh}:${min}`;
+  } catch {
+    return '';
+  }
+}
+
 export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableProps> = ({
   accountsPayable,
   filters,
   companies,
   darkMode = false,
-  onRefresh
+  onRefresh,
+  lastAccountsPayableImportAt = null
 }) => {
   // Padrão: Despesas Operacionais expandida (filhos visíveis); ainda é possível encolher/abrir
   const [expandedAccounts, setExpandedAccounts] = useState<Record<string, boolean>>({ 'despesas-op': true });
@@ -523,9 +541,18 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     );
   };
 
+  const lastUpdateFormatted = lastAccountsPayableImportAt ? formatLastUpdate(lastAccountsPayableImportAt) : '';
+
   return (
     <div className="mb-8">
-      <h2 className={`text-lg font-bold mb-4 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Despesas Operacionais</h2>
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-4">
+        <h2 className={`text-lg font-bold ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Despesas Operacionais</h2>
+        {lastUpdateFormatted && (
+          <span className={`text-sm ${darkMode ? 'text-slate-400' : 'text-gray-500'}`} title="Última importação do importador de contas a pagar">
+            Última atualização: {lastUpdateFormatted}
+          </span>
+        )}
+      </div>
       <div className={`overflow-x-auto rounded-lg border ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-gray-200 bg-white'} shadow`}>
         <table className="min-w-full border-collapse">
           <thead>
