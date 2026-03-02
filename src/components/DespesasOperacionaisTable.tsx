@@ -84,6 +84,8 @@ export interface DespesasOperacionaisTableProps {
   onRefresh?: () => void;
   /** Data/hora da última importação de contas a pagar (ISO string), para exibir "Última atualização" */
   lastAccountsPayableImportAt?: string | null;
+  /** Exibe overlay de carregamento igual ao dos cards (spinner + "Carregando...") */
+  loading?: boolean;
 }
 
 const normalizeCode = (code: any): string => {
@@ -140,7 +142,8 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
   companies,
   darkMode = false,
   onRefresh,
-  lastAccountsPayableImportAt = null
+  lastAccountsPayableImportAt = null,
+  loading = false
 }) => {
   // Padrão: Despesas Operacionais expandida (filhos visíveis); ainda é possível encolher/abrir
   const [expandedAccounts, setExpandedAccounts] = useState<Record<string, boolean>>({ 'despesas-op': true });
@@ -553,7 +556,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
           </span>
         )}
       </div>
-      <div className={`overflow-x-auto rounded-lg border ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-gray-200 bg-white'} shadow`}>
+      <div className={`relative overflow-x-auto rounded-lg border ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-gray-200 bg-white'} shadow`}>
         <table className="min-w-full border-collapse">
           <thead>
             <tr className={darkMode ? 'bg-slate-800' : 'bg-gray-50'}>
@@ -591,6 +594,17 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
             {DESPESAS_OP_STRUCTURE.map((account, index) => renderRow(account, index))}
           </tbody>
         </table>
+        {/* Overlay de carregamento igual ao dos cards */}
+        {loading && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/35 dark:bg-slate-950/35 backdrop-blur-sm">
+            <div className="flex flex-col items-center gap-2">
+              <span className="w-5 h-5 border-2 border-pink-500 border-t-transparent rounded-full animate-spin" />
+              <span className={`text-xs font-medium ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
+                Carregando...
+              </span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

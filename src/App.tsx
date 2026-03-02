@@ -5453,6 +5453,7 @@ function AppContent() {
                 darkMode={darkMode}
                 onRefresh={refreshWithCurrentFilters}
                 lastAccountsPayableImportAt={lastAccountsPayableImportAt}
+                loading={dataLoading}
               />
 
               {/* Result Delivery Cards */}
@@ -5489,7 +5490,7 @@ function AppContent() {
                       loading={dataLoading}
                       />
                       <KPICard
-                        title="CMV DRE"
+                        title="CMV"
                         forecasted={kpiData.cogs.forecasted}
                         actual={kpiData.cogs.actual}
                         percentage={kpiData.cogs.percentageOfRevenue}
