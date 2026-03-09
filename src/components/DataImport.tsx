@@ -408,6 +408,16 @@ export const DataImport: React.FC<DataImportProps> = ({
                 return null;
               }
 
+              // Oculta acordeões de tipos sem importador quando não há arquivos
+              const totalCount = filesForType.length;
+              if (
+                typeKey !== 'all' &&
+                IMPORTADORES_OCULTOS[typeKey] &&
+                totalCount === 0
+              ) {
+                return null;
+              }
+
               // Agrupa por data dentro do tipo
               const filesByDate: Record<string, ImportedFile[]> = {};
               filesForType.forEach((file) => {
@@ -423,8 +433,6 @@ export const DataImport: React.FC<DataImportProps> = ({
 
               const headerLabel =
                 typeKey === 'all' ? 'Todos' : getTypeLabel(typeKey);
-
-              const totalCount = filesForType.length;
 
               return (
                 <div key={typeKey} className="mb-4 border border-gray-200 rounded-lg overflow-hidden">

@@ -24,7 +24,7 @@ import { processExcelFile, processAccountsPayableFile, processRevenuesFile, proc
 import { filterData, calculateKPIs } from './utils/dataProcessor';
 import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List, Moon, Sun, Eye, EyeOff } from 'lucide-react';
 import { supabase } from './lib/supabase';
-import { startOfMonth, endOfMonth, format, parseISO, subMonths, subDays, differenceInCalendarMonths, differenceInCalendarDays, addDays } from 'date-fns';
+import { startOfMonth, endOfMonth, format, parseISO, subMonths, subDays, differenceInCalendarDays, addDays, getDate, setDate, lastDayOfMonth } from 'date-fns';
 
 const IMPORT_ADMIN_CODE =
   import.meta.env.VITE_IMPORT_ADMIN_CODE || 'admin123';
@@ -44,6 +44,14 @@ function AppContent() {
   const [receitasManuais, setReceitasManuais] = useState<any[]>([]);
   const [vendasPorUsuarioRows, setVendasPorUsuarioRows] = useState<any[]>([]);
   const [directRevenueSalesTotals, setDirectRevenueSalesTotals] = useState<{
+    actual: number;
+    previous: number;
+    prevStart: string;
+    prevEnd: string;
+    currentStart: string;
+    currentEnd: string;
+  } | null>(null);
+  const [directCmvSalesTotals, setDirectCmvSalesTotals] = useState<{
     actual: number;
     previous: number;
     prevStart: string;
@@ -534,11 +542,12 @@ function AppContent() {
         let prevEndSales: string;
 
         if (isMonthBased) {
-          // Quando o período começa no dia 1 do mês, consideramos blocos inteiros de meses.
-          // Ex.: 01/07 a 29/12 (6 meses) => período anterior de 6 meses imediatamente anterior: 01/01 a 30/06.
-          const monthsSpan = Math.max(1, differenceInCalendarMonths(endObj, startObj) + 1);
-          const prevStartObj = subMonths(startObj, monthsSpan);
-          const prevEndObj = subDays(startObj, 1);
+          // Quando o período começa no dia 1 do mês: período anterior = mesma quantidade de dias.
+          // Ex.: 01/03 a 09/03 (9 dias) => 01/02 a 09/02 (9 dias), NÃO o mês inteiro de fevereiro.
+          const prevStartObj = startOfMonth(subMonths(startObj, 1));
+          const lastDayPrev = getDate(lastDayOfMonth(prevStartObj));
+          const prevEndDay = Math.min(getDate(endObj), lastDayPrev);
+          const prevEndObj = setDate(prevStartObj, prevEndDay);
           prevStartSales = format(prevStartObj, 'yyyy-MM-dd');
           prevEndSales = format(prevEndObj, 'yyyy-MM-dd');
         } else {
@@ -562,7 +571,7 @@ function AppContent() {
         while (hasMoreSales) {
           let q = supabase
             .from('vendas_por_usuario')
-            .select('business_unit, data, usuario, amount, custo, lucro, qtd_vendas, qtd_itens')
+            .select('id, business_unit, data, usuario, amount, custo, lucro, qtd_vendas, qtd_itens')
             .gte('data', prevStartSales)
             // Usar limite superior exclusivo para garantir que incluímos todo o último dia,
             // mesmo que a coluna seja TIMESTAMP (>= prevStartSales e < diaSeguinteAoFim).
@@ -580,6 +589,7 @@ function AppContent() {
             if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
             setVendasPorUsuarioRows([]);
             setDirectRevenueSalesTotals(null);
+            setDirectCmvSalesTotals(null);
             hasMoreSales = false;
             break;
           }
@@ -607,6 +617,13 @@ function AppContent() {
           .filter(r => toDateStr(r.data) >= prevStartSales && toDateStr(r.data) <= prevEndSales)
           .reduce((s, r) => s + num(r.amount), 0);
 
+        const cmvActual = rows
+          .filter(r => toDateStr(r.data) >= startDate && toDateStr(r.data) <= endDate)
+          .reduce((s, r) => s + num(r.custo), 0);
+        const cmvPrevious = rows
+          .filter(r => toDateStr(r.data) >= prevStartSales && toDateStr(r.data) <= prevEndSales)
+          .reduce((s, r) => s + num(r.custo), 0);
+
         if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
         setVendasPorUsuarioRows(rows);
         setDirectRevenueSalesTotals({
@@ -617,11 +634,20 @@ function AppContent() {
           currentStart: startDate,
           currentEnd: endDate
         });
+        setDirectCmvSalesTotals({
+          actual: cmvActual,
+          previous: cmvPrevious,
+          prevStart: prevStartSales,
+          prevEnd: prevEndSales,
+          currentStart: startDate,
+          currentEnd: endDate
+        });
       } catch (err) {
         console.warn('⚠️ Exceção ao carregar Entrega de Resultado (vendas_por_usuario):', err);
         if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
         setVendasPorUsuarioRows([]);
         setDirectRevenueSalesTotals(null);
+        setDirectCmvSalesTotals(null);
       }
 
       // Load financial transactions - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
@@ -2497,6 +2523,9 @@ function AppContent() {
         // Usar o padrão geral: atualizar recordCount e deixar o bloco comum persistir no banco
         recordCount = totalInserted;
 
+        await loadDataFromSupabase();
+        await loadMonthlyComparisonData();
+
         const successNotificationId = addNotification({
           type: 'success',
           title: 'Importação concluída',
@@ -3015,58 +3044,37 @@ function AppContent() {
     return financialTransactions;
   }, [financialTransactions]);
 
+  // Total de Despesas: mesma lógica do Total de Pagamentos (payment_date para realizado, due_date para previsto)
   const getFilteredExpenses = useMemo(() => {
-    const expensesExclusionList = [
-      'Receita Reembolsável - Makebella',
-      'Despesa Reembolsável - Makebella',
-      'Receita Reembolsável - Outros',
-      'Despesa Reembolsável - Outros',
-      'Receita Reembolsável - XBrothers',
-      'Despesa Reembolsável - XBrothers',
-      'Receita Reembolsável - ESCPP',
-      'Despesa Reembolsável - ESCPP',
-      'Empréstimos Recebidos',
-      'Pagamento de Empréstimo',
-      'Financiamento',
-      'Pagamento Via Cartão',
-      'Empréstimos Recebidos via Cartão',
-      'Investimentos Financeiros',
-      'Investimento - Societário / Comercial',
-      'Invest. Maq. / Equip. / Moveis',
-      'Cartão de Crédito',
-      'Reforma do Imóvel',
-      'Recebimento de Dividendos',
-      'Rendimento Financeiro',
-      'Distribuição de Lucros',
-      'Capital de Investimentos'
-    ];
+    const periodStart = filters.startDate?.trim() || getDefaultPeriod().start;
+    const periodEnd = filters.endDate?.trim() || getDefaultPeriod().end;
+    const toYYYYMMDD = (val: string | Date | null | undefined): string | null => {
+      if (val == null) return null;
+      if (typeof val === 'string' && !val.trim()) return null;
+      if (val instanceof Date) return format(val, 'yyyy-MM-dd');
+      const s = String(val).trim();
+      return s.indexOf('T') !== -1 ? s.slice(0, 10) : s.length >= 10 ? s.slice(0, 10) : s;
+    };
+    const inPeriod = (dateStr: string | Date | null | undefined) => {
+      const d = toYYYYMMDD(dateStr);
+      return d ? d >= periodStart && d <= periodEnd : false;
+    };
+    const statusLower = (s: string) => String(s || '').toLowerCase().trim();
+    const isPrevisto = (ap: any) => ['previsto', 'pendente'].includes(statusLower(ap.status));
+    const isRealizado = (ap: any) => ['realizado', 'pago'].includes(statusLower(ap.status));
 
-    const fromAccountsPayable = getFilteredAccountsPayable.filter(ap =>
-      !expensesExclusionList.some(excluded =>
-        ap.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())
-      )
-    );
+    const fromAccountsPayable = getFilteredAccountsPayable
+      .filter(ap => (isRealizado(ap) && inPeriod(ap.payment_date)) || (isPrevisto(ap) && inPeriod(ap.due_date)))
+      .map(item => ({ ...item, source: 'accounts_payable' }));
 
-    const fromForecastedEntries = getFilteredForecastedEntries.filter(e =>
-      !expensesExclusionList.some(excluded =>
-        e.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())
-      )
-    );
+    const fromTransactions = getFilteredTransactions
+      .filter(t => (Number(t.amount) || 0) < 0 && !nonOperationalAccounts.some(acc =>
+        t.chart_of_accounts?.toLowerCase() === acc.toLowerCase()
+      ))
+      .map(item => ({ ...item, source: 'transactions' }));
 
-    const fromTransactions = getFilteredTransactions.filter(t =>
-      t.amount < 0 &&
-      !expensesExclusionList.some(excluded =>
-        // Nota: transacoes_financeiras não tem coluna 'description', apenas chart_of_accounts
-        t.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())
-      )
-    );
-
-    return [
-      ...fromAccountsPayable.map(item => ({ ...item, source: 'accounts_payable' })),
-      ...fromForecastedEntries.map(item => ({ ...item, source: 'forecasted_entries' })),
-      ...fromTransactions.map(item => ({ ...item, source: 'transactions' }))
-    ];
-  }, [getFilteredAccountsPayable, getFilteredForecastedEntries, getFilteredTransactions]);
+    return [...fromAccountsPayable, ...fromTransactions];
+  }, [getFilteredAccountsPayable, getFilteredTransactions, filters.startDate, filters.endDate, nonOperationalAccounts]);
 
   // Saldos iniciais filtrados por empresas/grupos e período (sem agrupar, para cálculos)
   const getFilteredInitialBalancesRaw = useMemo(() => {
@@ -4025,32 +4033,25 @@ function AppContent() {
     '04.8 Medicamentos Multiplos'
   ];
 
-  // Filtro de CMV - dados de contas_a_pagar com categoria "04.0DESPESAS COM MERCADORIA"
+  // CMV - dados de vendas_por_usuario (coluna custo)
   const getFilteredCMVDRE = useMemo(() => {
-    // Filtrar contas_a_pagar pela categoria específica
-    const cmvFromAP = getFilteredAccountsPayable.filter(ap => {
-      const chartOfAccounts = (ap.chart_of_accounts || '').toUpperCase();
-      // Verificar se contém "04.0" seguido de "DESPESAS COM MERCADORIA" (aceita espaço e singular/plural)
-      // Aceita: "04.0DESPESAS COM MERCADORIA", "04.0 DESPESAS COM MERCADORIA", "04.0DESPESAS COM MERCADORIAS", etc.
-      return chartOfAccounts.includes('04.0') && 
-             chartOfAccounts.includes('DESPESAS COM MERCADORIA');
-    });
-
-    // Mapear para o formato esperado (compatível com o formato antigo de cmvDRE)
-    return cmvFromAP.map(ap => ({
-      id: ap.id,
-      status: ap.status,
-      business_unit: ap.business_unit,
-      chart_of_accounts: ap.chart_of_accounts,
-      issue_date: ap.payment_date, // Usar payment_date como issue_date para compatibilidade
-      amount: ap.amount,
-      creditor: ap.creditor,
-      payment_date: ap.payment_date,
-      import_id: ap.import_id,
-      created_at: ap.created_at,
-      updated_at: ap.updated_at
-    }));
-  }, [getFilteredAccountsPayable]);
+    const periodStart = filters.startDate?.trim() || getDefaultPeriod().start;
+    const periodEnd = filters.endDate?.trim() || getDefaultPeriod().end;
+    const toDateStr = (d: any) => (d == null ? '' : String(d).split('T')[0]);
+    return (vendasPorUsuarioRows || [])
+      .filter(r => toDateStr(r.data) >= periodStart && toDateStr(r.data) <= periodEnd)
+      .map(r => ({
+        id: r.id ?? `vpu-${r.business_unit}-${r.data}-${r.usuario}`,
+        status: 'realizado',
+        business_unit: r.business_unit,
+        chart_of_accounts: 'CMV',
+        issue_date: r.data,
+        amount: Number(r.custo) || 0,
+        creditor: r.usuario ?? '',
+        payment_date: r.data,
+        usuario: r.usuario
+      }));
+  }, [vendasPorUsuarioRows, filters.startDate, filters.endDate]);
 
 
   // Dados detalhados para Resultado Operacional (receita - CMV - despesas)
@@ -4063,10 +4064,10 @@ function AppContent() {
       category: 'Receita Direta'
     }));
 
-    // CMV de contas_a_pagar com categoria "04.0DESPESAS COM MERCADORIA"
+    // CMV de vendas_por_usuario (coluna custo)
     const cmvData = getFilteredCMVDRE.map(item => ({
       ...item,
-      source: 'accounts_payable',
+      source: 'vendas_por_usuario',
       type: 'CMV',
       category: 'Custo de Mercadoria Vendida',
       amount: -Math.abs(item.amount || 0) // Negativo para custo
@@ -4082,28 +4083,11 @@ function AppContent() {
     return [...revenueData, ...cmvData, ...expensesData];
   }, [getFilteredDirectRevenueSales, getFilteredCMVDRE, getFilteredExpenses]);
 
-  // CMV calculado de contas_a_pagar com categoria "04.0DESPESAS COM MERCADORIA"
-  const cmvTotals = useMemo(() => {
-    // Separar por status: 'realizado' ou 'paga' = actual, 'previsto' ou 'pendente' = forecasted
-    const actual = getFilteredCMVDRE
-      .filter(cmv => {
-        const status = (cmv.status || '').toLowerCase();
-        return status === 'realizado' || status === 'paga';
-      })
-      .reduce((sum, cmv) => sum + Math.abs(cmv.amount || 0), 0);
-
-    const forecasted = getFilteredCMVDRE
-      .filter(cmv => {
-        const status = (cmv.status || '').toLowerCase();
-        return status === 'previsto' || status === 'pendente';
-      })
-      .reduce((sum, cmv) => sum + Math.abs(cmv.amount || 0), 0);
-
-    return {
-      forecasted: forecasted,
-      actual: actual
-    };
-  }, [getFilteredCMVDRE]);
+  // CMV de vendas_por_usuario (coluna custo) - forecasted = período anterior
+  const cmvTotals = useMemo(() => ({
+    actual: directCmvSalesTotals?.actual ?? 0,
+    forecasted: directCmvSalesTotals?.previous ?? 0
+  }), [directCmvSalesTotals]);
 
   const kpiData = useMemo(() => {
     const baseKpis = calculateKPIs(filteredData);
@@ -4125,70 +4109,11 @@ function AppContent() {
     const totalOutflowsForecasted = accountsPayableTotals.forecasted + transactionTotals.outflows.forecasted;
     const totalOutflowsActual = accountsPayableTotals.actual + transactionTotals.outflows.actual;
 
-    // Calculate Total Expenses (excluding specific accounts)
-    const expensesExclusionList = [
-      'Receita Reembolsável - Makebella',
-      'Despesa Reembolsável - Makebella',
-      'Receita Reembolsável - Outros',
-      'Despesa Reembolsável - Outros',
-      'Receita Reembolsável - XBrothers',
-      'Despesa Reembolsável - XBrothers',
-      'Receita Reembolsável - ESCPP',
-      'Despesa Reembolsável - ESCPP',
-      'Empréstimos Recebidos',
-      'Pagamento de Empréstimo',
-      'Financiamento',
-      'Pagamento Via Cartão',
-      'Empréstimos Recebidos via Cartão',
-      'Investimentos Financeiros',
-      'Investimento - Societário / Comercial',
-      'Invest. Maq. / Equip. / Moveis',
-      'Cartão de Crédito',
-      'Reforma do Imóvel',
-      'Recebimento de Dividendos',
-      'Rendimento Financeiro',
-      'Distribuição de Lucros',
-      'Capital de Investimentos'
-    ];
-
-    // Filter Accounts Payable
-    const expensesFromAPForecasted = getFilteredAccountsPayable
-      .filter(ap => ap.status?.toLowerCase() === 'previsto' &&
-        !expensesExclusionList.some(excluded => ap.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())))
-      .reduce((sum, ap) => sum + Math.abs(ap.amount || 0), 0);
-
-    const expensesFromAPActual = getFilteredAccountsPayable
-      .filter(ap => ap.status?.toLowerCase() === 'realizado' &&
-        !expensesExclusionList.some(excluded => ap.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())))
-      .reduce((sum, ap) => sum + Math.abs(ap.amount || 0), 0);
-
-    // Filter Forecasted Entries
-    const expensesFromForecastedForecasted = getFilteredForecastedEntries
-      .filter(e => e.status?.toLowerCase() !== 'paga' &&
-        !expensesExclusionList.some(excluded => e.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())))
-      .reduce((sum, e) => sum + Math.abs(e.amount || 0), 0);
-
-    const expensesFromForecastedActual = getFilteredForecastedEntries
-      .filter(e => e.status?.toLowerCase() === 'paga' &&
-        !expensesExclusionList.some(excluded => e.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())))
-      .reduce((sum, e) => sum + Math.abs(e.amount || 0), 0);
-
-    // Filter Financial Transactions (outflows only)
-    // Nota: transacoes_financeiras não tem coluna 'description', apenas chart_of_accounts
-    const expensesFromTransactionsForecasted = getFilteredTransactions
-      .filter(t => t.amount < 0 && t.status?.toLowerCase() === 'previsto' &&
-        !expensesExclusionList.some(excluded =>
-          t.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())))
-      .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
-
-    const expensesFromTransactionsActual = getFilteredTransactions
-      .filter(t => t.amount < 0 && t.status?.toLowerCase() === 'realizado' &&
-        !expensesExclusionList.some(excluded =>
-          t.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())))
-      .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
-
-    const totalExpensesForecasted = expensesFromAPForecasted + expensesFromForecastedForecasted + expensesFromTransactionsForecasted;
-    const totalExpensesActual = expensesFromAPActual + expensesFromForecastedActual + expensesFromTransactionsActual;
+    // Total de Despesas: mesma lógica do Total de Pagamentos
+    // AP: realizado = payment_date no período; previsto = due_date no período
+    // Transações: previsto/realizado por status (transaction_date já filtrado no carregamento)
+    const totalExpensesForecasted = accountsPayableTotals.forecasted + transactionTotals.outflows.forecasted;
+    const totalExpensesActual = accountsPayableTotals.actual + transactionTotals.outflows.actual;
 
     const result = {
       ...baseKpis,
@@ -4755,21 +4680,13 @@ function AppContent() {
   // Raw data for MonthlyComparison - precisa carregar TODOS os dados, não apenas do período filtrado
   // O componente tem seu próprio filtro de período interno
   const [monthlyComparisonData, setMonthlyComparisonData] = useState<{
-    revenues: any[];
+    vendasPorUsuario: any[];
     accountsPayable: any[];
-    forecastedEntries: any[];
-    transactions: any[];
-    cmvDRE: any[];
     companies: any[];
-    cmvChartOfAccounts: string[];
   }>({
-    revenues: [],
+    vendasPorUsuario: [],
     accountsPayable: [],
-    forecastedEntries: [],
-    transactions: [],
-    cmvDRE: [],
-    companies: [],
-    cmvChartOfAccounts: []
+    companies: []
   });
 
   // Carregar dados completos para MonthlyComparison (sem filtro de data ou com range muito amplo)
@@ -4796,54 +4713,38 @@ function AppContent() {
       // Carregar TODOS os dados disponíveis (sem limite de data) para garantir comparação ano a ano completa
       // Não limitamos por data porque o componente MonthlyComparison tem seu próprio filtro de período
 
-      // Carregar todos os dados necessários
-      let revenuesResult: any = { data: [], error: null };
+      // Carregar vendas_por_usuario (Receita Direta e CMV) em lotes - Supabase limita ~1000 linhas
+      // Sem paginação, dados do ano anterior e do primeiro mês podem ser cortados
+      let vendasPorUsuarioResult: any = { data: [], error: null };
       let apResult: any = { data: [], error: null };
-      let transactionsResult: any = { data: [], error: null };
-      let forecastedResult: any = { data: [], error: null };
-      let cmvDREResult: any = { data: [], error: null };
 
       try {
-        // Carregar receitas_manuais em lotes (tabelas receitas/receita_crediario inativas)
-        let allRevenues: any[] = [];
-        const batchSize = 500;
+        let allVendas: any[] = [];
+        const batchSize = 1000;
         let offset = 0;
         let hasMore = true;
-
         while (hasMore) {
-          let query = supabase
-            .from('receitas_manuais')
-            .select('id, status, business_unit, conta, descricao, data, valor')
+          const { data: batch, error: vendasError } = await supabase
+            .from('vendas_por_usuario')
+            .select('id, business_unit, data, amount, custo, usuario')
             .order('data', { ascending: false })
             .range(offset, offset + batchSize - 1);
-          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-            query = query.in('business_unit', filteredBusinessUnits);
-          }
-          const batch = await query;
-          if (batch.error) {
-            console.error('❌ Erro ao carregar receitas_manuais para MonthlyComparison:', batch.error);
+          if (vendasError) {
+            console.error('❌ Erro ao carregar vendas_por_usuario para MonthlyComparison:', vendasError);
             break;
           }
-          if (batch.data && batch.data.length > 0) {
-            const mapped = (batch.data || []).map((r: any) => ({
-              id: r.id,
-              business_unit: r.business_unit,
-              payment_date: r.data,
-              amount: Number(r.valor) || 0,
-              status: r.status || 'previsto',
-              chart_of_accounts: r.conta
-            }));
-            allRevenues = [...allRevenues, ...mapped];
+          if (batch && batch.length > 0) {
+            allVendas = [...allVendas, ...batch];
             offset += batchSize;
-            hasMore = batch.data.length === batchSize;
+            hasMore = batch.length === batchSize;
           } else {
             hasMore = false;
           }
         }
-        revenuesResult = { data: allRevenues, error: null };
+        vendasPorUsuarioResult = { data: allVendas, error: null };
       } catch (err) {
-        console.error('❌ Exceção ao carregar receitas_manuais para MonthlyComparison:', err);
-        revenuesResult = { data: [], error: err };
+        console.error('❌ Exceção ao carregar vendas_por_usuario para MonthlyComparison:', err);
+        vendasPorUsuarioResult = { data: [], error: err };
       }
 
       if (hasActiveImports) {
@@ -4889,149 +4790,17 @@ function AppContent() {
           apResult = { data: [], error: err };
         }
 
-        try {
-          // Carregar transacoes_financeiras em lotes para evitar limite do Supabase
-          let allTransactions: any[] = [];
-          const batchSize = 500;
-          let offset = 0;
-          let hasMore = true;
-          
-          while (hasMore) {
-            let query = supabase
-              .from('transacoes_financeiras')
-              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, id')
-              .in('import_id', activeImportIds);
-            
-            // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
-            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-              query = query.in('business_unit', filteredBusinessUnits);
-            }
-            
-            const batch = await query
-              .order('transaction_date', { ascending: false })
-              .range(offset, offset + batchSize - 1);
-            
-            if (batch.error) {
-              console.error('❌ Erro ao carregar transacoes_financeiras para MonthlyComparison:', batch.error);
-              break;
-            }
-            
-            if (batch.data && batch.data.length > 0) {
-              allTransactions = [...allTransactions, ...batch.data];
-              offset += batchSize;
-              hasMore = batch.data.length === batchSize;
-            } else {
-              hasMore = false;
-            }
-          }
-          
-          transactionsResult = { data: allTransactions, error: null };
-        } catch (err) {
-          console.error('❌ Exceção ao carregar transacoes_financeiras para MonthlyComparison:', err);
-          transactionsResult = { data: [], error: err };
-        }
-
-        try {
-          // Carregar previstos em lotes para evitar limite do Supabase
-          let allForecasted: any[] = [];
-          const batchSize = 500;
-          let offset = 0;
-          let hasMore = true;
-          
-          while (hasMore) {
-            let query = supabase
-              .from('previstos')
-              .select('import_id, business_unit, due_date, amount, status, chart_of_accounts, supplier, id')
-              .in('import_id', activeImportIds);
-            
-            // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
-            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-              query = query.in('business_unit', filteredBusinessUnits);
-            }
-            
-            const batch = await query
-              .order('due_date', { ascending: false })
-              .range(offset, offset + batchSize - 1);
-            
-            if (batch.error) {
-              console.error('❌ Erro ao carregar previstos para MonthlyComparison:', batch.error);
-              break;
-            }
-            
-            if (batch.data && batch.data.length > 0) {
-              allForecasted = [...allForecasted, ...batch.data];
-              offset += batchSize;
-              hasMore = batch.data.length === batchSize;
-            } else {
-              hasMore = false;
-            }
-          }
-          
-          forecastedResult = { data: allForecasted, error: null };
-        } catch (err) {
-          console.error('❌ Exceção ao carregar previstos para MonthlyComparison:', err);
-          forecastedResult = { data: [], error: err };
-        }
-
-        try {
-          // Carregar cmv_dre em lotes para evitar limite do Supabase
-          let allCMVDRE: any[] = [];
-          const batchSize = 500;
-          let offset = 0;
-          let hasMore = true;
-          
-          while (hasMore) {
-            let query = supabase
-              .from('cmv_dre')
-              .select('import_id, business_unit, issue_date, amount, chart_of_accounts, status, id')
-              .in('import_id', activeImportIds);
-            
-            // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
-            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-              query = query.in('business_unit', filteredBusinessUnits);
-            }
-            
-            const batch = await query
-              .order('issue_date', { ascending: false })
-              .range(offset, offset + batchSize - 1);
-            
-            if (batch.error) {
-              console.error('❌ Erro ao carregar cmv_dre para MonthlyComparison:', batch.error);
-              break;
-            }
-            
-            if (batch.data && batch.data.length > 0) {
-              allCMVDRE = [...allCMVDRE, ...batch.data];
-              offset += batchSize;
-              hasMore = batch.data.length === batchSize;
-            } else {
-              hasMore = false;
-            }
-          }
-          
-          cmvDREResult = { data: allCMVDRE, error: null };
-        } catch (err) {
-          console.error('❌ Exceção ao carregar cmv_dre para MonthlyComparison:', err);
-          cmvDREResult = { data: [], error: err };
-        }
       }
 
       const newData = {
-        revenues: revenuesResult.data || [],
+        vendasPorUsuario: vendasPorUsuarioResult.data || [],
         accountsPayable: apResult.data || [],
-        forecastedEntries: forecastedResult.data || [],
-        transactions: transactionsResult.data || [],
-        cmvDRE: cmvDREResult.data || [],
-        companies: companies, // Usa companies já carregadas do estado
-        cmvChartOfAccounts: cmvChartOfAccounts // Usa cmvChartOfAccounts (constante)
+        companies: companies
       };
 
       console.log('✅ Dados completos carregados para MonthlyComparison:', {
-        revenues: newData.revenues.length,
+        vendasPorUsuario: newData.vendasPorUsuario.length,
         accountsPayable: newData.accountsPayable.length,
-        transactions: newData.transactions.length,
-        forecastedEntries: newData.forecastedEntries.length,
-        cmvDRE: newData.cmvDRE.length,
         companies: newData.companies.length,
         hasActiveImports
       });
@@ -5042,14 +4811,13 @@ function AppContent() {
     }
   };
 
-  // Carregar dados do MonthlyComparison quando companies for carregado ou quando houver novas importações
-  // Também recarregar quando filtros de empresas/grupos mudarem
+  // Carregar dados do MonthlyComparison quando companies for carregado
+  // MonthlyComparison tem seus próprios filtros e NÃO responde a filtros globais (período, empresa)
   useEffect(() => {
-    // Só carregar se companies já foi carregado
     if (companies.length > 0) {
       loadMonthlyComparisonData();
     }
-  }, [companies.length, filters.companies, filters.groups]); // Recarregar quando companies ou filtros mudarem
+  }, [companies.length]);
   
   // Também carregar quando a aplicação iniciar (mesmo sem companies, para ter dados básicos)
   useEffect(() => {
@@ -5663,23 +5431,7 @@ function AppContent() {
 
               {/* Result Delivery Cards */}
               <div className="mb-8">
-                <div className="flex items-center gap-2 mb-4">
-                  <h2 className={`text-lg font-bold ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Entrega de Resultado</h2>
-                  <button
-                    type="button"
-                    onClick={() => setEntregaResultadoHidden(!entregaResultadoHidden)}
-                    className={`inline-flex items-center justify-center p-2 rounded-lg border transition-colors ${darkMode ? 'border-slate-500 bg-slate-700/50 text-sky-300 hover:bg-slate-600 hover:text-sky-200' : 'border-slate-300 bg-slate-100 text-sky-600 hover:bg-slate-200 hover:text-sky-700'}`}
-                    title={entregaResultadoHidden ? 'Mostrar seção' : 'Ocultar seção'}
-                    aria-label={entregaResultadoHidden ? 'Mostrar seção' : 'Ocultar seção'}
-                  >
-                    {entregaResultadoHidden ? <Eye className="w-5 h-5" /> : <EyeOff className="w-5 h-5" />}
-                  </button>
-                </div>
-                {entregaResultadoHidden ? null : (
-                  <>
-                    <div className={`mb-4 px-3 py-2 rounded-lg text-sm ${darkMode ? 'bg-amber-900/40 text-amber-200 border border-amber-700' : 'bg-amber-50 text-amber-900 border border-amber-200'}`}>
-                      Daqui em diante, as informações podem estar incorretas, esses dados estão sendo conferidos ainda!!
-                    </div>
+                <h2 className={`text-lg font-bold mb-4 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Entrega de Resultado</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                   <>
                       <KPICard
@@ -5708,8 +5460,13 @@ function AppContent() {
                         color="orange"
                         section="result"
                         darkMode={darkMode}
+                        forecastedLabel={
+                          directCmvSalesTotals
+                            ? `Período anterior (${format(parseISO(directCmvSalesTotals.prevStart), 'dd/MM/yy')} - ${format(parseISO(directCmvSalesTotals.prevEnd), 'dd/MM/yy')})`
+                            : 'Período anterior'
+                        }
                         onViewDetails={() => openKPIDetail('Detalhes: CMV', getFilteredCMVDRE, 'mixed')}
-                        dataSource="Carregado de contas a pagar (categoria: 04.0DESPESAS COM MERCADORIA)"
+                        dataSource="Carregado de Entrega de Resultado (vendas_por_usuario - coluna custo)"
                       loading={dataLoading}
                       />
                       <KPICard
@@ -5720,8 +5477,10 @@ function AppContent() {
                         color="red"
                         section="result"
                         darkMode={darkMode}
+                        forecastedLabel="Previsto (por vencimento)"
+                        actualLabel="Realizado (por pagamento)"
                         onViewDetails={() => openKPIDetail('Detalhes: Total de Despesas', getFilteredExpenses, 'mixed')}
-                        dataSource="Carregado das planilhas de contas a pagar, previstos e transações financeiras"
+                        dataSource="Mesma lógica do Total de Pagamentos: contas a pagar (payment_date/due_date) + transações negativas"
                       loading={dataLoading}
                       />
                       <KPICard
@@ -5738,6 +5497,34 @@ function AppContent() {
                       loading={dataLoading}
                       />
                   </>
+                </div>
+
+                {entregaResultadoHidden ? (
+                  <div className={`mt-4 mb-4 flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${darkMode ? 'bg-slate-700/50 border border-slate-600' : 'bg-slate-100 border border-slate-300'}`}>
+                    <span className={darkMode ? 'text-slate-400' : 'text-slate-600'}>Calendário e gráficos ocultos</span>
+                    <button
+                      type="button"
+                      onClick={() => setEntregaResultadoHidden(false)}
+                      className={`inline-flex items-center justify-center p-2 rounded-lg border transition-colors ${darkMode ? 'border-slate-500 bg-slate-700/50 text-sky-300 hover:bg-slate-600 hover:text-sky-200' : 'border-slate-300 bg-slate-100 text-sky-600 hover:bg-slate-200 hover:text-sky-700'}`}
+                      title="Mostrar calendário e gráficos"
+                      aria-label="Mostrar calendário e gráficos"
+                    >
+                      <Eye className="w-5 h-5" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                <div className={`mt-4 mb-4 px-3 py-2 rounded-lg text-sm flex items-center justify-between gap-3 ${darkMode ? 'bg-amber-900/40 text-amber-200 border border-amber-700' : 'bg-amber-50 text-amber-900 border border-amber-200'}`}>
+                  <span>Daqui em diante, as informações podem estar incorretas, esses dados estão sendo conferidos ainda!!</span>
+                  <button
+                    type="button"
+                    onClick={() => setEntregaResultadoHidden(!entregaResultadoHidden)}
+                    className={`flex-shrink-0 inline-flex items-center justify-center p-2 rounded-lg border transition-colors ${darkMode ? 'border-slate-500 bg-slate-700/50 text-sky-300 hover:bg-slate-600 hover:text-sky-200' : 'border-slate-300 bg-slate-100 text-sky-600 hover:bg-slate-200 hover:text-sky-700'}`}
+                    title="Ocultar seção"
+                    aria-label="Ocultar seção"
+                  >
+                    <EyeOff className="w-5 h-5" />
+                  </button>
                 </div>
 
               {/* Calendar and Chart Section */}

@@ -32,7 +32,7 @@ Registro do que foi ocultado ou desativado na interface (e do que ainda será).
   - **Orçamento DRE** (`orcamento_dre`)
   - **Receita DRE** (`revenues_dre`)
   - **CMV DRE** (`cmv_dre`)
-- **Como está:** Constante `IMPORTADORES_OCULTOS` com esses tipos em `true`; os blocos de upload e as instruções correspondentes são renderizados apenas quando `!IMPORTADORES_OCULTOS[type]`. A lista "Arquivos importados" continua exibindo esses tipos se houver arquivos já importados.
+- **Como está:** Constante `IMPORTADORES_OCULTOS` com esses tipos em `true`; os blocos de upload e as instruções correspondentes são renderizados apenas quando `!IMPORTADORES_OCULTOS[type]`. Na lista "Arquivos importados", os acordeões desses tipos são ocultados quando não há arquivos (0 arquivos); se houver arquivos já importados, o acordeão continua visível para gerenciamento.
 
 ### 5. Colunas "Variação" e "% Receita" na tabela Despesas Operacionais
 - **Arquivo:** `src/components/DespesasOperacionaisTable.tsx`
