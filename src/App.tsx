@@ -12,21 +12,19 @@ import { ExpenseBreakdown } from './components/ExpenseBreakdown';
 import { DataImport } from './components/DataImport';
 import { DREPage } from './components/DREPage';
 import { DespesasOperacionaisTable } from './components/DespesasOperacionaisTable';
-import { ConfirmOverwriteModal } from './components/ConfirmOverwriteModal';
-import { ImportModeModal } from './components/ImportModeModal';
-import { ConfirmAccumulateModal } from './components/ConfirmAccumulateModal';
 import { ErrorModal } from './components/ErrorModal';
+import { DuplicateFileModal } from './components/DuplicateFileModal';
 import { ChartSkeleton } from './components/ChartSkeleton';
 import { PageLoader } from './components/PageLoader';
 import { NotificationCenter } from './components/NotificationCenter';
 import { ToastNotification } from './components/ToastNotification';
 import { NotificationProvider, useNotificationContext } from './contexts/NotificationContext';
 import { FinancialRecord, Filters, ImportedFile } from './types/financial';
-import { processExcelFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, processOrcamentoDREFile, processReceitaCrediarioFile, validateFileFormat } from './utils/excelProcessor';
+import { processExcelFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, processOrcamentoDREFile, processReceitaCrediarioFile, processVendasPorUsuarioFile, validateFileFormat } from './utils/excelProcessor';
 import { filterData, calculateKPIs } from './utils/dataProcessor';
 import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List, Moon, Sun, Eye, EyeOff } from 'lucide-react';
 import { supabase } from './lib/supabase';
-import { startOfMonth, endOfMonth, format, parseISO, subMonths } from 'date-fns';
+import { startOfMonth, endOfMonth, format, parseISO, subMonths, subDays, differenceInCalendarMonths, differenceInCalendarDays, addDays } from 'date-fns';
 
 const IMPORT_ADMIN_CODE =
   import.meta.env.VITE_IMPORT_ADMIN_CODE || 'admin123';
@@ -44,6 +42,15 @@ function AppContent() {
   const [, setRevenues] = useState<any[]>([]);
   const [, setReceitaCrediario] = useState<any[]>([]);
   const [receitasManuais, setReceitasManuais] = useState<any[]>([]);
+  const [vendasPorUsuarioRows, setVendasPorUsuarioRows] = useState<any[]>([]);
+  const [directRevenueSalesTotals, setDirectRevenueSalesTotals] = useState<{
+    actual: number;
+    previous: number;
+    prevStart: string;
+    prevEnd: string;
+    currentStart: string;
+    currentEnd: string;
+  } | null>(null);
   const [financialTransactions, setFinancialTransactions] = useState<any[]>([]);
   const [forecastedEntries, setForecastedEntries] = useState<any[]>([]);
   const [revenuesDRE, setRevenuesDRE] = useState<any[]>([]);
@@ -88,6 +95,16 @@ function AppContent() {
   /** Incrementado ao clicar em "Aplicar filtro" no Sidebar — garante que o load rode sempre (incl. ao aplicar de novo com a mesma seleção) */
   const [filterApplyTick, setFilterApplyTick] = useState(0);
   const [importedFiles, setImportedFiles] = useState<ImportedFile[]>([]);
+  const [duplicateFileModal, setDuplicateFileModal] = useState<{
+    isOpen: boolean;
+    fileName: string;
+    fileType: string;
+    pendingFile: File | null;
+    pendingType: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario' | 'vendas_por_usuario' | null;
+    pendingIndex?: number;
+    pendingTotal?: number;
+    existingImportId: string;
+  }>({ isOpen: false, fileName: '', fileType: '', pendingFile: null, pendingType: null, existingImportId: '' });
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
     title: string;
@@ -102,23 +119,6 @@ function AppContent() {
     data: [],
     type: 'generic'
   });
-  const [overwriteModal, setOverwriteModal] = useState<{
-    isOpen: boolean;
-    fileName: string;
-    fileType: string;
-    existingImportId: string | null;
-    pendingFile: File | null;
-    pendingType: string | null;
-    pendingIndex?: number;
-    pendingTotal?: number;
-  }>({
-    isOpen: false,
-    fileName: '',
-    fileType: '',
-    existingImportId: null,
-    pendingFile: null,
-    pendingType: null
-  });
   const [errorModal, setErrorModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -127,36 +127,6 @@ function AppContent() {
     isOpen: false,
     title: '',
     message: ''
-  });
-  const [importModeModal, setImportModeModal] = useState<{
-    isOpen: boolean;
-    fileName: string;
-    fileType: string;
-    pendingFile: File | null;
-    pendingType: string | null;
-    pendingIndex?: number;
-    pendingTotal?: number;
-  }>({
-    isOpen: false,
-    fileName: '',
-    fileType: '',
-    pendingFile: null,
-    pendingType: null
-  });
-  const [confirmAccumulateModal, setConfirmAccumulateModal] = useState<{
-    isOpen: boolean;
-    fileName: string;
-    fileType: string;
-    pendingFile: File | null;
-    pendingType: string | null;
-    pendingIndex?: number;
-    pendingTotal?: number;
-  }>({
-    isOpen: false,
-    fileName: '',
-    fileType: '',
-    pendingFile: null,
-    pendingType: null
   });
   const [importRole, setImportRole] = useState<'none' | 'user' | 'admin'>('none');
   const [importAuthError, setImportAuthError] = useState('');
@@ -547,6 +517,113 @@ function AppContent() {
       if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
       setReceitasManuais(receitasManuaisData);
 
+      // Receita Direta (Entrega de Resultado): usar vendas_por_usuario para o card (período atual + período anterior)
+      // Regra do "Período anterior":
+      // - Se o período começar no dia 1 do mês: deslocar em meses (mesmo span de meses do filtro)
+      //   Ex: mês atual => mês anterior; últimos 3 meses => 3 meses anteriores.
+      // - Caso contrário: pegar um período imediatamente anterior com a mesma quantidade de dias
+      //   Ex: hoje–ontem => 2 dias anteriores; semana atual => semana anterior; últimos 15 dias => 15 dias anteriores.
+      // IMPORTANTE: Supabase limita SELECT a ~1000 linhas por padrão, então aqui usamos paginação em lotes.
+      try {
+        const startObj = parseISO(startDate);
+        const endObj = parseISO(endDate);
+        const isMonthBased =
+          format(startObj, 'yyyy-MM-dd') === format(startOfMonth(startObj), 'yyyy-MM-dd');
+
+        let prevStartSales: string;
+        let prevEndSales: string;
+
+        if (isMonthBased) {
+          // Quando o período começa no dia 1 do mês, consideramos blocos inteiros de meses.
+          // Ex.: 01/07 a 29/12 (6 meses) => período anterior de 6 meses imediatamente anterior: 01/01 a 30/06.
+          const monthsSpan = Math.max(1, differenceInCalendarMonths(endObj, startObj) + 1);
+          const prevStartObj = subMonths(startObj, monthsSpan);
+          const prevEndObj = subDays(startObj, 1);
+          prevStartSales = format(prevStartObj, 'yyyy-MM-dd');
+          prevEndSales = format(prevEndObj, 'yyyy-MM-dd');
+        } else {
+          // Para períodos arbitrários (não iniciando no dia 1), usamos exatamente a mesma quantidade de dias,
+          // imediatamente antes da data inicial atual.
+          const daysSpan = Math.max(1, differenceInCalendarDays(endObj, startObj) + 1);
+          const prevEndObj = subDays(startObj, 1);
+          const prevStartObj = subDays(prevEndObj, daysSpan - 1);
+          prevStartSales = format(prevStartObj, 'yyyy-MM-dd');
+          prevEndSales = format(prevEndObj, 'yyyy-MM-dd');
+        }
+
+        const batchSizeSales = 1000; // Dentro do limite padrão do Supabase (~1000 linhas); 2000 quebrava a paginação
+        let offsetSales = 0;
+        let hasMoreSales = true;
+        let allSales: any[] = [];
+
+        const endDateObj = parseISO(endDate);
+        const nextEndDateStr = format(addDays(endDateObj, 1), 'yyyy-MM-dd');
+
+        while (hasMoreSales) {
+          let q = supabase
+            .from('vendas_por_usuario')
+            .select('business_unit, data, usuario, amount, custo, lucro, qtd_vendas, qtd_itens')
+            .gte('data', prevStartSales)
+            // Usar limite superior exclusivo para garantir que incluímos todo o último dia,
+            // mesmo que a coluna seja TIMESTAMP (>= prevStartSales e < diaSeguinteAoFim).
+            .lt('data', nextEndDateStr)
+            .order('data', { ascending: false })
+            .range(offsetSales, offsetSales + batchSizeSales - 1);
+
+          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+            q = q.in('business_unit', filteredBusinessUnits);
+          }
+
+          const { data: salesData, error: salesError } = await q;
+          if (salesError) {
+            console.warn('⚠️ Erro ao carregar vendas_por_usuario (Entrega de Resultado):', salesError);
+            if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
+            setVendasPorUsuarioRows([]);
+            setDirectRevenueSalesTotals(null);
+            hasMoreSales = false;
+            break;
+          }
+
+          const batch = salesData || [];
+          allSales = [...allSales, ...batch];
+
+          if (batch.length < batchSizeSales) {
+            hasMoreSales = false;
+          } else {
+            offsetSales += batchSizeSales;
+          }
+        }
+
+        const rows = allSales;
+        console.log(`✅ Carregados ${rows.length} registros de vendas_por_usuario (período ${prevStartSales} a ${endDate}${filteredBusinessUnits ? `, ${filteredBusinessUnits.length} business units` : ''})`);
+
+        // Normalizar data para YYYY-MM-DD (Supabase pode retornar ISO com hora, ex: 2024-07-15T00:00:00.000Z)
+        const toDateStr = (d: any) => (d == null ? '' : String(d).split('T')[0]);
+        const num = (v: any) => Number(v) || 0;
+        const actual = rows
+          .filter(r => toDateStr(r.data) >= startDate && toDateStr(r.data) <= endDate)
+          .reduce((s, r) => s + num(r.amount), 0);
+        const previous = rows
+          .filter(r => toDateStr(r.data) >= prevStartSales && toDateStr(r.data) <= prevEndSales)
+          .reduce((s, r) => s + num(r.amount), 0);
+
+        if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
+        setVendasPorUsuarioRows(rows);
+        setDirectRevenueSalesTotals({
+          actual,
+          previous,
+          prevStart: prevStartSales,
+          prevEnd: prevEndSales,
+          currentStart: startDate,
+          currentEnd: endDate
+        });
+      } catch (err) {
+        console.warn('⚠️ Exceção ao carregar Entrega de Resultado (vendas_por_usuario):', err);
+        if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
+        setVendasPorUsuarioRows([]);
+        setDirectRevenueSalesTotals(null);
+      }
+
       // Load financial transactions - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
       let transactionsData: any[] | null = [];
       if (hasActiveImports) {
@@ -807,7 +884,8 @@ function AppContent() {
       'initial_balances': 'saldos_iniciais',
       'orcamento_dre': 'orcamento_dre',
       'transactions': 'transactions',
-      'receita_crediario': 'receita_crediario'
+      'receita_crediario': 'receita_crediario',
+      'vendas_por_usuario': 'vendas_por_usuario'
     };
     return typeMap[type] || type;
   };
@@ -825,7 +903,8 @@ function AppContent() {
       'saldos_iniciais': 'initial_balances',
       'orcamento_dre': 'orcamento_dre',
       'transactions': 'transactions',
-      'receita_crediario': 'receita_crediario'
+      'receita_crediario': 'receita_crediario',
+      'vendas_por_usuario': 'vendas_por_usuario'
     };
     return reverseMap[tableName] || 'companies'; // Fallback para um tipo válido
   };
@@ -935,6 +1014,20 @@ function AppContent() {
           .eq('import_id', importId);
         if (error) throw error;
         console.log('✅ Dados de orçamento DRE deletados');
+      } else if (fileType === 'vendas_por_usuario') {
+        const { error } = await supabase
+          .from('vendas_por_usuario')
+          .delete()
+          .eq('import_id', importId);
+        if (error) throw error;
+        console.log('✅ Dados de vendas por usuário deletados');
+      } else if (fileType === 'receita_crediario') {
+        const { error } = await supabase
+          .from('receita_crediario')
+          .delete()
+          .eq('import_id', importId);
+        if (error) throw error;
+        console.log('✅ Dados de receita crediário deletados');
       } else if (fileType === 'empresas') {
         // Para empresas, não deletamos por import_id pois não há essa coluna
         // O upsert na função handleDataImport já atualiza os dados existentes
@@ -1111,7 +1204,13 @@ function AppContent() {
     }
   };
 
-  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario', currentIndex?: number, totalFiles?: number, shouldOverwrite?: boolean, shouldAccumulate?: boolean) => {
+  const handleDataImport = async (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario' | 'vendas_por_usuario', currentIndex?: number, totalFiles?: number, shouldOverwrite?: boolean, shouldAccumulate?: boolean) => {
+    // Opção "Sobrepor vs Acumular" oculta por enquanto:
+    // - padronizar para acumular
+    // - evita que imports múltiplos (vários arquivos) apaguem imports anteriores do mesmo tipo
+    shouldAccumulate = shouldAccumulate ?? true;
+    shouldOverwrite = shouldOverwrite ?? false;
+
     // Validar formato do arquivo antes de processar
     if (type !== 'transactions') {
       const validation = await validateFileFormat(file, type);
@@ -1123,6 +1222,30 @@ function AppContent() {
         });
         return; // Não processar arquivo inválido
       }
+    }
+
+    // Verificar se já existe um arquivo com o mesmo nome e tipo (não excluído)
+    const tableName = getTableNameFromType(type);
+    const { data: existingImport } = await supabase
+      .from('importacoes')
+      .select('id')
+      .eq('file_name', file.name)
+      .eq('file_type', tableName)
+      .eq('is_deleted', false)
+      .maybeSingle();
+
+    if (existingImport) {
+      setDuplicateFileModal({
+        isOpen: true,
+        fileName: file.name,
+        fileType: type,
+        pendingFile: file,
+        pendingType: type,
+        pendingIndex: currentIndex,
+        pendingTotal: totalFiles,
+        existingImportId: existingImport.id
+      });
+      return;
     }
 
     // Se deve sobrepor (e não acumular), mover todos os imports anteriores do mesmo tipo para a lixeira
@@ -2303,6 +2426,83 @@ function AppContent() {
           message: `${recordCount} registro(s) de CMV DRE de "${file.name}" foram importados com sucesso.`
         });
         setActiveToast(successNotificationId);
+      } else if (type === 'vendas_por_usuario') {
+        const validBusinessUnits = companies.map(c => normalizeCode(c.company_code));
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: 'Lendo e validando planilha Entrega de Resultado...'
+        });
+
+        const result = await processVendasPorUsuarioFile(file, validBusinessUnits);
+
+        if (result.validationErrors.invalidRows.length > 0 || result.validationErrors.invalidBusinessUnits.length > 0) {
+          const totalErrors = result.validationErrors.invalidRows.length + result.validationErrors.invalidBusinessUnits.length;
+          const firstErrors = result.validationErrors.invalidRows.slice(0, 3).map(r => `Linha ${r.lineNumber}: ${r.errors.join('; ')}`).join('\n');
+          const unitMsg = result.validationErrors.invalidBusinessUnits.length > 0 ? ` Unidades inválidas: ${result.validationErrors.invalidBusinessUnits.join(', ')}.` : '';
+          const notificationId = addNotification({
+            type: 'error',
+            title: 'Erros na importação - Entrega de Resultado',
+            message: `O arquivo não foi aceito. ${totalErrors} erro(s).${unitMsg}\n\n${firstErrors}${result.validationErrors.invalidRows.length > 3 ? '\n...' : ''}`,
+            data: {
+              invalidRows: result.validationErrors.invalidRows,
+              invalidBusinessUnits: result.validationErrors.invalidBusinessUnits,
+              fileName: file.name
+            }
+          });
+          setActiveToast(notificationId);
+          setLoading({ isLoading: false, allCompleted: false });
+          return;
+        }
+
+        if (result.data.length === 0) {
+          throw new Error('Nenhum registro válido encontrado na planilha. Verifique se há linhas com Usuário, Venda, Custo, Lucro, Qtd. Vendas e Qtd. Itens preenchidos (e se as linhas de Total/Soma e o cabeçalho "Análise de venda" foram ignorados).');
+        }
+
+        const recordsWithImportId = result.data.map(record => ({ ...record, import_id: importId }));
+        const totalRecords = recordsWithImportId.length;
+        const batchSize = 500;
+        let totalInserted = 0;
+
+        setLoading({
+          isLoading: true,
+          currentFile: file.name,
+          currentIndex: currentIndex,
+          totalFiles: totalFiles,
+          allCompleted: false,
+          progress: `Inserindo 0/${totalRecords} registros de Entrega de Resultado...`
+        });
+
+        for (let i = 0; i < totalRecords; i += batchSize) {
+          const batch = recordsWithImportId.slice(i, i + batchSize);
+          const current = Math.min(i + batchSize, totalRecords);
+          setLoading({
+            isLoading: true,
+            currentFile: file.name,
+            currentIndex: currentIndex,
+            totalFiles: totalFiles,
+            allCompleted: false,
+            progress: `Inserindo ${current}/${totalRecords} registros...`
+          });
+
+          const { error } = await supabase.from('vendas_por_usuario').insert(batch).select('id');
+
+          if (error) throw new Error(`Erro ao inserir no banco (por volta da linha ${i + 1}): ${error.message}`);
+          totalInserted += batch.length;
+        }
+
+        // Usar o padrão geral: atualizar recordCount e deixar o bloco comum persistir no banco
+        recordCount = totalInserted;
+
+        const successNotificationId = addNotification({
+          type: 'success',
+          title: 'Importação concluída',
+          message: `${totalInserted} registro(s) de Entrega de Resultado de "${file.name}" foram importados com sucesso.`
+        });
+        setActiveToast(successNotificationId);
       } else if (type === 'initial_balances') {
         console.log('Starting Initial Balances import...');
         const importedBalances = await processInitialBalancesFile(file);
@@ -2591,23 +2791,6 @@ function AppContent() {
     }
   };
 
-  const handleFileSelectWithMode = (
-    file: File,
-    type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario',
-    currentIndex?: number,
-    totalFiles?: number
-  ) => {
-    setImportModeModal({
-      isOpen: true,
-      fileName: file.name,
-      fileType: type,
-      pendingFile: file,
-      pendingType: type,
-      pendingIndex: currentIndex,
-      pendingTotal: totalFiles
-    });
-  };
-
   // Envia arquivo para a lixeira (soft delete)
   const handleDeleteFile = async (fileId: string) => {
     try {
@@ -2802,6 +2985,22 @@ function AppContent() {
       descricao: r.descricao
     }));
   }, [receitasManuais]);
+
+  // Receita Direta (Entrega de Resultado): dados detalhados no período atual (para modal de detalhes)
+  const getFilteredDirectRevenueSales = useMemo(() => {
+    const periodStart = filters.startDate?.trim() || getDefaultPeriod().start;
+    const periodEnd = filters.endDate?.trim() || getDefaultPeriod().end;
+    const toDateStr = (d: any) => (d == null ? '' : String(d).split('T')[0]);
+    return (vendasPorUsuarioRows || [])
+      .filter(r => toDateStr(r.data) >= periodStart && toDateStr(r.data) <= periodEnd)
+      .map(r => ({
+        ...r,
+        // Normalizar campos úteis para visualização no modal
+        payment_date: r.data,
+        business_unit: r.business_unit,
+        amount: Number(r.amount) || 0
+      }));
+  }, [vendasPorUsuarioRows, filters.startDate, filters.endDate]);
 
   // Receita crediário inativa: usar apenas receitas_manuais
   const getFilteredReceitaCrediario = useMemo((): any[] => [], []);
@@ -3087,7 +3286,7 @@ function AppContent() {
 
   // Função para carregar dados paginados do banco para o modal
   const loadPaginatedDataForModal = async (
-    type: 'accounts_payable' | 'revenues' | 'transactions' | 'mixed' | 'total_inflows' | 'total_outflows' | 'initial_balance',
+    type: 'accounts_payable' | 'revenues' | 'transactions' | 'generic' | 'mixed' | 'total_inflows' | 'total_outflows' | 'initial_balance',
     page: number,
     pageSize: number,
     filters: {
@@ -3099,6 +3298,11 @@ function AppContent() {
     }
   ): Promise<{ data: any[]; totalCount: number; hasMore: boolean; totalSum?: number }> => {
     try {
+      if (type === 'generic') {
+        // Dados são fornecidos diretamente via `data` no modal (sem paginação no banco)
+        return { data: [], totalCount: 0, hasMore: false };
+      }
+
       // Buscar imports ativos
       const { data: importsData } = await supabase
         .from('importacoes')
@@ -3644,7 +3848,7 @@ function AppContent() {
     }
   };
 
-  const openKPIDetail = (title: string, data: any[], type: 'accounts_payable' | 'revenues' | 'transactions' | 'mixed' | 'total_inflows' | 'total_outflows' | 'initial_balance') => {
+  const openKPIDetail = (title: string, data: any[], type: 'accounts_payable' | 'revenues' | 'transactions' | 'generic' | 'mixed' | 'total_inflows' | 'total_outflows' | 'initial_balance') => {
     // Período atual do dashboard (mesmo que está filtrado no card)
     const periodStart = filters.startDate?.trim() || getDefaultPeriod().start;
     const periodEnd = filters.endDate?.trim() || getDefaultPeriod().end;
@@ -3851,9 +4055,10 @@ function AppContent() {
 
   // Dados detalhados para Resultado Operacional (receita - CMV - despesas)
   const getFilteredOperationalResult = useMemo(() => {
-    const revenueData = getFilteredRevenues.map(r => ({
+    // Receita Direta da Entrega de Resultado (vendas_por_usuario) no período atual
+    const revenueData = getFilteredDirectRevenueSales.map(r => ({
       ...r,
-      source: 'revenues',
+      source: 'vendas_por_usuario',
       type: 'Receita',
       category: 'Receita Direta'
     }));
@@ -3875,7 +4080,7 @@ function AppContent() {
     }));
 
     return [...revenueData, ...cmvData, ...expensesData];
-  }, [getFilteredRevenues, getFilteredCMVDRE, getFilteredExpenses]);
+  }, [getFilteredDirectRevenueSales, getFilteredCMVDRE, getFilteredExpenses]);
 
   // CMV calculado de contas_a_pagar com categoria "04.0DESPESAS COM MERCADORIA"
   const cmvTotals = useMemo(() => {
@@ -3903,10 +4108,10 @@ function AppContent() {
   const kpiData = useMemo(() => {
     const baseKpis = calculateKPIs(filteredData);
 
-    // Receita Direta = apenas receitas (sem baseKpis que vem de records antigos)
-    // Deve corresponder a getFilteredRevenues
-    const totalRevenueForecasted = revenueTotals.forecasted;
-    const totalRevenueActual = revenueTotals.actual;
+    // Receita Direta (Entrega de Resultado): usar vendas_por_usuario
+    // "forecasted" aqui passa a ser "Período anterior" (mesmo intervalo, deslocado para trás)
+    const totalRevenueForecasted = directRevenueSalesTotals?.previous ?? revenueTotals.forecasted;
+    const totalRevenueActual = directRevenueSalesTotals?.actual ?? revenueTotals.actual;
 
     // Add accounts payable to forecasted and actual outflows
     // Add revenues + receita_crediario to forecasted and actual inflows
@@ -5485,8 +5690,13 @@ function AppContent() {
                         color="yellow"
                         section="result"
                         darkMode={darkMode}
-                        onViewDetails={() => openKPIDetail('Detalhes: Receita Direta', getFilteredRevenues, 'revenues')}
-                        dataSource="Carregado de receitas manuais"
+                        forecastedLabel={
+                          directRevenueSalesTotals
+                            ? `Período anterior (${format(parseISO(directRevenueSalesTotals.prevStart), 'dd/MM/yy')} - ${format(parseISO(directRevenueSalesTotals.prevEnd), 'dd/MM/yy')})`
+                            : 'Período anterior'
+                        }
+                        onViewDetails={() => openKPIDetail('Detalhes: Receita Direta', getFilteredDirectRevenueSales, 'generic')}
+                        dataSource="Carregado de Entrega de Resultado (vendas_por_usuario)"
                       loading={dataLoading}
                       />
                       <KPICard
@@ -5759,7 +5969,6 @@ function AppContent() {
               ) : (
                 <DataImport
                   onFileUpload={handleDataImport}
-                  onFileSelectWithMode={handleFileSelectWithMode}
                   onSaveCompany={handleSaveCompany}
                   onUpdateCompany={handleUpdateCompany}
                   onRefreshCompanies={handleRefreshCompanies}
@@ -5794,81 +6003,27 @@ function AppContent() {
         onShowToast={(id) => setActiveToast(id)}
       />
 
-      <ImportModeModal
-        isOpen={importModeModal.isOpen}
-        onClose={() => setImportModeModal({ ...importModeModal, isOpen: false })}
-        onAccumulate={() => {
-          setImportModeModal({ ...importModeModal, isOpen: false });
-          setConfirmAccumulateModal({
-            isOpen: true,
-            fileName: importModeModal.fileName,
-            fileType: importModeModal.fileType,
-            pendingFile: importModeModal.pendingFile,
-            pendingType: importModeModal.pendingType,
-            pendingIndex: importModeModal.pendingIndex,
-            pendingTotal: importModeModal.pendingTotal
-          });
-        }}
-        onOverwrite={() => {
-          setImportModeModal({ ...importModeModal, isOpen: false });
-          setOverwriteModal({
-            isOpen: true,
-            fileName: importModeModal.fileName,
-            fileType: importModeModal.fileType,
-            existingImportId: null,
-            pendingFile: importModeModal.pendingFile,
-            pendingType: importModeModal.pendingType,
-            pendingIndex: importModeModal.pendingIndex,
-            pendingTotal: importModeModal.pendingTotal
-          });
-        }}
-        fileName={importModeModal.fileName}
-      />
-
-      <ConfirmAccumulateModal
-        isOpen={confirmAccumulateModal.isOpen}
-        onClose={() => setConfirmAccumulateModal({ ...confirmAccumulateModal, isOpen: false })}
-        onConfirm={async () => {
-          if (confirmAccumulateModal.pendingFile && confirmAccumulateModal.pendingType) {
-            setConfirmAccumulateModal({ ...confirmAccumulateModal, isOpen: false });
-            await handleDataImport(
-              confirmAccumulateModal.pendingFile,
-              confirmAccumulateModal.pendingType as any,
-              confirmAccumulateModal.pendingIndex,
-              confirmAccumulateModal.pendingTotal,
-              false, // shouldOverwrite
-              true // shouldAccumulate
-            );
-          }
-        }}
-        fileName={confirmAccumulateModal.fileName}
-      />
-
-      <ConfirmOverwriteModal
-        isOpen={overwriteModal.isOpen}
-        onClose={() => setOverwriteModal({ ...overwriteModal, isOpen: false })}
-        onConfirm={async () => {
-          if (overwriteModal.pendingFile && overwriteModal.pendingType) {
-            setOverwriteModal({ ...overwriteModal, isOpen: false });
-            await handleDataImport(
-              overwriteModal.pendingFile,
-              overwriteModal.pendingType as any,
-              overwriteModal.pendingIndex,
-              overwriteModal.pendingTotal,
-              true, // shouldOverwrite
-              false // shouldAccumulate
-            );
-          }
-        }}
-        fileName={overwriteModal.fileName}
-        fileType={overwriteModal.fileType}
-      />
-
       <ErrorModal
         isOpen={errorModal.isOpen}
         onClose={() => setErrorModal({ ...errorModal, isOpen: false })}
         title={errorModal.title}
         message={errorModal.message}
+      />
+
+      <DuplicateFileModal
+        isOpen={duplicateFileModal.isOpen}
+        fileName={duplicateFileModal.fileName}
+        fileType={duplicateFileModal.fileType}
+        darkMode={darkMode}
+        onKeepPrevious={() => setDuplicateFileModal({ isOpen: false, fileName: '', fileType: '', pendingFile: null, pendingType: null, existingImportId: '' })}
+        onReplaceWithNew={async () => {
+          const { existingImportId, pendingFile, pendingType, pendingIndex, pendingTotal } = duplicateFileModal;
+          setDuplicateFileModal({ isOpen: false, fileName: '', fileType: '', pendingFile: null, pendingType: null, existingImportId: '' });
+          if (!pendingFile || !pendingType) return;
+          await deleteOldImportData(existingImportId, getTableNameFromType(pendingType));
+          await loadImportsFromSupabase();
+          await handleDataImport(pendingFile, pendingType, pendingIndex, pendingTotal);
+        }}
       />
 
       {/* Sistema de Notificações */}

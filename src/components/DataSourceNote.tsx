@@ -17,7 +17,8 @@ const TABLE_IMPORTER_LABELS: Record<string, string> = {
   cmv_dre: 'CMV DRE',
   saldos_iniciais: 'Saldos Bancários',
   faturamento_dre: 'Faturamento DRE',
-  orcamento_dre: 'Orçamento DRE'
+  orcamento_dre: 'Orçamento DRE',
+  vendas_por_usuario: 'Entrega de Resultado'
 };
 
 export const DataSourceNote: React.FC<DataSourceNoteProps> = ({ tables, darkMode = false, suffix, className }) => {

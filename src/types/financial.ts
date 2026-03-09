@@ -69,12 +69,36 @@ export interface ImportedFile {
     | 'cmv_dre'
     | 'initial_balances'
     | 'orcamento_dre'
-    | 'receita_crediario';
+    | 'receita_crediario'
+    | 'vendas_por_usuario';
   uploadDate: string;
   recordCount: number;
   status: 'success' | 'error' | 'processing';
   // Indica se o arquivo está na lixeira (soft delete)
   isDeleted?: boolean;
+}
+
+/** Registro da tabela vendas_por_usuario (resumo por usuário/loja/data) */
+export interface VendasPorUsuario {
+  id: number | string;
+  business_unit: string;
+  usuario: string;
+  data: string;
+  amount: number;
+  percentual_total?: number | null;
+  desconto?: number | null;
+  percentual_desconto?: number | null;
+  custo?: number | null;
+  percentual_custo?: number | null;
+  lucro?: number | null;
+  percentual_lucro?: number | null;
+  qtd_vendas?: number | null;
+  ticket_medio?: number | null;
+  qtd_itens?: number | null;
+  valor_medio?: number | null;
+  import_id?: number | string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AccountsPayable {

@@ -13,8 +13,8 @@ interface Company {
 }
 
 interface DataImportProps {
-  onFileUpload: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario', currentIndex?: number, totalFiles?: number) => Promise<void>;
-  onFileSelectWithMode?: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario', currentIndex?: number, totalFiles?: number) => void;
+  onFileUpload: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario' | 'vendas_por_usuario', currentIndex?: number, totalFiles?: number) => Promise<void>;
+  onFileSelectWithMode?: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario' | 'vendas_por_usuario', currentIndex?: number, totalFiles?: number) => void;
   onSaveCompany?: (company: { company_code: string; company_name: string; name: string; group_name: string }) => Promise<void>;
   onUpdateCompany?: (id: string, company: { company_code: string; company_name: string; name: string; group_name: string }) => Promise<void>;
   onRefreshCompanies?: () => Promise<void>;
@@ -61,6 +61,7 @@ export const DataImport: React.FC<DataImportProps> = ({
   const forecastedEntriesInputRef = useRef<HTMLInputElement>(null);
   const revenuesDREInputRef = useRef<HTMLInputElement>(null);
   const cmvDREInputRef = useRef<HTMLInputElement>(null);
+  const vendasPorUsuarioInputRef = useRef<HTMLInputElement>(null);
   const initialBalancesInputRef = useRef<HTMLInputElement>(null);
   const orcamentoDREInputRef = useRef<HTMLInputElement>(null);
 
@@ -69,7 +70,9 @@ export const DataImport: React.FC<DataImportProps> = ({
     revenues: true,
     forecasted_entries: true,
     initial_balances: true,
-    orcamento_dre: true
+    orcamento_dre: true,
+    revenues_dre: true,
+    cmv_dre: true
   };
 
   const handleDragOver = (e: React.DragEvent, type: string) => {
@@ -81,7 +84,7 @@ export const DataImport: React.FC<DataImportProps> = ({
     setDragOver(null);
   };
 
-  const handleDrop = async (e: React.DragEvent, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario') => {
+  const handleDrop = async (e: React.DragEvent, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario' | 'vendas_por_usuario') => {
     e.preventDefault();
     setDragOver(null);
     const files = Array.from(e.dataTransfer.files);
@@ -100,7 +103,7 @@ export const DataImport: React.FC<DataImportProps> = ({
     }
   };
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario') => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario' | 'vendas_por_usuario') => {
     const files = Array.from(e.target.files || []);
     if (files.length > 0) {
       // Se onFileSelectWithMode estiver disponível, usar o novo fluxo com modal de escolha
@@ -186,7 +189,7 @@ export const DataImport: React.FC<DataImportProps> = ({
     setSelectionMode(false);
   };
 
-  const renderFormatTooltip = (type: 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre') => {
+  const renderFormatTooltip = (type: 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'vendas_por_usuario') => {
     const formatInfo = {
       revenues_dre: {
         title: 'Formato esperado - Receita DRE',
@@ -231,6 +234,15 @@ export const DataImport: React.FC<DataImportProps> = ({
         ],
         templateLink: '/templates/template_saldos_bancarios.xlsx',
         color: 'emerald'
+      },
+      vendas_por_usuario: {
+        title: 'Formato esperado - Entrega de Resultado',
+        items: [
+          'Formato e validações em definição.',
+          'Tabela: vendas_por_usuario (business_unit, usuario, data, amount, etc.).'
+        ],
+        templateLink: '',
+        color: 'violet'
       }
     };
 
@@ -238,7 +250,9 @@ export const DataImport: React.FC<DataImportProps> = ({
     const colorClasses: Record<string, string> = {
       cyan: 'bg-cyan-50 border-cyan-200 text-cyan-900',
       rose: 'bg-rose-50 border-rose-200 text-rose-900',
-      emerald: 'bg-emerald-50 border-emerald-200 text-emerald-900'
+      emerald: 'bg-emerald-50 border-emerald-200 text-emerald-900',
+      purple: 'bg-purple-50 border-purple-200 text-purple-900',
+      violet: 'bg-violet-50 border-violet-200 text-violet-900'
     };
 
     return (
@@ -252,14 +266,16 @@ export const DataImport: React.FC<DataImportProps> = ({
                 <li key={index}>• {item}</li>
               ))}
             </ul>
-            <a
-              href={info.templateLink}
-              download
-              className="inline-flex items-center text-xs font-medium hover:underline"
-            >
-              <Download className="w-3 h-3 mr-1" />
-              Baixar modelo de exemplo
-            </a>
+            {info.templateLink ? (
+              <a
+                href={info.templateLink}
+                download
+                className="inline-flex items-center text-xs font-medium hover:underline"
+              >
+                <Download className="w-3 h-3 mr-1" />
+                Baixar modelo de exemplo
+              </a>
+            ) : null}
           </div>
         </div>
       </div>
@@ -277,6 +293,7 @@ export const DataImport: React.FC<DataImportProps> = ({
       cmv_dre: 'CMV DRE',
       initial_balances: 'Saldos Bancários',
       orcamento_dre: 'Orçamento DRE',
+      vendas_por_usuario: 'Entrega de Resultado',
     };
     return map[type] || type;
   };
@@ -305,7 +322,8 @@ export const DataImport: React.FC<DataImportProps> = ({
       'revenues_dre',
       'cmv_dre',
       'initial_balances',
-      'orcamento_dre'
+      'orcamento_dre',
+      'vendas_por_usuario'
     ];
 
     const toggleSection = (key: string) => {
@@ -808,6 +826,7 @@ export const DataImport: React.FC<DataImportProps> = ({
                 </div>
                 )}
 
+                {!IMPORTADORES_OCULTOS.revenues_dre && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                   <h4 className="font-medium mb-2 text-blue-800">6. Receita DRE</h4>
                   <p className="mb-2 text-xs">Importe o arquivo com as receitas para DRE:</p>
@@ -819,7 +838,9 @@ export const DataImport: React.FC<DataImportProps> = ({
                     <li>• Coluna E: Valor</li>
                   </ul>
                 </div>
+                )}
 
+                {!IMPORTADORES_OCULTOS.cmv_dre && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                   <h4 className="font-medium mb-2 text-blue-800">7. CMV DRE</h4>
                   <p className="mb-2 text-xs">Importe o arquivo com o CMV para DRE:</p>
@@ -830,6 +851,12 @@ export const DataImport: React.FC<DataImportProps> = ({
                     <li>• Coluna D: Data de emissão</li>
                     <li>• Coluna E: Valor</li>
                   </ul>
+                </div>
+                )}
+
+                <div className="bg-violet-50 border border-violet-200 rounded-lg p-3">
+                  <h4 className="font-medium mb-2 text-violet-800">6. Entrega de Resultado</h4>
+                  <p className="mb-2 text-xs">Importe o arquivo de vendas por usuário (entrega de resultado). Formato e colunas em definição.</p>
                 </div>
 
                 {!IMPORTADORES_OCULTOS.initial_balances && (
@@ -1069,7 +1096,7 @@ export const DataImport: React.FC<DataImportProps> = ({
         </div>
         )}
 
-        {/* Revenues DRE Upload */}
+        {!IMPORTADORES_OCULTOS.revenues_dre && (
         <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
           <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-cyan-600" />
@@ -1111,8 +1138,9 @@ export const DataImport: React.FC<DataImportProps> = ({
             className="hidden"
           />
         </div>
+        )}
 
-        {/* CMV DRE Upload */}
+        {!IMPORTADORES_OCULTOS.cmv_dre && (
         <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
           <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
             <FileText className="w-5 h-5 mr-2 text-rose-600" />
@@ -1151,6 +1179,50 @@ export const DataImport: React.FC<DataImportProps> = ({
             accept=".xlsx,.xls"
             multiple
             onChange={(e) => handleFileSelect(e, 'cmv_dre')}
+            className="hidden"
+          />
+        </div>
+        )}
+
+        {/* Entrega de Resultado (vendas por usuário) */}
+        <div className={`${darkMode ? 'bg-[#0F172A] border border-slate-800' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
+          <h3 className={`text-base font-semibold mb-3 flex items-center ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
+            <FileText className="w-5 h-5 mr-2 text-violet-600" />
+            6. Entrega de Resultado
+            {renderFormatTooltip('vendas_por_usuario')}
+          </h3>
+
+          <div
+            className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+              dragOver === 'vendas_por_usuario'
+                ? darkMode
+                  ? 'border-violet-400 bg-violet-950/20'
+                  : 'border-violet-400 bg-violet-50'
+                : darkMode
+                  ? 'border-slate-600 hover:border-violet-400'
+                : 'border-gray-300 hover:border-violet-400'
+            }`}
+            onDragOver={(e) => handleDragOver(e, 'vendas_por_usuario')}
+            onDragLeave={handleDragLeave}
+            onDrop={(e) => handleDrop(e, 'vendas_por_usuario')}
+          >
+            <Upload className={`w-10 h-10 mx-auto mb-3 ${darkMode ? 'text-slate-500' : 'text-gray-400'}`} />
+            <p className={`text-sm mb-2 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>Arraste os arquivos aqui ou</p>
+            <button
+              onClick={() => vendasPorUsuarioInputRef.current?.click()}
+              className="px-3 py-1.5 text-sm bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors"
+            >
+              Selecionar Arquivos
+            </button>
+            <p className={`text-xs mt-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>Excel (.xlsx, .xls) - Múltiplos arquivos</p>
+          </div>
+
+          <input
+            ref={vendasPorUsuarioInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            multiple
+            onChange={(e) => handleFileSelect(e, 'vendas_por_usuario')}
             className="hidden"
           />
         </div>

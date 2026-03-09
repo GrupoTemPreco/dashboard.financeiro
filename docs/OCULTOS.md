@@ -25,11 +25,13 @@ Registro do que foi ocultado ou desativado na interface (e do que ainda será).
 
 ### 4. Importadores na tela de Importar Dados
 - **Arquivo:** `src/components/DataImport.tsx`
-- **Descrição:** Quatro importadores foram ocultados na interface (cards de arrastar/selecionar arquivo e instruções no modal de formato):
+- **Descrição:** Seis importadores foram ocultados na interface (cards de arrastar/selecionar arquivo e instruções no modal de formato):
   - **Receitas** (`revenues`)
   - **Lançamentos previstos** (`forecasted_entries`)
   - **Saldos bancários** (`initial_balances`)
   - **Orçamento DRE** (`orcamento_dre`)
+  - **Receita DRE** (`revenues_dre`)
+  - **CMV DRE** (`cmv_dre`)
 - **Como está:** Constante `IMPORTADORES_OCULTOS` com esses tipos em `true`; os blocos de upload e as instruções correspondentes são renderizados apenas quando `!IMPORTADORES_OCULTOS[type]`. A lista "Arquivos importados" continua exibindo esses tipos se houver arquivos já importados.
 
 ### 5. Colunas "Variação" e "% Receita" na tabela Despesas Operacionais
@@ -45,6 +47,11 @@ Registro do que foi ocultado ou desativado na interface (e do que ainda será).
     - Valor: `Realizado (período atual) − Previsto (período atual)` (inverso da Variação em valor).
     - Percentual: `((Realizado − Previsto) / Previsto) × 100` (se Previsto ≠ 0).
     - Interpretação: mesmo indicador em valor/percentual com sinal invertido em relação à Variação; o nome "% Receita" fica para uso futuro (ex.: peso da despesa sobre a receita).
+
+### 6. Opção "Acumular vs Sobrepor" na importação
+- **Arquivo:** `src/App.tsx` + `src/components/DataImport.tsx`
+- **Descrição:** A escolha de modo de importação (acumular ou sobrepor) foi ocultada temporariamente para todos os importadores.
+- **Como está:** O app não abre mais os modais de escolha/confirmação; a importação segue sempre no modo **acumular** (padrão aplicado em `handleDataImport` quando os flags não são informados).
 
 ---
 

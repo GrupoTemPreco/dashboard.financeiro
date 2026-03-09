@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
-import { FinancialRecord, Company, AccountsPayable, Revenue, FinancialTransaction, ReceitaCrediario } from '../types/financial';
+import { FinancialRecord, Company, AccountsPayable, Revenue, FinancialTransaction, ReceitaCrediario, VendasPorUsuario } from '../types/financial';
 
-export type FileType = 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario';
+export type FileType = 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario' | 'vendas_por_usuario';
 
 export interface ValidationResult {
   isValid: boolean;
@@ -1052,6 +1052,35 @@ export const validateFileFormat = (file: File, expectedType: FileType): Promise<
                   errorMessage: 'Este arquivo parece ser de outro tipo (tem colunas de Status ou Credor). O arquivo de Orçamento DRE deve ter: Unidade de Negócio, Nome da Conta, Período e Valor do Orçamento.'
                 };
               }
+            }
+            break;
+
+          case 'vendas_por_usuario':
+            // Entrega de Resultado: planilha com Usuário, Venda, Custo, Lucro, Qtd. Vendas, Qtd. Itens (cabeçalho pode estar em qualquer linha)
+            const hasVendasPorUsuarioColumns = (row: any[]): boolean => {
+              if (!row || row.length < 4) return false;
+              const rowHeaders = row.map((cell: any) => String(cell || '').toLowerCase().trim());
+              const hasUsuario = rowHeaders.some((h: string) => h.includes('usuário') || h.includes('usuario'));
+              const hasVenda = rowHeaders.some((h: string) => h.includes('venda') && !h.includes('vendas'));
+              const hasCusto = rowHeaders.some((h: string) => h.includes('custo'));
+              const hasLucro = rowHeaders.some((h: string) => h.includes('lucro'));
+              const hasQtdVendas = rowHeaders.some((h: string) => (h.includes('qtd') || h.includes('qtd.')) && h.includes('vendas'));
+              const hasQtdItens = rowHeaders.some((h: string) => (h.includes('qtd') || h.includes('qtd.')) && h.includes('itens'));
+              return !!(hasUsuario && hasVenda && hasCusto && hasLucro && hasQtdVendas && hasQtdItens);
+            };
+            let foundVendasPorUsuarioHeader = false;
+            for (let i = 0; i < Math.min(jsonData.length, 50); i++) {
+              const row = jsonData[i] as any[];
+              if (hasVendasPorUsuarioColumns(row)) {
+                foundVendasPorUsuarioHeader = true;
+                break;
+              }
+            }
+            if (!foundVendasPorUsuarioHeader) {
+              validationResult = {
+                isValid: false,
+                errorMessage: 'O arquivo de Entrega de Resultado deve conter as colunas: Usuário, Venda, Custo, Lucro, Qtd. Vendas e Qtd. Itens. Nenhuma outra planilha do sistema possui todas essas colunas.'
+              };
             }
             break;
         }
@@ -4688,6 +4717,304 @@ export const processReceitaCrediarioFile = (
       reject(new Error('Falha ao ler o arquivo. Verifique se o arquivo está corrompido.'));
     };
 
+    reader.readAsBinaryString(file);
+  });
+};
+
+// Tipo para registro de vendas por usuário (insert, sem id/created_at/updated_at)
+export type VendasPorUsuarioInsert = Omit<VendasPorUsuario, 'id' | 'created_at' | 'updated_at'> & {
+  business_unit: string;
+  data: string;
+  usuario: string;
+  amount: number;
+  custo?: number;
+  lucro?: number;
+  qtd_vendas?: number;
+  qtd_itens?: number;
+  percentual_total?: number;
+  desconto?: number;
+  percentual_desconto?: number;
+  percentual_custo?: number;
+  percentual_lucro?: number;
+  ticket_medio?: number;
+  valor_medio?: number;
+};
+
+export const processVendasPorUsuarioFile = (
+  file: File,
+  validBusinessUnits?: string[]
+): Promise<ProcessResult<VendasPorUsuarioInsert>> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+        if (!data) throw new Error('Arquivo vazio ou não pôde ser lido');
+
+        const workbook = XLSX.read(data, { type: 'binary' });
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          throw new Error('O arquivo não contém planilhas válidas.');
+        }
+
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+
+        const records: VendasPorUsuarioInsert[] = [];
+        const validationErrors = {
+          missingColumns: [] as string[],
+          invalidRows: [] as Array<{ lineNumber: number; rowContent: any[]; errors: string[] }>,
+          invalidBusinessUnits: [] as string[]
+        };
+        const skippedRows: Array<{ lineNumber: number; rowContent: any[]; reason: string; category: 'cabeçalho' | 'rodapé' | 'vazia' | 'inválida' | 'metadado' }> = [];
+        const stats = { totalRows: 0, processed: 0, skippedEmpty: 0, skippedHeaderFooter: 0, invalid: 0 };
+
+        const parseDate = (dateValue: any): string => {
+          if (!dateValue) return '';
+          if (typeof dateValue === 'number') {
+            const date = new Date((dateValue - 25569) * 86400 * 1000);
+            return isNaN(date.getTime()) ? '' : date.toISOString().split('T')[0];
+          }
+          const str = String(dateValue).trim();
+          const m = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+          if (m) {
+            const d = m[1].padStart(2, '0');
+            const mo = m[2].padStart(2, '0');
+            const y = m[3].length === 2 ? `20${m[3]}` : m[3];
+            return `${y}-${mo}-${d}`;
+          }
+          if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
+          const d = new Date(str);
+          return !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : '';
+        };
+
+        const isTitleRow = (row: any[]): boolean => {
+          if (!row || row.length === 0) return false;
+          const text = row.map(c => String(c || '').toLowerCase().trim()).join(' ');
+          return text.includes('análise de venda') || text.includes('analise de venda');
+        };
+
+        const extractCodUnNeg = (row: any[]): string | null => {
+          if (!row || row.length === 0) return null;
+          const first = String(row[0] || '').trim();
+          const match = first.match(/cód\.\s*un\.\s*neg\.?\s*:?\s*(\d+)/i) || first.match(/cod\.\s*un\.\s*neg\.?\s*:?\s*(\d+)/i);
+          if (match) return match[1].trim();
+          const full = row.map(c => String(c || '').trim()).join(' ');
+          const m2 = full.match(/cód\.\s*un\.\s*neg\.?\s*:?\s*(\d+)/i) || full.match(/cod\.\s*un\.\s*neg\.?\s*:?\s*(\d+)/i);
+          return m2 ? m2[1].trim() : null;
+        };
+
+        const extractDataFromRow = (row: any[]): string | null => {
+          if (!row || row.length === 0) return null;
+          const full = row.map(c => String(c || '').trim()).join(' ');
+          const m = full.match(/data\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+          return m ? parseDate(m[1]) || null : null;
+        };
+
+        const isTotalOrSomaRow = (row: any[]): boolean => {
+          if (!row || row.length === 0) return false;
+          const full = row.map(c => String(c || '').toLowerCase().trim()).join(' ');
+          const first = String(row[0] || '').toLowerCase().trim();
+          const second = row.length > 1 ? String(row[1] || '').toLowerCase().trim() : '';
+          const third = row.length > 2 ? String(row[2] || '').toLowerCase().trim() : '';
+          const fourth = row.length > 3 ? String(row[3] || '').toLowerCase().trim() : '';
+          const fifth = row.length > 4 ? String(row[4] || '').toLowerCase().trim() : '';
+
+          // Qualquer célula entre a 1ª e a 5ª contendo "total" ou "soma" caracteriza linha de total
+          if ([first, second, third, fourth, fifth].some(c => c.includes('total'))) return true;
+          if ([first, second, third, fourth, fifth].some(c => c.includes('soma'))) return true;
+
+          // Padrões mais específicos em toda a linha
+          if (full.includes('total cód') || full.includes('total cod') || full.includes('total un')) return true;
+          if (full.includes('(soma)')) return true;
+
+          if (first === 'total' || second === 'total') return true;
+          return false;
+        };
+
+        const norm = (s: string) => s.replace(/\s+/g, ' ').replace(/\u00a0/g, ' ').trim().toLowerCase();
+        const expectedCols = {
+          usuario: ['usuário', 'usuario'],
+          venda: ['venda'],
+          percentualTotal: ['% tot', '%tot', 'percentual total'],
+          desconto: ['desconto'],
+          percentualDesconto: ['% desc', '%desconto'],
+          custo: ['custo'],
+          percentualCusto: ['% custo', '%custo'],
+          lucro: ['lucro'],
+          percentualLucro: ['% lucro', '%lucro'],
+          qtdVendas: ['qtd. vendas', 'qtd vendas', 'qtd de vendas', 'quantidade vendas', 'quantidade de vendas'],
+          ticketMedio: ['ticket médio', 'ticket medio'],
+          qtdItens: ['qtd. itens', 'qtd itens', 'qtd de itens', 'quantidade itens', 'quantidade de itens'],
+          valorMedio: ['valor médio', 'valor medio']
+        };
+
+        const hasVendasPorUsuarioHeader = (row: any[]): boolean => {
+          if (!row || row.length < 4) return false;
+          const h = row.map((c: any) => norm(String(c || '')));
+          const ok = (keys: string[]) => (name: string) => keys.some(k => name.includes(k));
+          const hasUsuario = h.some(ok(expectedCols.usuario));
+          const hasVenda = h.some(ok(expectedCols.venda));
+          const hasCusto = h.some(ok(expectedCols.custo));
+          const hasLucro = h.some(ok(expectedCols.lucro));
+          const hasQtdVendas = h.some(x => (x.includes('qtd') || x.includes('quantidade')) && x.includes('vendas'));
+          const hasQtdItens = h.some(x => (x.includes('qtd') || x.includes('quantidade')) && x.includes('itens'));
+          return !!(hasUsuario && hasVenda && hasCusto && hasLucro && hasQtdVendas && hasQtdItens);
+        };
+
+        let currentBusinessUnit = '';
+        let currentData = '';
+        let headerRowIndex = -1;
+        let columnMap: Record<string, number> = {};
+
+        for (let i = 0; i < jsonData.length; i++) {
+          const row = jsonData[i] as any[];
+          if (!row || row.length === 0) continue;
+
+          if (isTitleRow(row)) {
+            skippedRows.push({ lineNumber: i + 1, rowContent: [...row], reason: 'Cabeçalho (Análise de venda)', category: 'cabeçalho' });
+            stats.skippedHeaderFooter++;
+            continue;
+          }
+
+          const cod = extractCodUnNeg(row);
+          if (cod !== null) {
+            currentBusinessUnit = cod;
+            skippedRows.push({ lineNumber: i + 1, rowContent: [...row], reason: 'Seção Cód. Un. Neg.', category: 'metadado' });
+            stats.skippedHeaderFooter++;
+            continue;
+          }
+
+          const dataStr = extractDataFromRow(row);
+          if (dataStr !== null) {
+            currentData = dataStr;
+            skippedRows.push({ lineNumber: i + 1, rowContent: [...row], reason: 'Linha de Data', category: 'metadado' });
+            stats.skippedHeaderFooter++;
+            continue;
+          }
+
+          if (isTotalOrSomaRow(row)) {
+            skippedRows.push({ lineNumber: i + 1, rowContent: [...row], reason: 'Total / Soma (ignorar)', category: 'rodapé' });
+            stats.skippedHeaderFooter++;
+            continue;
+          }
+
+          if (hasVendasPorUsuarioHeader(row)) {
+            headerRowIndex = i;
+            columnMap = {};
+            const headerRow = row.map((c: any) => norm(String(c || '')));
+            headerRow.forEach((cell, idx) => {
+              const c = cell;
+              if (expectedCols.usuario.some(k => c.includes(k))) columnMap.usuario = idx;
+              else if ((c.includes('qtd') || c.includes('quantidade')) && c.includes('vendas')) columnMap.qtdVendas = idx;
+              else if ((c.includes('qtd') || c.includes('quantidade')) && c.includes('itens')) columnMap.qtdItens = idx;
+              else if (expectedCols.venda.some(k => c.includes(k))) columnMap.venda = idx;
+              else if (expectedCols.percentualTotal.some(k => c.includes(k))) columnMap.percentualTotal = idx;
+              else if (expectedCols.desconto.some(k => c.includes(k))) columnMap.desconto = idx;
+              else if ((c.includes('%') && c.includes('desc')) || (c === '%' && columnMap.desconto !== undefined && idx === columnMap.desconto + 1)) columnMap.percentualDesconto = idx;
+              else if (expectedCols.custo.some(k => c.includes(k))) columnMap.custo = idx;
+              else if ((c.includes('%') && c.includes('custo')) || (c === '%' && columnMap.custo !== undefined && idx === columnMap.custo + 1)) columnMap.percentualCusto = idx;
+              else if (expectedCols.lucro.some(k => c.includes(k))) columnMap.lucro = idx;
+              else if ((c.includes('%') && c.includes('lucro')) || (c === '%' && columnMap.lucro !== undefined && idx === columnMap.lucro + 1)) columnMap.percentualLucro = idx;
+              else if (expectedCols.ticketMedio.some(k => c.includes(k))) columnMap.ticketMedio = idx;
+              else if (expectedCols.valorMedio.some(k => c.includes(k))) columnMap.valorMedio = idx;
+            });
+            if (columnMap.percentualCusto === undefined && columnMap.custo !== undefined) {
+              const nextIdx = columnMap.custo + 1;
+              if (nextIdx < row.length && String(row[nextIdx] || '').trim() === '%') columnMap.percentualCusto = nextIdx;
+            }
+            if (columnMap.percentualLucro === undefined && columnMap.lucro !== undefined) {
+              const nextIdx = columnMap.lucro + 1;
+              if (nextIdx < row.length && String(row[nextIdx] || '').trim() === '%') columnMap.percentualLucro = nextIdx;
+            }
+            skippedRows.push({ lineNumber: i + 1, rowContent: [...row], reason: 'Cabeçalho de colunas', category: 'cabeçalho' });
+            stats.skippedHeaderFooter++;
+            continue;
+          }
+
+          if (headerRowIndex === -1) continue;
+
+          stats.totalRows++;
+          const usuarioVal = columnMap.usuario !== undefined ? row[columnMap.usuario] : undefined;
+          const vendaVal = columnMap.venda !== undefined ? row[columnMap.venda] : undefined;
+          const custoVal = columnMap.custo !== undefined ? row[columnMap.custo] : undefined;
+          const lucroVal = columnMap.lucro !== undefined ? row[columnMap.lucro] : undefined;
+          const qtdVendasVal = columnMap.qtdVendas !== undefined ? row[columnMap.qtdVendas] : undefined;
+          const qtdItensVal = columnMap.qtdItens !== undefined ? row[columnMap.qtdItens] : undefined;
+
+          const usuario = usuarioVal != null ? String(usuarioVal).trim() : '';
+          const isEmpty = (!usuarioVal || usuario === '') && (vendaVal === undefined || vendaVal === null || vendaVal === '') && (custoVal === undefined || custoVal === null || custoVal === '') && (lucroVal === undefined || lucroVal === null || lucroVal === '');
+          if (isEmpty) {
+            stats.skippedEmpty++;
+            skippedRows.push({ lineNumber: i + 1, rowContent: [...row], reason: 'Linha vazia', category: 'vazia' });
+            continue;
+          }
+
+          const rowErrors: string[] = [];
+          if (!currentBusinessUnit) rowErrors.push('Unidade de negócio (Cód. Un. Neg.) é obrigatória');
+          if (!currentData) rowErrors.push('Data é obrigatória');
+          if (!usuario) rowErrors.push('Usuário é obrigatório');
+          const amount = parseBrazilianNumber(vendaVal);
+          if (vendaVal === undefined || vendaVal === null || (typeof vendaVal === 'string' && String(vendaVal).trim() === '')) rowErrors.push('Venda é obrigatória');
+          else if (isNaN(amount)) rowErrors.push(`Venda inválida (não é número): "${vendaVal}"`);
+          const custo = custoVal !== undefined && custoVal !== null && String(custoVal).trim() !== '' ? parseBrazilianNumber(custoVal) : undefined;
+          if (custoVal === undefined || custoVal === null || (typeof custoVal === 'string' && String(custoVal).trim() === '')) rowErrors.push('Custo é obrigatório');
+          else if (custo !== undefined && isNaN(custo)) rowErrors.push(`Custo inválido: "${custoVal}"`);
+          const lucro = lucroVal !== undefined && lucroVal !== null && String(lucroVal).trim() !== '' ? parseBrazilianNumber(lucroVal) : undefined;
+          if (lucroVal === undefined || lucroVal === null || (typeof lucroVal === 'string' && String(lucroVal).trim() === '')) rowErrors.push('Lucro é obrigatório');
+          else if (lucro !== undefined && isNaN(lucro)) rowErrors.push(`Lucro inválido: "${lucroVal}"`);
+          const qtdVendas = qtdVendasVal !== undefined && qtdVendasVal !== null && String(qtdVendasVal).trim() !== '' ? parseBrazilianNumber(qtdVendasVal) : undefined;
+          if (qtdVendasVal === undefined || qtdVendasVal === null || (typeof qtdVendasVal === 'string' && String(qtdVendasVal).trim() === '')) rowErrors.push('Qtd. Vendas é obrigatória');
+          else if (qtdVendas !== undefined && (isNaN(qtdVendas) || qtdVendas < 0)) rowErrors.push(`Qtd. Vendas inválida: "${qtdVendasVal}"`);
+          const qtdItens = qtdItensVal !== undefined && qtdItensVal !== null && String(qtdItensVal).trim() !== '' ? parseBrazilianNumber(qtdItensVal) : undefined;
+          if (qtdItensVal === undefined || qtdItensVal === null || (typeof qtdItensVal === 'string' && String(qtdItensVal).trim() === '')) rowErrors.push('Qtd. Itens é obrigatória');
+          else if (qtdItens !== undefined && (isNaN(qtdItens) || qtdItens < 0)) rowErrors.push(`Qtd. Itens inválida: "${qtdItensVal}"`);
+
+          if (rowErrors.length > 0) {
+            stats.invalid++;
+            validationErrors.invalidRows.push({ lineNumber: i + 1, rowContent: [...row], errors: rowErrors });
+            continue;
+          }
+
+          const rec: VendasPorUsuarioInsert = {
+            business_unit: currentBusinessUnit,
+            usuario,
+            data: currentData,
+            amount: Number(amount),
+            custo: custo !== undefined && !isNaN(custo) ? custo : 0,
+            lucro: lucro !== undefined && !isNaN(lucro) ? lucro : 0,
+            qtd_vendas: qtdVendas !== undefined && !isNaN(qtdVendas) ? Math.round(qtdVendas) : 0,
+            qtd_itens: qtdItens !== undefined && !isNaN(qtdItens) ? Math.round(qtdItens) : 0
+          };
+          if (columnMap.percentualTotal !== undefined) { const v = parseBrazilianNumber(row[columnMap.percentualTotal]); if (!isNaN(v)) rec.percentual_total = v; }
+          if (columnMap.desconto !== undefined) { const v = parseBrazilianNumber(row[columnMap.desconto]); if (!isNaN(v)) rec.desconto = v; }
+          if (columnMap.percentualDesconto !== undefined) { const v = parseBrazilianNumber(row[columnMap.percentualDesconto]); if (!isNaN(v)) rec.percentual_desconto = v; }
+          if (columnMap.percentualCusto !== undefined) { const v = parseBrazilianNumber(row[columnMap.percentualCusto]); if (!isNaN(v)) rec.percentual_custo = v; }
+          if (columnMap.percentualLucro !== undefined) { const v = parseBrazilianNumber(row[columnMap.percentualLucro]); if (!isNaN(v)) rec.percentual_lucro = v; }
+          if (columnMap.ticketMedio !== undefined) { const v = parseBrazilianNumber(row[columnMap.ticketMedio]); if (!isNaN(v)) rec.ticket_medio = v; }
+          if (columnMap.valorMedio !== undefined) { const v = parseBrazilianNumber(row[columnMap.valorMedio]); if (!isNaN(v)) rec.valor_medio = v; }
+
+          records.push(rec);
+          stats.processed++;
+        }
+
+        if (validBusinessUnits && validBusinessUnits.length > 0) {
+          const unitsInFile = new Set(records.map(r => r.business_unit));
+          const invalidUnits = Array.from(unitsInFile).filter(
+            u => !validBusinessUnits.includes(u) && !validBusinessUnits.some(vu => String(parseInt(vu) || vu) === String(parseInt(u) || u))
+          );
+          validationErrors.invalidBusinessUnits = invalidUnits;
+        }
+
+        resolve({ data: records, validationErrors, skippedRows, stats });
+      } catch (err: any) {
+        console.error('Erro ao processar Entrega de Resultado:', err);
+        reject(err);
+      }
+    };
+
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo.'));
     reader.readAsBinaryString(file);
   });
 };
