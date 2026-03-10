@@ -4024,15 +4024,6 @@ function AppContent() {
     };
   }, [financialTransactions, nonOperationalAccounts]);
 
-  const cmvChartOfAccounts = [
-    'Medicamentos Bonificados',
-    'Medicamentos Ético',
-    'Perfumaria',
-    'Medicamentos Multiplos',
-    'Despesas com Pagto de Mercadoria (CMV)',
-    '04.8 Medicamentos Multiplos'
-  ];
-
   // CMV - dados de vendas_por_usuario (coluna custo)
   const getFilteredCMVDRE = useMemo(() => {
     const periodStart = filters.startDate?.trim() || getDefaultPeriod().start;

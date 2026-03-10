@@ -5,6 +5,8 @@ import { DataSourceNote } from './DataSourceNote';
 
 interface MonthlyData {
   month: string;
+  monthLabel: string; // ex: "Abr/25", "Mai/24"
+  yearContext?: { currentYear: number; previousYear: number }; // ano do slot vs ano anterior (contextual)
   currentYear: {
     revenue: number;
     revenueForecasted?: number;
@@ -158,31 +160,19 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
     accountsPayable: (rawData.accountsPayable || []).filter(ap => filterByDate(ap, 'payment_date'))
   }), [rawData.vendasPorUsuario, rawData.accountsPayable, dateRange]);
 
-  // Process data into monthly format
+  // Process data into monthly format - por ano-mês (YYYY-MM) para comparação contextual
   const data = useMemo(() => {
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth() + 1; // 1-12
-    const previousYear = currentYear - 1;
+    const monthlyDataByYearMonth: { [key: string]: {
+      revenues: number,
+      revenuesForecasted: number,
+      revenuesActual: number,
+      cmv: number,
+      loans: number,
+      revenuesByUnit: { [unit: string]: number },
+      cmvByUnit: { [unit: string]: number }
+    } } = {};
 
-    const monthlyDataCurrent: { [key: string]: {
-      revenues: number,
-      revenuesForecasted: number,
-      revenuesActual: number,
-      cmv: number,
-      loans: number,
-      revenuesByUnit: { [unit: string]: number },
-      cmvByUnit: { [unit: string]: number }
-    } } = {};
-    const monthlyDataPrevious: { [key: string]: {
-      revenues: number,
-      revenuesForecasted: number,
-      revenuesActual: number,
-      cmv: number,
-      loans: number,
-      revenuesByUnit: { [unit: string]: number },
-      cmvByUnit: { [unit: string]: number }
-    } } = {};
+    const getKey = (year: number, month: number) => `${year}-${String(month).padStart(2, '0')}`;
 
     const initMonthData = () => ({
       revenues: 0,
@@ -198,7 +188,7 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
     const toDateStr = (d: any) => (d == null ? '' : String(d).split('T')[0]);
     const num = (v: any) => Number(v) || 0;
 
-    // Process revenues (Receita Direta) - vendas_por_usuario (amount) - mesma fonte e lógica dos cards
+    // Process revenues (Receita Direta) - vendas_por_usuario (amount) - acumula por ano-mês
     const allVendas = rawData.vendasPorUsuario || [];
     allVendas.forEach(v => {
       const dateStr = toDateStr(v.data);
@@ -207,26 +197,19 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
       const year = parseInt(dateParts[0], 10);
       const month = parseInt(dateParts[1], 10);
       if (isNaN(year) || isNaN(month) || month < 1 || month > 12) return;
-      const monthKey = `${month}`.padStart(2, '0');
+      const key = getKey(year, month);
       const amount = num(v.amount);
       const normalizedBU = normalizeCode(v.business_unit);
       const company = rawData.companies.find(c => normalizeCode(c.company_code) === normalizedBU);
-      const unit = company?.company_name || 'Não classificado';
+      const unit = company ? `${company.company_code} - ${company.company_name}` : 'Não classificado';
 
-      if (year === currentYear) {
-        if (!monthlyDataCurrent[monthKey]) monthlyDataCurrent[monthKey] = initMonthData();
-        monthlyDataCurrent[monthKey].revenues += amount;
-        monthlyDataCurrent[monthKey].revenuesActual += amount;
-        monthlyDataCurrent[monthKey].revenuesByUnit[unit] = (monthlyDataCurrent[monthKey].revenuesByUnit[unit] || 0) + amount;
-      } else if (year === previousYear) {
-        if (!monthlyDataPrevious[monthKey]) monthlyDataPrevious[monthKey] = initMonthData();
-        monthlyDataPrevious[monthKey].revenues += amount;
-        monthlyDataPrevious[monthKey].revenuesActual += amount;
-        monthlyDataPrevious[monthKey].revenuesByUnit[unit] = (monthlyDataPrevious[monthKey].revenuesByUnit[unit] || 0) + amount;
-      }
+      if (!monthlyDataByYearMonth[key]) monthlyDataByYearMonth[key] = initMonthData();
+      monthlyDataByYearMonth[key].revenues += amount;
+      monthlyDataByYearMonth[key].revenuesActual += amount;
+      monthlyDataByYearMonth[key].revenuesByUnit[unit] = (monthlyDataByYearMonth[key].revenuesByUnit[unit] || 0) + amount;
     });
 
-    // Process CMV - vendas_por_usuario (custo) - mesma fonte e lógica dos cards (num(r.custo))
+    // Process CMV - vendas_por_usuario (custo) - acumula por ano-mês
     allVendas.forEach(v => {
       const dateStr = toDateStr(v.data);
       if (!dateStr || dateStr.length < 10) return;
@@ -234,21 +217,15 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
       const year = parseInt(dateParts[0], 10);
       const month = parseInt(dateParts[1], 10);
       if (isNaN(year) || isNaN(month) || month < 1 || month > 12) return;
-      const monthKey = `${month}`.padStart(2, '0');
-      const amount = num(v.custo); // Mesma lógica dos cards: soma direta
+      const key = getKey(year, month);
+      const amount = num(v.custo);
       const normalizedBU = normalizeCode(v.business_unit);
       const company = rawData.companies.find(c => normalizeCode(c.company_code) === normalizedBU);
-      const unit = company?.company_name || 'Não classificado';
+      const unit = company ? `${company.company_code} - ${company.company_name}` : 'Não classificado';
 
-      if (year === currentYear) {
-        if (!monthlyDataCurrent[monthKey]) monthlyDataCurrent[monthKey] = initMonthData();
-        monthlyDataCurrent[monthKey].cmv += amount;
-        monthlyDataCurrent[monthKey].cmvByUnit[unit] = (monthlyDataCurrent[monthKey].cmvByUnit[unit] || 0) + amount;
-      } else if (year === previousYear) {
-        if (!monthlyDataPrevious[monthKey]) monthlyDataPrevious[monthKey] = initMonthData();
-        monthlyDataPrevious[monthKey].cmv += amount;
-        monthlyDataPrevious[monthKey].cmvByUnit[unit] = (monthlyDataPrevious[monthKey].cmvByUnit[unit] || 0) + amount;
-      }
+      if (!monthlyDataByYearMonth[key]) monthlyDataByYearMonth[key] = initMonthData();
+      monthlyDataByYearMonth[key].cmv += amount;
+      monthlyDataByYearMonth[key].cmvByUnit[unit] = (monthlyDataByYearMonth[key].cmvByUnit[unit] || 0) + amount;
     });
 
     // Process Loans (Empréstimos) - contas_a_pagar
@@ -273,21 +250,15 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
         const isLoan = creditorIsLoan || chartIsLoan;
         
         if (isLoan) {
-          // Extrair ano e mês diretamente da string para evitar problemas de timezone
           const dateStr = String(ap.payment_date);
           const dateParts = dateStr.split('-');
           const year = parseInt(dateParts[0], 10);
-          const month = parseInt(dateParts[1], 10); // Já vem como 1-12
-          const monthKey = `${month}`.padStart(2, '0');
+          const month = parseInt(dateParts[1], 10);
+          const key = getKey(year, month);
           const amount = Math.abs(ap.amount || 0);
 
-          if (year === currentYear) {
-            if (!monthlyDataCurrent[monthKey]) monthlyDataCurrent[monthKey] = initMonthData();
-            monthlyDataCurrent[monthKey].loans += amount;
-          } else if (year === previousYear) {
-            if (!monthlyDataPrevious[monthKey]) monthlyDataPrevious[monthKey] = initMonthData();
-            monthlyDataPrevious[monthKey].loans += amount;
-          }
+          if (!monthlyDataByYearMonth[key]) monthlyDataByYearMonth[key] = initMonthData();
+          monthlyDataByYearMonth[key].loans += amount;
         }
       }
     });
@@ -319,6 +290,7 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
       const now = new Date();
       const currentMonthIndex = now.getMonth(); // 0-11
       const currentYear = now.getFullYear();
+      const currentMonth = currentMonthIndex + 1; // 1-12
       
       // Determine how many months back to go
       let monthsBack: number;
@@ -352,7 +324,9 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
       }
     } else {
       // For other periods, use date range iteration
-      // Add one month to endDateForIter to include the end month itself
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth() + 1;
       const endDateInclusive = new Date(endDateForIter);
       endDateInclusive.setMonth(endDateInclusive.getMonth() + 1);
       
@@ -371,20 +345,26 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
     }
 
 
-    // Process each month in the range
-    monthsToInclude.forEach(({ month }) => {
-      const monthKey = `${month}`.padStart(2, '0');
-      
-      // Get data for current year (same month)
-      const currentData = monthlyDataCurrent[monthKey] || initMonthData();
-      // Get data for previous year (same month)
-      const previousData = monthlyDataPrevious[monthKey] || initMonthData();
-      
+    // Process each month in the range - comparação contextual: ano do slot vs ano anterior
+    monthsToInclude.forEach(({ month, year }) => {
+      const currentKey = getKey(year, month);
+      const previousKey = getKey(year - 1, month);
+
+      // Dados do ano do mês (ex: Jan/25 → 2025)
+      const currentData = monthlyDataByYearMonth[currentKey] || initMonthData();
+      // Dados do ano anterior ao mês (ex: Jan/25 → 2024)
+      const previousData = monthlyDataByYearMonth[previousKey] || initMonthData();
+
       const currentDebtRatio = currentData.revenues > 0 ? (currentData.loans / currentData.revenues) * 100 : 0;
       const previousDebtRatio = previousData.revenues > 0 ? (previousData.loans / previousData.revenues) * 100 : 0;
 
+      const yearShort = String(year).slice(-2);
+      const monthLabel = `${monthNames[month - 1]}/${yearShort}`;
+
       result.push({
         month: monthNames[month - 1],
+        monthLabel,
+        yearContext: { currentYear: year, previousYear: year - 1 },
         currentYear: {
           revenue: currentData.revenues,
           revenueForecasted: currentData.revenuesForecasted || 0,
@@ -487,7 +467,8 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
     const formatDate = (date: Date) => {
       const day = date.getDate().toString().padStart(2, '0');
       const month = (date.getMonth() + 1).toString().padStart(2, '0');
-      return `${day}/${month}`;
+      const year = String(date.getFullYear()).slice(-2);
+      return `${day}/${month}/${year}`;
     };
     
     return `${formatDate(start)} - ${formatDate(end)}`;
@@ -565,181 +546,76 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
         }
       });
 
-      // Process revenues - Same logic as card (previsto/pendente + forecasted entries for forecasted, realizado for actual)
-      // Use rawData to get all data, then filter by date range and entities manually
+      // Process revenues - vendas_por_usuario (mesma fonte dos cards)
       if (selectedMetric === 'revenue') {
-        // Process actual revenues (realizado) - same as card's "Realizado"
-        rawData.revenues.forEach(rev => {
-          if (rev.payment_date && rev.status?.toLowerCase() === 'realizado') {
-            // Filter by date range
-            const revDate = rev.payment_date;
-            if (revDate < dateRange.start || revDate > dateRange.end) return;
-            
-            // Extrair ano e mês diretamente da string para evitar problemas de timezone
-            const dateStr = String(rev.payment_date);
-            const dateParts = dateStr.split('-');
-            const year = parseInt(dateParts[0], 10);
-            const month = parseInt(dateParts[1], 10) - 1; // Converter para 0-11 para usar com monthNames
-            if (year === currentYear) {
-              const monthKey = monthNames[month];
-              const normalizedBU = normalizeCode(rev.business_unit);
-              
-              // Find matching entity
-              let entityName: string | undefined;
-              
-              if (entities.some(e => e.type === 'company')) {
-                // If grouping by companies, match by company_code
-                const matchingEntity = entities.find(e => {
-                  if (e.type !== 'company') return false;
-                  const normalizedCode = normalizeCode(e.code);
-                  return normalizedCode === normalizedBU;
-                });
-                entityName = matchingEntity?.name;
-                
-                // Fallback: if no match by code, try to find company by business_unit and match by name
-                if (!entityName) {
-                  const company = rawData.companies.find(c => {
-                    const normalizedCode = normalizeCode(c.company_code);
-                    return normalizedCode === normalizedBU;
-                  });
-                  if (company) {
-                    const matchingEntityByName = entities.find(e => 
-                      e.type === 'company' && e.name === company.company_name
-                    );
-                    entityName = matchingEntityByName?.name;
-                  }
-                }
-              } else if (entities.some(e => e.type === 'group')) {
-                // If grouping by groups, match by group_name
-                const company = rawData.companies.find(c => {
-                  const normalizedCode = normalizeCode(c.company_code);
-                  return normalizedCode === normalizedBU;
-                });
-                if (company) {
-                  const matchingEntity = entities.find(e => 
-                    e.type === 'group' && e.name === company.group_name
-                  );
-                  entityName = matchingEntity?.name;
-                }
+        const allVendas = rawData.vendasPorUsuario || [];
+        allVendas.forEach((v: { data?: string; amount?: number; business_unit?: string }) => {
+          const dateStr = v.data ? String(v.data).split('T')[0] : '';
+          if (!dateStr || dateStr.length < 10) return;
+          const revDate = dateStr;
+          if (revDate < dateRange.start || revDate > dateRange.end) return;
+          const dateParts = dateStr.split('-');
+          const year = parseInt(dateParts[0], 10);
+          const month = parseInt(dateParts[1], 10) - 1;
+          if (year === currentYear) {
+            const monthKey = monthNames[month];
+            const normalizedBU = normalizeCode(v.business_unit);
+            let entityName: string | undefined;
+            if (entities.some(e => e.type === 'company')) {
+              const matchingEntity = entities.find(e => {
+                if (e.type !== 'company') return false;
+                return normalizeCode(e.code) === normalizedBU;
+              });
+              entityName = matchingEntity?.name;
+              if (!entityName) {
+                const company = rawData.companies.find(c => normalizeCode(c.company_code) === normalizedBU);
+                const matchingByName = entities.find(e => e.type === 'company' && e.name === company?.company_name);
+                entityName = matchingByName?.name;
               }
-              
-              if (entityName && monthlyData[monthKey]) {
-                monthlyData[monthKey][entityName] = (monthlyData[monthKey][entityName] || 0) + (rev.amount || 0);
-              }
+            } else if (entities.some(e => e.type === 'group')) {
+              const company = rawData.companies.find(c => normalizeCode(c.company_code) === normalizedBU);
+              const matchingEntity = entities.find(e => e.type === 'group' && e.name === company?.group_name);
+              entityName = matchingEntity?.name;
             }
-          }
-        });
-
-        // Process revenues from forecasted entries (movimento em dinheiro) - same as card logic
-        rawData.forecastedEntries.forEach(entry => {
-          if (entry.due_date && entry.chart_of_accounts?.toLowerCase().includes('movimento em dinheiro')) {
-            // Filter by date range
-            const entryDate = entry.due_date;
-            if (entryDate < dateRange.start || entryDate > dateRange.end) return;
-            
-            // Extrair ano e mês diretamente da string para evitar problemas de timezone
-            const dateStr = String(entry.due_date);
-            const dateParts = dateStr.split('-');
-            const year = parseInt(dateParts[0], 10);
-            const month = parseInt(dateParts[1], 10) - 1; // Converter para 0-11 para usar com monthNames
-            if (year === currentYear) {
-              const monthKey = monthNames[month];
-              const normalizedBU = normalizeCode(entry.business_unit);
-              
-              // Find matching entity
-              let entityName: string | undefined;
-              
-              if (entities.some(e => e.type === 'company')) {
-                const matchingEntity = entities.find(e => {
-                  if (e.type !== 'company') return false;
-                  const normalizedCode = normalizeCode(e.code);
-                  return normalizedCode === normalizedBU;
-                });
-                entityName = matchingEntity?.name;
-                
-                // Fallback: if no match by code, try to find company by business_unit and match by name
-                if (!entityName) {
-                  const company = rawData.companies.find(c => {
-                    const normalizedCode = normalizeCode(c.company_code);
-                    return normalizedCode === normalizedBU;
-                  });
-                  if (company) {
-                    const matchingEntityByName = entities.find(e => 
-                      e.type === 'company' && e.name === company.company_name
-                    );
-                    entityName = matchingEntityByName?.name;
-                  }
-                }
-              } else if (entities.some(e => e.type === 'group')) {
-                const company = rawData.companies.find(c => {
-                  const normalizedCode = normalizeCode(c.company_code);
-                  return normalizedCode === normalizedBU;
-                });
-                if (company) {
-                  const matchingEntity = entities.find(e => 
-                    e.type === 'group' && e.name === company.group_name
-                  );
-                  entityName = matchingEntity?.name;
-                }
-              }
-              
-              // Only count if paid (paga = actual), otherwise it's forecasted
-              if (entityName && monthlyData[monthKey] && entry.status?.toLowerCase() === 'paga') {
-                monthlyData[monthKey][entityName] = (monthlyData[monthKey][entityName] || 0) + (entry.amount || 0);
-              }
+            if (entityName && monthlyData[monthKey]) {
+              monthlyData[monthKey][entityName] = (monthlyData[monthKey][entityName] || 0) + (Number(v.amount) || 0);
             }
           }
         });
       }
 
-      // Process CMV - Same logic as card: from contas_a_pagar with category "04.0DESPESAS COM MERCADORIA"
+      // Process CMV - vendas_por_usuario (custo) - mesma fonte dos cards
       if (selectedMetric === 'cogs') {
-        const cmvFromAP = rawData.accountsPayable.filter(ap => {
-          const chartOfAccounts = (ap.chart_of_accounts || '').toUpperCase();
-          // Verificar se contém "04.0" seguido de "DESPESAS COM MERCADORIA" (aceita espaço e singular/plural)
-          return chartOfAccounts.includes('04.0') && 
-                 chartOfAccounts.includes('DESPESAS COM MERCADORIA');
-        });
-        
-        if (cmvFromAP && cmvFromAP.length > 0) {
-          cmvFromAP.forEach(cmv => {
-            if (cmv.payment_date) {
-              // Filter by date range
-              const cmvDate = cmv.payment_date;
-              if (cmvDate < dateRange.start || cmvDate > dateRange.end) return;
-              
-              // Extrair ano e mês diretamente da string para evitar problemas de timezone
-              const dateStr = String(cmv.payment_date);
-              const dateParts = dateStr.split('-');
-              const year = parseInt(dateParts[0], 10);
-              const month = parseInt(dateParts[1], 10) - 1; // Converter para 0-11 para usar com monthNames
-              if (year === currentYear) {
-                const monthKey = monthNames[month];
-                const normalizedBU = normalizeCode(cmv.business_unit);
-                
-                // Find matching entity
-                let entityName: string | undefined;
-                
-                if (entities.some(e => e.type === 'company')) {
-                  const matchingEntity = entities.find(e => 
-                    e.type === 'company' && normalizeCode(e.code) === normalizedBU
-                  );
-                  entityName = matchingEntity?.name;
-                } else if (entities.some(e => e.type === 'group')) {
-                  const company = rawData.companies.find(c => normalizeCode(c.company_code) === normalizedBU);
-                  const matchingEntity = entities.find(e => 
-                    e.type === 'group' && e.name === company?.group_name
-                  );
-                  entityName = matchingEntity?.name;
-                }
-                
-                if (entityName && monthlyData[monthKey]) {
-                  monthlyData[monthKey][entityName] = (monthlyData[monthKey][entityName] || 0) + Math.abs(cmv.amount || 0);
-                }
+        const allVendas = rawData.vendasPorUsuario || [];
+        allVendas.forEach((v: { data?: string; custo?: number; business_unit?: string }) => {
+          const dateStr = v.data ? String(v.data).split('T')[0] : '';
+          if (!dateStr || dateStr.length < 10) return;
+          if (dateStr < dateRange.start || dateStr > dateRange.end) return;
+          const dateParts = dateStr.split('-');
+          const year = parseInt(dateParts[0], 10);
+          const month = parseInt(dateParts[1], 10) - 1;
+          if (year === currentYear) {
+            const monthKey = monthNames[month];
+            const normalizedBU = normalizeCode(v.business_unit);
+            let entityName: string | undefined;
+            if (entities.some(e => e.type === 'company')) {
+              const matchingEntity = entities.find(e => e.type === 'company' && normalizeCode(e.code) === normalizedBU);
+              entityName = matchingEntity?.name;
+              if (!entityName) {
+                const company = rawData.companies.find(c => normalizeCode(c.company_code) === normalizedBU);
+                const matchingByName = entities.find(e => e.type === 'company' && e.name === company?.company_name);
+                entityName = matchingByName?.name;
               }
+            } else if (entities.some(e => e.type === 'group')) {
+              const company = rawData.companies.find(c => normalizeCode(c.company_code) === normalizedBU);
+              const matchingEntity = entities.find(e => e.type === 'group' && e.name === company?.group_name);
+              entityName = matchingEntity?.name;
             }
-          });
-        }
+            if (entityName && monthlyData[monthKey]) {
+              monthlyData[monthKey][entityName] = (monthlyData[monthKey][entityName] || 0) + Math.abs(Number(v.custo) || 0);
+            }
+          }
+        });
       }
 
       // Process Loans - Same logic as Total de Pagamentos card
@@ -882,7 +758,7 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
     };
 
     if (grouping === 'week') {
-      const weeklyData: Array<{ month: string; current: number; previous: number; debtRatioCurrent: number; debtRatioPrevious: number; originalData: any }> = [];
+      const weeklyData: Array<{ month: string; current: number; previous: number; debtRatioCurrent: number; debtRatioPrevious: number; variationYoY?: number; variationMoM?: number; originalData: any }> = [];
       
       data.forEach((item) => {
         const monthName = item.month;
@@ -902,6 +778,11 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
         
         const weekValue = getMetricValue(item, 'currentYear') / weeksInMonth;
         const previousWeekValue = getMetricValue(item, 'previousYear') / weeksInMonth;
+        const variationYoY = (selectedMetric === 'revenue' || selectedMetric === 'cogs')
+          ? (previousWeekValue > 0
+            ? ((weekValue - previousWeekValue) / previousWeekValue) * 100
+            : weekValue > 0 ? 100 : 0)
+          : undefined;
         
         for (let w = 1; w <= weeksInMonth; w++) {
           const { start, end } = getWeekDates(monthName, w);
@@ -913,8 +794,19 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
             previous: previousWeekValue,
             debtRatioCurrent: item.currentYear.debtRatio,
             debtRatioPrevious: item.previousYear.debtRatio,
+            variationYoY,
+            variationMoM: undefined,
             originalData: item
           });
+        }
+      });
+      // variationMoM: compara com período anterior no range
+      weeklyData.forEach((row, i) => {
+        if ((selectedMetric === 'revenue' || selectedMetric === 'cogs') && i > 0) {
+          const prev = weeklyData[i - 1].current;
+          row.variationMoM = prev > 0 ? ((row.current - prev) / prev) * 100 : undefined;
+        } else if ((selectedMetric === 'revenue' || selectedMetric === 'cogs') && i === 0 && row.current > 0) {
+          row.variationMoM = 100;
         }
       });
       
@@ -923,7 +815,7 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
 
     if (grouping === 'day') {
       // Group by day - need to process raw filtered data by day
-      const dailyData: Array<{ month: string; current: number; previous: number; debtRatioCurrent: number; debtRatioPrevious: number; originalData: any }> = [];
+      const dailyData: Array<{ month: string; current: number; previous: number; debtRatioCurrent: number; debtRatioPrevious: number; variationYoY?: number; variationMoM?: number; originalData: any }> = [];
       
       // Get all unique dates in the filtered data
       const dateMap = new Map<string, { current: number; previous: number }>();
@@ -1031,7 +923,13 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
       
       sortedDates.forEach(([dateKey, values]) => {
         const date = new Date(dateKey);
-        const dayLabel = `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+        const yearShort = String(date.getFullYear()).slice(-2);
+        const dayLabel = `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${yearShort}`;
+        const variationYoY = (selectedMetric === 'revenue' || selectedMetric === 'cogs')
+          ? (values.previous > 0
+            ? ((values.current - values.previous) / values.previous) * 100
+            : values.current > 0 ? 100 : 0)
+          : undefined;
         
         dailyData.push({
           month: dayLabel,
@@ -1039,22 +937,51 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
           previous: values.previous,
           debtRatioCurrent: 0,
           debtRatioPrevious: 0,
+          variationYoY,
+          variationMoM: undefined,
           originalData: null
         });
+      });
+      dailyData.forEach((row, i) => {
+        if ((selectedMetric === 'revenue' || selectedMetric === 'cogs') && i > 0) {
+          const prev = dailyData[i - 1].current;
+          row.variationMoM = prev > 0 ? ((row.current - prev) / prev) * 100 : undefined;
+        } else if ((selectedMetric === 'revenue' || selectedMetric === 'cogs') && i === 0 && row.current > 0) {
+          row.variationMoM = 100;
+        }
       });
       
       return dailyData;
     }
 
     // Default: monthly grouping
-    return data.map(item => ({
-      month: item.month,
-      current: getMetricValue(item, 'currentYear'),
-      previous: getMetricValue(item, 'previousYear'),
-      debtRatioCurrent: item.currentYear.debtRatio,
-      debtRatioPrevious: item.previousYear.debtRatio,
-      originalData: item
-    }));
+    return data.map((item, i) => {
+      const current = getMetricValue(item, 'currentYear');
+      const previous = getMetricValue(item, 'previousYear');
+      // Variação ano a ano (período vs ano anterior)
+      const variationYoY = (selectedMetric === 'revenue' || selectedMetric === 'cogs')
+        ? (previous > 0
+          ? ((current - previous) / previous) * 100
+          : current > 0 ? 100 : 0)
+        : undefined;
+      // Variação mês a mês (períodos filtrados - compara com mês anterior no range)
+      const prevInRange = i > 0 ? getMetricValue(data[i - 1], 'currentYear') : 0;
+      const variationMoM = (selectedMetric === 'revenue' || selectedMetric === 'cogs')
+        ? (prevInRange > 0
+          ? ((current - prevInRange) / prevInRange) * 100
+          : i === 0 && current > 0 ? 100 : undefined)
+        : undefined;
+      return {
+        month: item.monthLabel,
+        current,
+        previous,
+        debtRatioCurrent: item.currentYear.debtRatio,
+        debtRatioPrevious: item.previousYear.debtRatio,
+        variationYoY,
+        variationMoM,
+        originalData: item
+      };
+    });
   };
 
   const getMetricTitle = () => {
@@ -1086,12 +1013,23 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       const originalData = payload[0]?.payload?.originalData;
+      const ctx = originalData?.yearContext;
+      const currentYearNum = ctx?.currentYear ?? new Date().getFullYear();
+      const previousYearNum = ctx?.previousYear ?? currentYearNum - 1;
+
+      // Excluir entradas das linhas (mesmo dado das barras) para evitar duplicação
+      const payloadFiltered = payload.filter((entry: any) => !entry.name?.includes('(linha)'));
 
       return (
         <div className={`${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'} p-4 border rounded-lg shadow-lg max-w-sm`}>
-          <p className={`text-sm font-medium mb-3 border-b pb-2 ${darkMode ? 'text-slate-100 border-slate-700' : 'text-gray-700 border-gray-200'}`}>{label}</p>
+          <p className={`text-sm font-medium mb-3 border-b pb-2 ${darkMode ? 'text-slate-100 border-slate-700' : 'text-gray-700 border-gray-200'}`}>
+            {label}
+            <span className={`ml-1 text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
+              ({previousYearNum} vs {currentYearNum})
+            </span>
+          </p>
 
-          {payload.map((entry: any, index: number) => {
+          {payloadFiltered.map((entry: any, index: number) => {
             if (entry.dataKey === 'debtRatioCurrent' || entry.dataKey === 'debtRatioPrevious') {
               return (
                 <p key={index} className="text-sm mb-1" style={{ color: entry.color }}>
@@ -1099,10 +1037,18 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
                 </p>
               );
             }
+            if ((entry.dataKey === 'variationMoM' || entry.dataKey === 'variationYoY') && entry.value != null) {
+              const sign = entry.value >= 0 ? '+' : '';
+              return (
+                <p key={index} className="text-sm mb-1" style={{ color: entry.color }}>
+                  {entry.name}: {sign}{entry.value.toFixed(1)}%
+                </p>
+              );
+            }
 
             const isCurrentYear = entry.dataKey === 'current';
             const year = isCurrentYear ? 'currentYear' : 'previousYear';
-            const yearLabel = isCurrentYear ? 'Ano Atual' : 'Ano Anterior';
+            const yearLabel = isCurrentYear ? `Ano do período (${currentYearNum})` : `Ano anterior (${previousYearNum})`;
 
             // Calculate CMV percentage for total - same logic as card
             // Card uses: (cmvTotals.actual / totalRevenueActual) * 100
@@ -1581,7 +1527,7 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
             }
             
             return (
-              <ComposedChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+              <ComposedChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }} barGap={-30} barCategoryGap="20%">
               <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#1f2937' : '#f0f0f0'} />
               <XAxis 
                 dataKey="month" 
@@ -1594,15 +1540,6 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
                 stroke={darkMode ? '#9ca3af' : '#6b7280'}
                 fontSize={12}
               />
-              {selectedMetric === 'loans' && (
-                <YAxis
-                  yAxisId="right"
-                  orientation="right"
-                  tickFormatter={(value) => `${value}%`}
-                  stroke={darkMode ? '#9ca3af' : '#6b7280'}
-                  fontSize={12}
-                />
-              )}
               <Tooltip content={<CustomTooltip />} />
               
               <Bar
@@ -1620,26 +1557,28 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
                 radius={[2, 2, 0, 0]}
               />
               
-              {selectedMetric === 'loans' && (
+              {(selectedMetric === 'revenue' || selectedMetric === 'cogs' || selectedMetric === 'loans') && (
                 <>
                   <Line
-                    yAxisId="right"
+                    yAxisId="left"
                     type="monotone"
-                    dataKey="debtRatioCurrent"
-                    stroke="#722832"
+                    dataKey="current"
+                    stroke="#22c55e"
                     strokeWidth={2}
-                    dot={{ fill: '#722832', strokeWidth: 2, r: 4 }}
-                    name="% Empréstimos/Receita (Atual)"
+                    dot={{ fill: '#22c55e', strokeWidth: 2, r: 4 }}
+                    name="Ano do período (linha)"
+                    connectNulls
                   />
                   <Line
-                    yAxisId="right"
+                    yAxisId="left"
                     type="monotone"
-                    dataKey="debtRatioPrevious"
-                    stroke="#a1a1aa"
+                    dataKey="previous"
+                    stroke="#f97316"
                     strokeWidth={2}
                     strokeDasharray="5 5"
-                    dot={{ fill: '#a1a1aa', strokeWidth: 2, r: 4 }}
-                    name="% Empréstimos/Receita (Anterior)"
+                    dot={{ fill: '#f97316', strokeWidth: 2, r: 4 }}
+                    name="Ano anterior (linha)"
+                    connectNulls
                   />
                 </>
               )}
@@ -1659,17 +1598,23 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
           <div className={`flex items-center justify-center space-x-6 ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>
             <div className="flex items-center">
               <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: colors.current }}></div>
-              <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano Atual</span>
+              <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano do período</span>
             </div>
             <div className="flex items-center">
               <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: colors.previous }}></div>
-              <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano Anterior</span>
+              <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano anterior</span>
             </div>
-            {selectedMetric === 'loans' && (
-              <div className="flex items-center">
-                <div className="w-3 h-3 bg-marsala-600 rounded-full mr-2"></div>
-                <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>% Empréstimos/Receita</span>
-              </div>
+            {(selectedMetric === 'revenue' || selectedMetric === 'cogs' || selectedMetric === 'loans') && (
+              <>
+                <div className="flex items-center">
+                  <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: '#22c55e' }}></div>
+                  <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano do período (linha)</span>
+                </div>
+                <div className="flex items-center">
+                  <div className="w-3 h-3 rounded-full mr-2" style={{ backgroundColor: '#f97316' }}></div>
+                  <span className={darkMode ? 'text-slate-300' : 'text-gray-600'}>Ano anterior (linha)</span>
+                </div>
+              </>
             )}
           </div>
         </div>
