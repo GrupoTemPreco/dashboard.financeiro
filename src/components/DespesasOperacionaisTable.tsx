@@ -158,7 +158,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     if (start && end) return { start, end };
     const now = new Date();
     const s = format(now, 'yyyy-MM-01');
-    const e = format(now, 'yyyy-MM-dd');
+    const e = format(endOfMonth(now), 'yyyy-MM-dd');
     return { start: s, end: e };
   };
 

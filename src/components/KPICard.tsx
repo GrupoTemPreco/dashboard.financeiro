@@ -1,5 +1,5 @@
-import React from 'react';
-import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, Pill, ArrowUpDown, List } from 'lucide-react';
+import React, { useState } from 'react';
+import { TrendingUp, TrendingDown, List } from 'lucide-react';
 
 interface KPICardProps {
   title: string;
@@ -11,8 +11,9 @@ interface KPICardProps {
   section?: 'cashflow' | 'result';
   onViewDetails?: () => void;
   darkMode?: boolean;
-  dataSource?: string;
   loading?: boolean;
+  /** Quando true, mostra tooltip "Em breve" no hover em vez de abrir modal ao clicar */
+  detailsComingSoon?: boolean;
   /** Label da linha Previsto (ex: "Previsto (por vencimento)") */
   forecastedLabel?: string;
   /** Label da linha Realizado (ex: "Realizado (por pagamento)") */
@@ -26,14 +27,14 @@ export const KPICard: React.FC<KPICardProps> = ({
   percentage,
   icon,
   color,
-  section,
   onViewDetails,
   darkMode = false,
-  dataSource,
   loading = false,
+  detailsComingSoon = false,
   forecastedLabel = 'Previsto',
   actualLabel = 'Realizado'
 }) => {
+  const [showComingSoonTooltip, setShowComingSoonTooltip] = useState(false);
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
@@ -204,14 +205,34 @@ export const KPICard: React.FC<KPICardProps> = ({
             <h3 className={`text-xs font-semibold ml-2 ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>{title}</h3>
           </div>
           <div className="flex items-center gap-2">
-            {onViewDetails && (
-              <button
-                onClick={onViewDetails}
-                className={`p-1.5 rounded-lg shadow-sm border transition-colors ${darkMode ? 'bg-slate-900/80 hover:bg-slate-900 border-slate-700' : 'bg-white/70 hover:bg-white border-slate-200'}`}
-                title="Ver detalhes"
-              >
-                <List className="w-4 h-4 text-gray-600" />
-              </button>
+            {(onViewDetails || detailsComingSoon) && (
+              <div className="relative">
+                <button
+                  onClick={detailsComingSoon ? undefined : onViewDetails}
+                  onMouseEnter={() => detailsComingSoon && setShowComingSoonTooltip(true)}
+                  onMouseLeave={() => detailsComingSoon && setShowComingSoonTooltip(false)}
+                  className={`p-1.5 rounded-lg shadow-sm border transition-colors ${darkMode ? 'bg-slate-900/80 hover:bg-slate-900 border-slate-700' : 'bg-white/70 hover:bg-white border-slate-200'}`}
+                  title={detailsComingSoon ? undefined : 'Ver detalhes'}
+                >
+                  <List className="w-4 h-4 text-gray-600" />
+                </button>
+                {detailsComingSoon && showComingSoonTooltip && (
+                  <div
+                    className={`absolute left-1/2 -translate-x-1/2 top-full mt-1 w-56 p-4 rounded-lg shadow-lg border z-50 ${
+                      darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
+                    }`}
+                    style={{ pointerEvents: 'none' }}
+                  >
+                    <h3 className={`text-sm font-semibold mb-2 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
+                      Em Desenvolvimento
+                    </h3>
+                    <div className={`h-px mb-3 ${darkMode ? 'bg-slate-700' : 'bg-gray-200'}`} />
+                    <p className={`text-xs leading-relaxed ${darkMode ? 'text-slate-300' : 'text-gray-600'}`}>
+                      Em breve novas análises de desempenho
+                    </p>
+                  </div>
+                )}
+              </div>
             )}
             {isPositive ? (
               <TrendingUp className="w-4 h-4 text-green-500" />
@@ -256,13 +277,6 @@ export const KPICard: React.FC<KPICardProps> = ({
             </div>
           </div>
           
-          {dataSource && (
-            <div className="pt-2">
-              <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
-                {dataSource}
-              </p>
-            </div>
-          )}
         </div>
       </div>
 

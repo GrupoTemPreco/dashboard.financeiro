@@ -88,6 +88,12 @@ function AppContent() {
     month: new Date().getMonth()
   });
   const [calendarAccumulatedMode, setCalendarAccumulatedMode] = useState(false); // false = diário, true = acumulado
+  const [calendarViewData, setCalendarViewData] = useState<{
+    accountsPayable: any[];
+    financialTransactions: any[];
+    receitasManuais: any[];
+  }>({ accountsPayable: [], financialTransactions: [], receitasManuais: [] });
+  const [calendarDataLoading, setCalendarDataLoading] = useState(false);
   const [loading, setLoading] = useState<{
     isLoading: boolean;
     currentFile?: string;
@@ -121,6 +127,7 @@ function AppContent() {
     loadPaginatedData?: (page: number, pageSize: number, filters: any) => Promise<{ data: any[]; totalCount: number; hasMore: boolean }>;
     initialStartDate?: string;
     initialEndDate?: string;
+    sourceTables?: string[];
   }>({
     isOpen: false,
     title: '',
@@ -140,7 +147,7 @@ function AppContent() {
   const [importAuthError, setImportAuthError] = useState('');
   const [isPermanentlyUnlocked, setIsPermanentlyUnlocked] = useState(false);
   const [dreWarningClosed, setDreWarningClosed] = useState(false);
-  const [entregaResultadoHidden, setEntregaResultadoHidden] = useState(false);
+  const [entregaResultadoHidden, setEntregaResultadoHidden] = useState(true); // padrão: oculto (calendário, gráfico, alertas)
   // unlockClickCount é usado indiretamente através do callback do setState em handleUnlockClick
   // @ts-ignore - valor usado indiretamente via callback do setState
   const [unlockClickCount, setUnlockClickCount] = useState(0);
@@ -850,6 +857,127 @@ function AppContent() {
     };
     loadDataFromSupabase(undefined, undefined, snapshot);
   }, []);
+
+  /** Carrega dados do calendário para o mês selecionado (independente do filtro de período global) */
+  const loadCalendarData = useCallback(async (year: number, month: number, accumulatedMode: boolean) => {
+    setCalendarDataLoading(true);
+    try {
+      const firstDay = new Date(year, month, 1);
+      const lastDay = new Date(year, month + 1, 0);
+      const startDate = format(firstDay, 'yyyy-MM-dd');
+      const endDate = format(lastDay, 'yyyy-MM-dd');
+      const rangeStart = accumulatedMode
+        ? format(new Date(year, 0, 1), 'yyyy-MM-dd')
+        : startDate;
+
+      const { data: importsData } = await supabase.from('importacoes').select('id, is_deleted');
+      const activeImportIds = (importsData || []).filter((imp: any) => !imp.is_deleted).map((imp: any) => imp.id);
+      const hasActiveImports = activeImportIds.length > 0;
+
+      const selectedCodes = filtersRef.current.companies;
+      let filteredBusinessUnits: string[] | null = null;
+      if (selectedCodes.length > 0) {
+        const codesSet = new Set<string>();
+        selectedCodes.forEach((code: string) => {
+          const canonical = toCanonicalBusinessUnit(code);
+          if (canonical) codesSet.add(canonical);
+          const norm = normalizeCode(code);
+          if (norm && norm !== canonical) codesSet.add(norm);
+        });
+        filteredBusinessUnits = codesSet.size > 0 ? Array.from(codesSet) : null;
+      }
+
+      let apData: any[] = [];
+      let transactionsData: any[] = [];
+      let receitasManuaisData: any[] = [];
+
+      if (hasActiveImports) {
+        const allAp: any[] = [];
+        let offset = 0;
+        let hasMore = true;
+        while (hasMore) {
+          let q = supabase
+            .from('contas_a_pagar')
+            .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
+            .in('import_id', activeImportIds)
+            .not('payment_date', 'is', null)
+            .gte('payment_date', rangeStart)
+            .lte('payment_date', endDate);
+          if (filteredBusinessUnits?.length) q = q.in('business_unit', filteredBusinessUnits);
+          const { data, error } = await q.order('payment_date', { ascending: false }).range(offset, offset + 499);
+          if (error) throw error;
+          if (data?.length) {
+            allAp.push(...data);
+            offset += 500;
+            hasMore = data.length === 500;
+          } else hasMore = false;
+        }
+        offset = 0;
+        hasMore = true;
+        while (hasMore) {
+          let q2 = supabase
+            .from('contas_a_pagar')
+            .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
+            .in('import_id', activeImportIds)
+            .gte('due_date', rangeStart)
+            .lte('due_date', endDate);
+          if (filteredBusinessUnits?.length) q2 = q2.in('business_unit', filteredBusinessUnits);
+          const { data: data2, error: err2 } = await q2.order('due_date', { ascending: false }).range(offset, offset + 499);
+          if (err2) throw err2;
+          if (data2?.length) {
+            const ids = new Set(allAp.map((x: any) => x.id));
+            allAp.push(...data2.filter((x: any) => !ids.has(x.id)));
+            offset += 500;
+            hasMore = data2.length === 500;
+          } else hasMore = false;
+        }
+        apData = allAp;
+      }
+
+      try {
+        let q = supabase
+          .from('receitas_manuais')
+          .select('id, status, business_unit, conta, descricao, data, valor')
+          .gte('data', rangeStart)
+          .lte('data', endDate)
+          .order('data', { ascending: false });
+        if (filteredBusinessUnits?.length) q = q.in('business_unit', filteredBusinessUnits);
+        const { data, error } = await q;
+        if (!error) receitasManuaisData = data || [];
+      } catch (_) {}
+
+      if (hasActiveImports) {
+        try {
+          let q = supabase
+            .from('transacoes_financeiras')
+            .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
+            .in('import_id', activeImportIds)
+            .gte('transaction_date', rangeStart)
+            .lte('transaction_date', endDate)
+            .order('transaction_date', { ascending: false });
+          if (filteredBusinessUnits?.length) q = q.in('business_unit', filteredBusinessUnits);
+          const { data, error } = await q;
+          if (!error) transactionsData = data || [];
+        } catch (_) {}
+      }
+
+      setCalendarViewData({
+        accountsPayable: apData,
+        financialTransactions: transactionsData,
+        receitasManuais: receitasManuaisData
+      });
+    } catch (err) {
+      console.error('Erro ao carregar dados do calendário:', err);
+      setCalendarViewData({ accountsPayable: [], financialTransactions: [], receitasManuais: [] });
+    } finally {
+      setCalendarDataLoading(false);
+    }
+  }, []);
+
+  // Carregar dados do calendário ao mudar mês, modo acumulado ou filtro de empresas
+  useEffect(() => {
+    loadCalendarData(calendarDate.year, calendarDate.month, calendarAccumulatedMode);
+  }, [calendarDate.year, calendarDate.month, calendarAccumulatedMode, filters.companies, loadCalendarData]);
 
   const loadImportsFromSupabase = async () => {
     try {
@@ -3856,7 +3984,7 @@ function AppContent() {
     }
   };
 
-  const openKPIDetail = (title: string, data: any[], type: 'accounts_payable' | 'revenues' | 'transactions' | 'generic' | 'mixed' | 'total_inflows' | 'total_outflows' | 'initial_balance') => {
+  const openKPIDetail = (title: string, data: any[], type: 'accounts_payable' | 'revenues' | 'transactions' | 'generic' | 'mixed' | 'total_inflows' | 'total_outflows' | 'initial_balance', sourceTables?: string[]) => {
     // Período atual do dashboard (mesmo que está filtrado no card)
     const periodStart = filters.startDate?.trim() || getDefaultPeriod().start;
     const periodEnd = filters.endDate?.trim() || getDefaultPeriod().end;
@@ -3884,7 +4012,8 @@ function AppContent() {
       type,
       loadPaginatedData: isInitialBalance ? undefined : loadPaginatedData,
       initialStartDate: isInitialBalance ? '' : periodStart,
-      initialEndDate: isInitialBalance ? '' : periodEnd
+      initialEndDate: isInitialBalance ? '' : periodEnd,
+      sourceTables
     });
   };
 
@@ -3896,7 +4025,8 @@ function AppContent() {
       type: 'generic',
       loadPaginatedData: undefined,
       initialStartDate: undefined,
-      initialEndDate: undefined
+      initialEndDate: undefined,
+      sourceTables: undefined
     });
   };
 
@@ -4073,6 +4203,10 @@ function AppContent() {
 
     return [...revenueData, ...cmvData, ...expensesData];
   }, [getFilteredDirectRevenueSales, getFilteredCMVDRE, getFilteredExpenses]);
+
+  // Referência para evitar warning de variável não usada (será usado quando modais de detalhes forem implementados)
+  void getFilteredFinalBalance;
+  void getFilteredOperationalResult;
 
   // CMV de vendas_por_usuario (coluna custo) - forecasted = período anterior
   const cmvTotals = useMemo(() => ({
@@ -4576,6 +4710,107 @@ function AppContent() {
     return days;
   }, [getFilteredRevenues, accountsPayable, forecastedEntries, financialTransactions, initialBalances, companies, filters.groups, filters.companies, calendarAccumulatedMode]);
 
+  // Fluxo diário do calendário: usa dados carregados por loadCalendarData, due_date para previsto, payment_date para realizado, sem forecastedEntries
+  const calendarDailyCashFlow = useMemo(() => {
+    const { accountsPayable: calAp, financialTransactions: calTx, receitasManuais: calRec } = calendarViewData;
+    const calRevenues = calRec.map((r: any) => ({
+      business_unit: r.business_unit,
+      payment_date: r.data,
+      amount: Number(r.valor) || 0,
+      status: r.status || 'previsto'
+    }));
+
+    const year = calendarDate.year;
+    const month = calendarDate.month;
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const rangeStart = calendarAccumulatedMode ? new Date(year, 0, 1) : firstDay;
+    const rangeEnd = lastDay;
+
+    const days: any[] = [];
+    const hasActiveFilters = filters.companies.length > 0;
+    const filteredCompanyCodes = companies
+      .filter(c => filters.companies.length === 0 || filters.companies.some((code: string) => String(code).trim() === String(c.company_code ?? '').trim() || normalizeCode(code) === normalizeCode(c.company_code)))
+      .map(c => c.company_code);
+    const normalizedCompanyCodes = filteredCompanyCodes.map((code: string) => normalizeCode(code));
+    const filterByCompany = (item: any) => {
+      if (companies.length === 0 || !hasActiveFilters) return true;
+      return normalizedCompanyCodes.includes(normalizeCode(item.business_unit));
+    };
+
+    const initialBalancesCal = getCalendarInitialBalances;
+
+    for (let d = new Date(rangeStart); d <= rangeEnd; d.setDate(d.getDate() + 1)) {
+      const dateStr = d.toISOString().split('T')[0];
+      let dayInitialBalance: number;
+      let dayForecastedInflows: number;
+      let dayActualInflows: number;
+      let dayForecastedOutflows: number;
+      let dayActualOutflows: number;
+      let forecastedBalance: number;
+      let actualBalance: number;
+
+      if (calendarAccumulatedMode) {
+        const balancesUpToDate = initialBalancesCal.filter((bal: any) => {
+          if (!filterByCompany(bal)) return false;
+          const balanceDate = bal?.balance_date;
+          return balanceDate && balanceDate <= dateStr;
+        });
+        const latestByBank = balancesUpToDate.reduce((acc: Record<string, any>, bal: any) => {
+          const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
+          const existing = acc[key];
+          if (!existing || (bal.balance_date || '') > (existing.balance_date || '')) acc[key] = bal;
+          return acc;
+        }, {});
+        dayInitialBalance = Object.values(latestByBank).reduce((sum: number, bal: any) => {
+          const v = bal?.balance;
+          if (v == null || v === '') return sum;
+          const p = parseFloat(String(v));
+          return sum + (isNaN(p) ? 0 : p);
+        }, 0);
+
+        dayForecastedInflows = calRevenues.filter((r: any) => filterByCompany(r) && r.payment_date <= dateStr && ['previsto', 'pendente'].includes(String(r.status || '').toLowerCase())).reduce((s: number, r: any) => s + (r.amount || 0), 0) +
+          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date <= dateStr && (t.amount || 0) > 0 && String(t.status || '').toLowerCase() === 'previsto').reduce((s: number, t: any) => s + (t.amount || 0), 0);
+        dayActualInflows = calRevenues.filter((r: any) => filterByCompany(r) && r.payment_date <= dateStr && String(r.status || '').toLowerCase() === 'realizado').reduce((s: number, r: any) => s + (r.amount || 0), 0) +
+          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date <= dateStr && (t.amount || 0) > 0 && String(t.status || '').toLowerCase() === 'realizado').reduce((s: number, t: any) => s + (t.amount || 0), 0);
+
+        dayForecastedOutflows = calAp.filter((ap: any) => {
+          if (!filterByCompany(ap) || String(ap.status || '').toLowerCase() !== 'previsto') return false;
+          const dt = ap.due_date || ap.payment_date;
+          return dt && dt <= dateStr;
+        }).reduce((s: number, ap: any) => s + (parseFloat(ap.amount) || 0), 0) +
+          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date <= dateStr && (t.amount || 0) < 0 && String(t.status || '').toLowerCase() === 'previsto').reduce((s: number, t: any) => s + Math.abs(t.amount || 0), 0);
+        dayActualOutflows = calAp.filter((ap: any) => filterByCompany(ap) && ap.payment_date && ap.payment_date <= dateStr && String(ap.status || '').toLowerCase() === 'realizado').reduce((s: number, ap: any) => s + (parseFloat(ap.amount) || 0), 0) +
+          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date <= dateStr && (t.amount || 0) < 0 && String(t.status || '').toLowerCase() === 'realizado').reduce((s: number, t: any) => s + Math.abs(t.amount || 0), 0);
+
+        forecastedBalance = dayInitialBalance + dayForecastedInflows - dayForecastedOutflows;
+        actualBalance = dayInitialBalance + dayActualInflows - dayActualOutflows;
+      } else {
+        dayInitialBalance = initialBalancesCal.filter((bal: any) => filterByCompany(bal) && bal?.balance_date === dateStr).reduce((s: number, bal: any) => {
+          const v = bal?.balance;
+          if (v == null || v === '') return s;
+          return s + (parseFloat(String(v)) || 0);
+        }, 0);
+
+        dayForecastedInflows = calRevenues.filter((r: any) => filterByCompany(r) && r.payment_date === dateStr && ['previsto', 'pendente'].includes(String(r.status || '').toLowerCase())).reduce((s: number, r: any) => s + (r.amount || 0), 0) +
+          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date === dateStr && (t.amount || 0) > 0 && String(t.status || '').toLowerCase() === 'previsto').reduce((s: number, t: any) => s + (t.amount || 0), 0);
+        dayActualInflows = calRevenues.filter((r: any) => filterByCompany(r) && r.payment_date === dateStr && String(r.status || '').toLowerCase() === 'realizado').reduce((s: number, r: any) => s + (r.amount || 0), 0) +
+          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date === dateStr && (t.amount || 0) > 0 && String(t.status || '').toLowerCase() === 'realizado').reduce((s: number, t: any) => s + (t.amount || 0), 0);
+
+        dayForecastedOutflows = calAp.filter((ap: any) => filterByCompany(ap) && String(ap.status || '').toLowerCase() === 'previsto' && (ap.due_date === dateStr || ap.payment_date === dateStr)).reduce((s: number, ap: any) => s + (parseFloat(ap.amount) || 0), 0) +
+          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date === dateStr && (t.amount || 0) < 0 && String(t.status || '').toLowerCase() === 'previsto').reduce((s: number, t: any) => s + Math.abs(t.amount || 0), 0);
+        dayActualOutflows = calAp.filter((ap: any) => filterByCompany(ap) && ap.payment_date === dateStr && String(ap.status || '').toLowerCase() === 'realizado').reduce((s: number, ap: any) => s + (parseFloat(ap.amount) || 0), 0) +
+          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date === dateStr && (t.amount || 0) < 0 && String(t.status || '').toLowerCase() === 'realizado').reduce((s: number, t: any) => s + Math.abs(t.amount || 0), 0);
+
+        forecastedBalance = dayInitialBalance + dayForecastedInflows - dayForecastedOutflows;
+        actualBalance = dayInitialBalance + dayActualInflows - dayActualOutflows;
+      }
+
+      days.push({ date: dateStr, forecastedInflows: dayForecastedInflows, actualInflows: dayActualInflows, forecastedOutflows: dayForecastedOutflows, actualOutflows: dayActualOutflows, forecastedBalance, actualBalance });
+    }
+    return days;
+  }, [calendarViewData, calendarDate.year, calendarDate.month, calendarAccumulatedMode, getCalendarInitialBalances, companies, filters.companies, filters.groups]);
+
   const calendarData = useMemo(() => {
     const year = calendarDate.year;
     const month = calendarDate.month;
@@ -4585,7 +4820,7 @@ function AppContent() {
 
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const dayData = dailyCashFlow.find(d => d.date === dateStr);
+      const dayData = calendarDailyCashFlow.find(d => d.date === dateStr);
 
       if (dayData) {
         // Usa o saldo final de cada dia (previsto e realizado)
@@ -4621,7 +4856,7 @@ function AppContent() {
     }
 
     return calendarDays;
-  }, [dailyCashFlow, calendarDate.year, calendarDate.month, getCalendarInitialBalances]);
+  }, [calendarDailyCashFlow, calendarDate.year, calendarDate.month, getCalendarInitialBalances]);
 
   const uniqueGroups = useMemo(() => [...new Set(companies.map(c => c.group_name))], [companies]);
   const companiesForSidebar = useMemo(() =>
@@ -5272,7 +5507,7 @@ function AppContent() {
                       </div>
                       {(kpiData.initialBalance?.hasBalance !== false || showLatestInitialBalance) && (
                         <button
-                          onClick={() => openKPIDetail('Detalhes: Saldo Inicial', getFilteredInitialBalances, 'initial_balance')}
+                          onClick={() => openKPIDetail('Detalhes: Saldo Inicial', getFilteredInitialBalances, 'initial_balance', ['saldos_iniciais'])}
                           className={`p-1.5 rounded-lg shadow-sm transition-colors ${
                             darkMode ? 'bg-slate-900 hover:bg-slate-800' : 'bg-white hover:bg-gray-100'
                           }`}
@@ -5375,8 +5610,7 @@ function AppContent() {
                         color="green"
                         section="cashflow"
                         darkMode={darkMode}
-                        onViewDetails={() => openKPIDetail('Detalhes: Total de Recebimentos', getFilteredTotalInflows, 'total_inflows')}
-                        dataSource="Carregado de receitas manuais e transações financeiras (apenas valores positivos)"
+                        onViewDetails={() => openKPIDetail('Detalhes: Total de Recebimentos', getFilteredTotalInflows, 'total_inflows', ['receitas', 'transacoes_financeiras'])}
                       loading={dataLoading}
                       />
                       <KPICard
@@ -5387,8 +5621,7 @@ function AppContent() {
                         color="red"
                         section="cashflow"
                         darkMode={darkMode}
-                        onViewDetails={() => openKPIDetail('Detalhes: Total de Pagamentos', getFilteredTotalOutflowsTable, 'total_outflows')}
-                        dataSource="Card: contas a pagar + transações (negativas). Tabela de detalhes: somente contas a pagar."
+                        onViewDetails={() => openKPIDetail('Detalhes: Total de Pagamentos', getFilteredTotalOutflowsTable, 'total_outflows', ['contas_a_pagar', 'transacoes_financeiras'])}
                         forecastedLabel="Previsto (por vencimento)"
                         actualLabel="Realizado (por pagamento)"
                       loading={dataLoading}
@@ -5401,8 +5634,7 @@ function AppContent() {
                         color="purple"
                         section="cashflow"
                         darkMode={darkMode}
-                        onViewDetails={() => openKPIDetail('Detalhes: Saldo Final', getFilteredFinalBalance, 'mixed')}
-                        dataSource="Calculado: Saldo Inicial + Recebimentos - Pagamentos"
+                        detailsComingSoon
                       loading={dataLoading}
                       />
                   </>
@@ -5433,13 +5665,12 @@ function AppContent() {
                         color="yellow"
                         section="result"
                         darkMode={darkMode}
+                        detailsComingSoon
                         forecastedLabel={
                           directRevenueSalesTotals
                             ? `Período anterior (${format(parseISO(directRevenueSalesTotals.prevStart), 'dd/MM/yy')} - ${format(parseISO(directRevenueSalesTotals.prevEnd), 'dd/MM/yy')})`
                             : 'Período anterior'
                         }
-                        onViewDetails={() => openKPIDetail('Detalhes: Receita Direta', getFilteredDirectRevenueSales, 'generic')}
-                        dataSource="Carregado de Entrega de Resultado (vendas_por_usuario)"
                       loading={dataLoading}
                       />
                       <KPICard
@@ -5451,13 +5682,12 @@ function AppContent() {
                         color="orange"
                         section="result"
                         darkMode={darkMode}
+                        detailsComingSoon
                         forecastedLabel={
                           directCmvSalesTotals
                             ? `Período anterior (${format(parseISO(directCmvSalesTotals.prevStart), 'dd/MM/yy')} - ${format(parseISO(directCmvSalesTotals.prevEnd), 'dd/MM/yy')})`
                             : 'Período anterior'
                         }
-                        onViewDetails={() => openKPIDetail('Detalhes: CMV', getFilteredCMVDRE, 'mixed')}
-                        dataSource="Carregado de Entrega de Resultado (vendas_por_usuario - coluna custo)"
                       loading={dataLoading}
                       />
                       <KPICard
@@ -5470,8 +5700,7 @@ function AppContent() {
                         darkMode={darkMode}
                         forecastedLabel="Previsto (por vencimento)"
                         actualLabel="Realizado (por pagamento)"
-                        onViewDetails={() => openKPIDetail('Detalhes: Total de Despesas', getFilteredExpenses, 'mixed')}
-                        dataSource="Mesma lógica do Total de Pagamentos: contas a pagar (payment_date/due_date) + transações negativas"
+                        onViewDetails={() => openKPIDetail('Detalhes: Total de Despesas', getFilteredTotalOutflowsTable, 'total_outflows', ['contas_a_pagar', 'transacoes_financeiras'])}
                       loading={dataLoading}
                       />
                       <KPICard
@@ -5483,8 +5712,7 @@ function AppContent() {
                         color="indigo"
                         section="result"
                         darkMode={darkMode}
-                        onViewDetails={() => openKPIDetail('Detalhes: Resultado Operacional', getFilteredOperationalResult, 'mixed')}
-                        dataSource="Calculado: Receita Direta - CMV - Total de Despesas"
+                        detailsComingSoon
                       loading={dataLoading}
                       />
                   </>
@@ -5492,56 +5720,59 @@ function AppContent() {
 
                 {entregaResultadoHidden ? (
                   <div className={`mt-4 mb-4 flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${darkMode ? 'bg-slate-700/50 border border-slate-600' : 'bg-slate-100 border border-slate-300'}`}>
-                    <span className={darkMode ? 'text-slate-400' : 'text-slate-600'}>Calendário e gráficos ocultos</span>
+                    <span className={darkMode ? 'text-slate-400' : 'text-slate-600'}>Calendário, gráfico e alertas ocultos</span>
                     <button
                       type="button"
                       onClick={() => setEntregaResultadoHidden(false)}
                       className={`inline-flex items-center justify-center p-2 rounded-lg border transition-colors ${darkMode ? 'border-slate-500 bg-slate-700/50 text-sky-300 hover:bg-slate-600 hover:text-sky-200' : 'border-slate-300 bg-slate-100 text-sky-600 hover:bg-slate-200 hover:text-sky-700'}`}
-                      title="Mostrar calendário e gráficos"
-                      aria-label="Mostrar calendário e gráficos"
+                      title="Mostrar calendário, gráfico e alertas"
+                      aria-label="Mostrar calendário, gráfico e alertas"
                     >
                       <Eye className="w-5 h-5" />
                     </button>
                   </div>
                 ) : (
-                  <>
-                <div className={`mt-4 mb-4 px-3 py-2 rounded-lg text-sm flex items-center justify-between gap-3 ${darkMode ? 'bg-amber-900/40 text-amber-200 border border-amber-700' : 'bg-amber-50 text-amber-900 border border-amber-200'}`}>
-                  <span>Daqui em diante, as informações podem estar incorretas, esses dados estão sendo conferidos ainda!!</span>
-                  <button
-                    type="button"
-                    onClick={() => setEntregaResultadoHidden(!entregaResultadoHidden)}
-                    className={`flex-shrink-0 inline-flex items-center justify-center p-2 rounded-lg border transition-colors ${darkMode ? 'border-slate-500 bg-slate-700/50 text-sky-300 hover:bg-slate-600 hover:text-sky-200' : 'border-slate-300 bg-slate-100 text-sky-600 hover:bg-slate-200 hover:text-sky-700'}`}
-                    title="Ocultar seção"
-                    aria-label="Ocultar seção"
-                  >
-                    <EyeOff className="w-5 h-5" />
-                  </button>
-                </div>
+                  <div className={`mt-4 mb-4 px-3 py-2 rounded-lg text-sm flex items-center justify-between gap-3 ${darkMode ? 'bg-amber-900/40 text-amber-200 border border-amber-700' : 'bg-amber-50 text-amber-900 border border-amber-200'}`}>
+                    <span>Esses dados ainda estão sendo corrigidos, aguarde um momento.</span>
+                    <button
+                      type="button"
+                      onClick={() => setEntregaResultadoHidden(true)}
+                      className={`flex-shrink-0 inline-flex items-center justify-center p-2 rounded-lg border transition-colors ${darkMode ? 'border-slate-500 bg-slate-700/50 text-sky-300 hover:bg-slate-600 hover:text-sky-200' : 'border-slate-300 bg-slate-100 text-sky-600 hover:bg-slate-200 hover:text-sky-700'}`}
+                      title="Ocultar calendário, gráfico e alertas"
+                      aria-label="Ocultar calendário, gráfico e alertas"
+                    >
+                      <EyeOff className="w-5 h-5" />
+                    </button>
+                  </div>
+                )}
 
-              {/* Calendar and Chart Section */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8 items-start">
-                <div>
-                  <CalendarView
-                    data={calendarData}
-                    year={calendarDate.year}
-                    month={calendarDate.month}
-                    onMonthChange={(year, month) => setCalendarDate({ year, month })}
-                    darkMode={darkMode}
-                    accumulatedMode={calendarAccumulatedMode}
-                    onToggleAccumulatedMode={() => setCalendarAccumulatedMode(!calendarAccumulatedMode)}
-                  />
+              {/* Calendar, Chart and Alerts - ocultos quando entregaResultadoHidden */}
+              {!entregaResultadoHidden && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8 items-start">
+                  <div>
+                    <CalendarView
+                      data={calendarData}
+                      year={calendarDate.year}
+                      month={calendarDate.month}
+                      onMonthChange={(year, month) => setCalendarDate({ year, month })}
+                      darkMode={darkMode}
+                      accumulatedMode={calendarAccumulatedMode}
+                      onToggleAccumulatedMode={() => setCalendarAccumulatedMode(!calendarAccumulatedMode)}
+                      loading={calendarDataLoading}
+                    />
+                  </div>
+                  <div className="space-y-4">
+                    {dataLoading ? (
+                      <ChartSkeleton darkMode={darkMode} />
+                    ) : (
+                      <CashFlowChart data={cashFlowData} darkMode={darkMode} alerts={alertsData} />
+                    )}
+                    <CashFlowAlerts data={alertsData} darkMode={darkMode} />
+                  </div>
                 </div>
-                <div className="space-y-4">
-                  {dataLoading ? (
-                    <ChartSkeleton darkMode={darkMode} />
-                  ) : (
-                    <CashFlowChart data={cashFlowData} darkMode={darkMode} alerts={alertsData} />
-                  )}
-                  <CashFlowAlerts data={alertsData} darkMode={darkMode} />
-                </div>
-              </div>
+              )}
 
-              {/* Monthly Comparison */}
+              {/* Monthly Comparison - sempre visível */}
               {dataLoading ? (
                 <PageLoader darkMode={darkMode} message="Carregando comparação mensal..." />
               ) : (
@@ -5550,8 +5781,6 @@ function AppContent() {
                   darkMode={darkMode} 
                 />
               )}
-                  </>
-                )}
               </div>
             </>
           )}
@@ -5774,6 +6003,7 @@ function AppContent() {
         loadPaginatedData={modalState.loadPaginatedData}
         initialStartDate={modalState.initialStartDate}
         initialEndDate={modalState.initialEndDate}
+        sourceTables={modalState.sourceTables}
         onReceitasManuaisSaved={refreshWithCurrentFilters}
         onSaldosIniciaisSaved={refreshWithCurrentFilters}
         onRefreshDetail={refreshWithCurrentFilters}

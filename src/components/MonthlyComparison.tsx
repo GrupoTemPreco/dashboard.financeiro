@@ -814,63 +814,44 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
     }
 
     if (grouping === 'day') {
-      // Group by day - need to process raw filtered data by day
+      // Agrupamento por dia: comparação contextual (ano do dia vs ano anterior)
+      // Para cada data D: current = valor em D, previous = valor em (D - 1 ano)
+      // IMPORTANTE: usar dados do range expandido (inclui ano anterior) para ter previous
+      const [startY] = dateRange.start.split('-').map(Number);
+      const expandedStart = `${startY - 1}-${dateRange.start.slice(5)}`;
+      const inExpandedRange = (dateStr: string) =>
+        dateStr >= expandedStart && dateStr <= dateRange.end;
+
       const dailyData: Array<{ month: string; current: number; previous: number; debtRatioCurrent: number; debtRatioPrevious: number; variationYoY?: number; variationMoM?: number; originalData: any }> = [];
       
-      // Get all unique dates in the filtered data
-      const dateMap = new Map<string, { current: number; previous: number }>();
-      
-      // Process revenues - vendas_por_usuario (amount, data)
+      const byDate = new Map<string, number>();
+      const addToDate = (dateStr: string, amount: number) => {
+        if (!dateStr || dateStr.length < 10) return;
+        byDate.set(dateStr, (byDate.get(dateStr) || 0) + amount);
+      };
+
+      const vendasForDaily = (rawData.vendasPorUsuario || []).filter(v =>
+        v.data && inExpandedRange(String(v.data).split('T')[0])
+      );
+      const accountsForDaily = (rawData.accountsPayable || []).filter(ap =>
+        ap.payment_date && inExpandedRange(String(ap.payment_date).split('T')[0])
+      );
+
       if (selectedMetric === 'revenue') {
-        filteredData.vendasPorUsuario.forEach(v => {
-          if (v.data) {
-            const dateStr = String(v.data).split('T')[0];
-            const dateParts = dateStr.split('-');
-            const year = parseInt(dateParts[0], 10);
-            const dateKey = dateStr;
-            const isCurrentYear = year === new Date().getFullYear();
-            
-            if (!dateMap.has(dateKey)) {
-              dateMap.set(dateKey, { current: 0, previous: 0 });
-            }
-            const dayData = dateMap.get(dateKey)!;
-            const amount = Number(v.amount) || 0;
-            if (isCurrentYear) {
-              dayData.current += amount;
-            } else {
-              dayData.previous += amount;
-            }
-          }
+        vendasForDaily.forEach(v => {
+          if (v.data) addToDate(String(v.data).split('T')[0], Number(v.amount) || 0);
         });
       }
       
-      // Process CMV - vendas_por_usuario (custo, data)
       if (selectedMetric === 'cogs') {
-        filteredData.vendasPorUsuario.forEach(v => {
-          if (v.data) {
-            const dateStr = String(v.data).split('T')[0];
-            const dateParts = dateStr.split('-');
-            const year = parseInt(dateParts[0], 10);
-            const dateKey = dateStr;
-            const isCurrentYear = year === new Date().getFullYear();
-            
-            if (!dateMap.has(dateKey)) {
-              dateMap.set(dateKey, { current: 0, previous: 0 });
-            }
-            const dayData = dateMap.get(dateKey)!;
-            const custo = Math.abs(Number(v.custo) || 0);
-            if (isCurrentYear) {
-              dayData.current += custo;
-            } else {
-              dayData.previous += custo;
-            }
-          }
+        vendasForDaily.forEach(v => {
+          if (v.data) addToDate(String(v.data).split('T')[0], Math.abs(Number(v.custo) || 0));
         });
       }
       
       // Process Loans
       if (selectedMetric === 'loans') {
-        filteredData.accountsPayable.forEach(ap => {
+        accountsForDaily.forEach(ap => {
           if (ap.payment_date && ap.status?.toLowerCase() === 'realizado') {
             // Check if creditor name contains "empréstimo" or "emprestimo" anywhere in the string (case insensitive)
             const credorVal = ap.creditor ?? ap.credor;
@@ -892,61 +873,72 @@ export const MonthlyComparison: React.FC<MonthlyComparisonProps> = ({ rawData, d
             const isLoan = creditorIsLoan || chartIsLoan;
             
             if (isLoan) {
-              // Extrair ano diretamente da string para evitar problemas de timezone
-              const dateStr = String(ap.payment_date);
-              const dateParts = dateStr.split('-');
-              const year = parseInt(dateParts[0], 10);
-              const dateKey = ap.payment_date;
-              const isCurrentYear = year === new Date().getFullYear();
-              
-              if (!dateMap.has(dateKey)) {
-                dateMap.set(dateKey, { current: 0, previous: 0 });
-              }
-              const dayData = dateMap.get(dateKey)!;
-              if (isCurrentYear) {
-                dayData.current += Math.abs(ap.amount || 0);
-              } else {
-                dayData.previous += Math.abs(ap.amount || 0);
-              }
+              addToDate(String(ap.payment_date).split('T')[0], Math.abs(ap.amount || 0));
             }
           }
         });
       }
       
-      // Convert to array and sort by date
-      const sortedDates = Array.from(dateMap.entries())
-        .filter(([dateKey]) => {
-          const date = new Date(dateKey);
-          return date >= new Date(dateRange.start) && date <= new Date(dateRange.end);
-        })
-        .sort(([a], [b]) => new Date(a).getTime() - new Date(b).getTime());
-      
-      sortedDates.forEach(([dateKey, values]) => {
-        const date = new Date(dateKey);
-        const yearShort = String(date.getFullYear()).slice(-2);
-        const dayLabel = `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${yearShort}`;
-        const variationYoY = (selectedMetric === 'revenue' || selectedMetric === 'cogs')
-          ? (values.previous > 0
-            ? ((values.current - values.previous) / values.previous) * 100
-            : values.current > 0 ? 100 : 0)
-          : undefined;
-        
+      // Gerar datas do range (dia a dia) - comparação contextual: ano do dia vs ano anterior
+      const parseLocal = (s: string) => {
+        const [y, m, d] = s.split('-').map(Number);
+        return new Date(y, (m || 1) - 1, d || 1);
+      };
+      const start = parseLocal(dateRange.start);
+      const end = parseLocal(dateRange.end);
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+      const datesToShow: string[] = [];
+      let d = new Date(start);
+      while (d <= end) {
+        if (d <= today) {
+          const y = d.getFullYear();
+          const m = (d.getMonth() + 1).toString().padStart(2, '0');
+          const day = d.getDate().toString().padStart(2, '0');
+          datesToShow.push(`${y}-${m}-${day}`);
+        }
+        d.setDate(d.getDate() + 1);
+      }
+
+      datesToShow.forEach((dateStr) => {
+        const parts = dateStr.split('-').map(Number);
+        const y = parts[0];
+        const m = parts[1];
+        const day = parts[2];
+        const prevYearStr = `${y - 1}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+        const current = byDate.get(dateStr) || 0;
+        const previous = byDate.get(prevYearStr) || 0;
+
+        const yearShort = String(y).slice(-2);
+        const dayLabel = `${day.toString().padStart(2, '0')}/${m.toString().padStart(2, '0')}/${yearShort}`;
+
+        const variationYoY = previous > 0 ? ((current - previous) / previous) * 100 : current > 0 ? 100 : undefined;
+
+        const originalData = {
+          yearContext: { currentYear: y, previousYear: y - 1 },
+          currentYear: { revenue: current, revenueActual: current, cogs: current, loans: current },
+          previousYear: { revenue: previous, revenueActual: previous, cogs: previous, loans: previous }
+        };
+
         dailyData.push({
           month: dayLabel,
-          current: values.current,
-          previous: values.previous,
+          current,
+          previous,
           debtRatioCurrent: 0,
           debtRatioPrevious: 0,
           variationYoY,
           variationMoM: undefined,
-          originalData: null
+          originalData
         });
       });
+
       dailyData.forEach((row, i) => {
-        if ((selectedMetric === 'revenue' || selectedMetric === 'cogs') && i > 0) {
+        if (i > 0) {
           const prev = dailyData[i - 1].current;
           row.variationMoM = prev > 0 ? ((row.current - prev) / prev) * 100 : undefined;
-        } else if ((selectedMetric === 'revenue' || selectedMetric === 'cogs') && i === 0 && row.current > 0) {
+        } else if (row.current > 0) {
           row.variationMoM = 100;
         }
       });

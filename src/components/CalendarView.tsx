@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 
 interface DayData {
   date: number;
@@ -18,9 +18,10 @@ interface CalendarViewProps {
   darkMode?: boolean;
   accumulatedMode?: boolean;
   onToggleAccumulatedMode?: () => void;
+  loading?: boolean;
 }
 
-export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, onMonthChange, darkMode = false, accumulatedMode = false, onToggleAccumulatedMode }) => {
+export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, onMonthChange, darkMode = false, accumulatedMode = false, onToggleAccumulatedMode, loading = false }) => {
   const monthNames = [
     'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
     'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
@@ -209,7 +210,12 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ month, year, data, o
   );
 
   return (
-    <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
+    <div className={`relative ${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6 ${loading ? 'opacity-60 pointer-events-none' : ''}`}>
+      {loading && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/50 dark:bg-slate-950/50 backdrop-blur-sm">
+          <Loader2 className={`w-8 h-8 animate-spin ${darkMode ? 'text-sky-400' : 'text-marsala-600'}`} />
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6 relative">
         <div className="flex items-center space-x-4">
           <button

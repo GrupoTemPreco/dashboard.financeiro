@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { X, Search, Loader2, ChevronDown, Pencil, Plus, RefreshCw } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useNotificationContext } from '../contexts/NotificationContext';
+import { DataSourceNote } from './DataSourceNote';
 
 // Referências estáveis para evitar loop de re-render ao resetar estado (!isOpen)
 const EMPTY_ARR: any[] = [];
@@ -24,6 +25,8 @@ interface KPIDetailModalProps {
   /** Período do dashboard ao abrir o modal (mesmo mês filtrado no card) */
   initialStartDate?: string;
   initialEndDate?: string;
+  /** IDs de tabelas/importadores para exibir fonte no modal */
+  sourceTables?: string[];
   /** Chamado após salvar receitas manuais (para recarregar dados no App) */
   onReceitasManuaisSaved?: () => void;
   /** Códigos de unidades/empresas válidos (company_code normalizado) para validar ao salvar receitas */
@@ -45,6 +48,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
   loadPaginatedData,
   initialStartDate = '',
   initialEndDate = '',
+  sourceTables,
   onReceitasManuaisSaved,
   validUnitCodes = [],
   onShowToast,
@@ -1446,13 +1450,10 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
             </div>
           )}
 
-          <div className="px-6 py-4 bg-gray-50 border-t border-gray-200">
-            <button
-              onClick={onClose}
-              className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
-            >
-              Fechar
-            </button>
+          <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center">
+            {sourceTables && sourceTables.length > 0 && (
+              <DataSourceNote tables={sourceTables} darkMode={false} />
+            )}
           </div>
         </div>
 
