@@ -2,9 +2,10 @@ import React, { useRef, useEffect, useMemo } from 'react';
 import { Upload, Building2, Users, Calendar, Filter, BarChart3, TrendingUp, Activity, FileText, ChevronLeft, ChevronRight, Maximize, ChevronDown, Check, RefreshCw, X } from 'lucide-react';
 import { Filters } from '../types/financial';
 
-// Filtros ocultos por enquanto — cards respondem apenas ao filtro de Empresas (business_unit)
-const SHOW_GROUPS_FILTER = false;
+// Filtro de grupos ativo — filtra por group_name (empresas/lojas do grupo)
+const SHOW_GROUPS_FILTER = true;
 const SHOW_BANKS_FILTER = false;
+const SHOW_REFRESH_BUTTON = false;
 
 interface SidebarProps {
   filters: Filters;
@@ -45,25 +46,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [periodDropdownOpen, setPeriodDropdownOpen] = React.useState(false);
   const [tempStartDate, setTempStartDate] = React.useState(filters.startDate || '');
   const [tempEndDate, setTempEndDate] = React.useState(filters.endDate || '');
-  // Estado pendente: só aplicado ao clicar em "Aplicar filtro" (evita re-render a cada mudança)
+  // Estado pendente: todos os filtros só são aplicados ao clicar em "Aplicar filtro"
+  const [pendingGroups, setPendingGroups] = React.useState<string[]>(filters.groups);
   const [pendingCompanies, setPendingCompanies] = React.useState<string[]>(filters.companies);
+  const [pendingBanks, setPendingBanks] = React.useState<string[]>(filters.banks);
 
   // Sincronizar pendentes quando os filtros aplicados mudarem (ex.: após Aplicar ou Limpar)
   useEffect(() => {
+    setPendingGroups(filters.groups);
     setPendingCompanies(filters.companies);
+    setPendingBanks(filters.banks);
     setTempStartDate(filters.startDate || '');
     setTempEndDate(filters.endDate || '');
-  }, [filters.companies, filters.startDate, filters.endDate]);
+  }, [filters.groups, filters.companies, filters.banks, filters.startDate, filters.endDate]);
 
   const handleGroupChange = (newGroups: string[]) => {
-    const validCompanies = filters.companies.filter(code =>
-      availableCompanies.some(c => codeMatches(c.code, code))
-    );
-    onFiltersChange({
-      ...filters,
-      groups: newGroups,
-      companies: validCompanies
-    });
+    setPendingGroups(newGroups);
+    // Remover empresas que não pertencem mais aos grupos selecionados
+    const newAvailableCompanies = companies.filter(c => newGroups.length === 0 || newGroups.includes(c.group));
+    setPendingCompanies(prev => prev.filter(code => newAvailableCompanies.some(c => codeMatches(c.code, code))));
   };
 
   const handleCompanyChange = (newCompanies: string[]) => {
@@ -71,16 +72,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const handleBankChange = (newBanks: string[]) => {
-    onFiltersChange({
-      ...filters,
-      banks: newBanks
-    });
+    setPendingBanks(newBanks);
   };
 
   const availableCompanies = useMemo(() => {
-    if (filters.groups.length === 0) return companies;
-    return companies.filter(c => filters.groups.includes(c.group));
-  }, [companies, filters.groups]);
+    const activeGroups = pendingGroups.length > 0 ? pendingGroups : filters.groups;
+    if (activeGroups.length === 0) return companies;
+    return companies.filter(c => activeGroups.includes(c.group));
+  }, [companies, pendingGroups, filters.groups]);
 
   const normalizeCode = (code: string) => {
     const s = String(code || '').trim();
@@ -156,9 +155,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="w-full px-3 py-2 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm text-left flex items-center justify-between"
               >
                 <span className="truncate">
-                  {filters.groups.length === 0 
+                  {pendingGroups.length === 0 
                     ? 'Selecionar grupos...' 
-                    : `${filters.groups.length} grupo(s) selecionado(s)`
+                    : `${pendingGroups.length} grupo(s) selecionado(s)`
                   }
                 </span>
                 <ChevronDown className={`w-4 h-4 text-blue-200 transition-transform ${groupDropdownOpen ? 'rotate-180' : ''}`} />
@@ -170,12 +169,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <label key={group} className="flex items-center px-3 py-2 hover:bg-blue-800 cursor-pointer text-sm">
                       <input
                         type="checkbox"
-                        checked={filters.groups.includes(group)}
+                        checked={pendingGroups.includes(group)}
                         onChange={(e) => {
                           if (e.target.checked) {
-                            handleGroupChange([...filters.groups, group]);
+                            handleGroupChange([...pendingGroups, group]);
                           } else {
-                            handleGroupChange(filters.groups.filter(g => g !== group));
+                            handleGroupChange(pendingGroups.filter(g => g !== group));
                           }
                         }}
                         className="mr-2 rounded"
@@ -206,12 +205,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <span className="truncate">
                   {pendingCompanies.length === 0
-                    ? 'Selecionar empresa...'
-                    : (() => {
-                        const code = pendingCompanies[0];
-                        const c = availableCompanies.find(x => codeMatches(x.code, code));
-                        return c ? c.name : code;
-                      })()
+                    ? 'Selecionar empresa(s)...'
+                    : pendingCompanies.length === 1
+                      ? (() => {
+                          const code = pendingCompanies[0];
+                          const c = availableCompanies.find(x => codeMatches(x.code, code));
+                          return c ? c.name : code;
+                        })()
+                      : `${pendingCompanies.length} empresa(s) selecionada(s)`
                   }
                 </span>
                 <ChevronDown className={`w-4 h-4 text-blue-200 transition-transform ${companyDropdownOpen ? 'rotate-180' : ''}`} />
@@ -222,18 +223,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {availableCompanies.map((company, index) => (
                     <label key={`${company.code}-${company.group}-${index}`} className="flex items-center px-3 py-2 hover:bg-blue-800 cursor-pointer text-sm">
                       <input
-                        type="radio"
-                        name="company-filter"
+                        type="checkbox"
                         checked={isCompanySelected(company.code)}
-                        onChange={() => {
-                          // Seleção única: ao clicar, seleciona só esta empresa (ou desmarca se já era a selecionada)
-                          if (isCompanySelected(company.code)) {
-                            handleCompanyChange([]);
+                        onChange={(e) => {
+                          const code = String(company.code ?? '').trim();
+                          if (e.target.checked) {
+                            handleCompanyChange([...pendingCompanies, code]);
                           } else {
-                            handleCompanyChange([String(company.code ?? '').trim()]);
+                            handleCompanyChange(pendingCompanies.filter(c => !codeMatches(c, code)));
                           }
                         }}
-                        className="mr-2"
+                        className="mr-2 rounded"
                       />
                       <span className="text-white">{company.name} <span className="text-blue-200">({company.code})</span></span>
                     </label>
@@ -260,9 +260,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="w-full px-3 py-2 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm text-left flex items-center justify-between"
               >
                 <span className="truncate">
-                  {filters.banks.length === 0
+                  {pendingBanks.length === 0
                     ? 'Selecionar bancos...'
-                    : `${filters.banks.length} banco(s) selecionado(s)`
+                    : `${pendingBanks.length} banco(s) selecionado(s)`
                   }
                 </span>
                 <ChevronDown className={`w-4 h-4 text-blue-200 transition-transform ${bankDropdownOpen ? 'rotate-180' : ''}`} />
@@ -274,12 +274,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <label key={`${bank}-${index}`} className="flex items-center px-3 py-2 hover:bg-blue-800 cursor-pointer text-sm">
                       <input
                         type="checkbox"
-                        checked={filters.banks.includes(bank)}
+                        checked={pendingBanks.includes(bank)}
                         onChange={(e) => {
                           if (e.target.checked) {
-                            handleBankChange([...filters.banks, bank]);
+                            handleBankChange([...pendingBanks, bank]);
                           } else {
-                            handleBankChange(filters.banks.filter(b => b !== bank));
+                            handleBankChange(pendingBanks.filter(b => b !== bank));
                           }
                         }}
                         className="mr-2 rounded"
@@ -297,6 +297,58 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           </div>
           )}
+
+          {/* Botões Aplicar/Limpar — acima do Período para o dropdown não escondê-los */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                onFiltersChange({
+                  ...filters,
+                  groups: [...pendingGroups],
+                  companies: [...pendingCompanies],
+                  banks: [...pendingBanks],
+                  startDate: tempStartDate.trim(),
+                  endDate: tempEndDate.trim()
+                });
+                onFilterApply?.();
+                setGroupDropdownOpen(false);
+                setCompanyDropdownOpen(false);
+                setBankDropdownOpen(false);
+                setPeriodDropdownOpen(false);
+              }}
+              className="flex-1 px-3 py-1.5 bg-sky-500 hover:bg-sky-400 text-white rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-1"
+            >
+              <Filter className="w-4 h-4" />
+              Aplicar filtro
+            </button>
+            <button
+              onClick={() => {
+                setPendingGroups([]);
+                setPendingCompanies([]);
+                setPendingBanks([]);
+                setTempStartDate('');
+                setTempEndDate('');
+                onFiltersChange({
+                  ...filters,
+                  groups: [],
+                  companies: [],
+                  banks: [],
+                  startDate: '',
+                  endDate: ''
+                });
+                onFilterApply?.();
+                setGroupDropdownOpen(false);
+                setCompanyDropdownOpen(false);
+                setBankDropdownOpen(false);
+                setPeriodDropdownOpen(false);
+              }}
+              className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-1"
+              title="Limpar filtros"
+            >
+              <X className="w-4 h-4" />
+              Limpar
+            </button>
+          </div>
 
           {/* Date Range */}
           <div className="space-y-2">
@@ -350,53 +402,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         className="w-full px-2 py-1 bg-blue-900/70 border border-blue-700 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-sm"
                       />
                     </div>
-                    <p className="text-xs text-blue-200">Use &quot;Aplicar filtro&quot; abaixo para aplicar período e demais filtros.</p>
+                    <p className="text-xs text-blue-200">Use &quot;Aplicar filtro&quot; acima para aplicar período e demais filtros.</p>
                   </div>
                 </div>
               )}
             </div>
-          </div>
-
-          {/* Botões globais: aplicam todos os filtros de uma vez (evita re-renders desnecessários) */}
-          <div className="flex gap-2 mt-3">
-            <button
-              onClick={() => {
-                onFiltersChange({
-                  ...filters,
-                  companies: [...pendingCompanies],
-                  startDate: tempStartDate.trim(),
-                  endDate: tempEndDate.trim()
-                });
-                onFilterApply?.();
-                setPeriodDropdownOpen(false);
-                setCompanyDropdownOpen(false);
-              }}
-              className="flex-1 px-3 py-1.5 bg-sky-500 hover:bg-sky-400 text-white rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-1"
-            >
-              <Filter className="w-4 h-4" />
-              Aplicar filtro
-            </button>
-            <button
-              onClick={() => {
-                onFiltersChange({
-                  ...filters,
-                  companies: [],
-                  startDate: '',
-                  endDate: '',
-                  banks: []
-                });
-                setPendingCompanies([]);
-                setTempStartDate('');
-                setTempEndDate('');
-                setPeriodDropdownOpen(false);
-                setCompanyDropdownOpen(false);
-              }}
-              className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-1"
-              title="Limpar filtro"
-            >
-              <X className="w-4 h-4" />
-              Limpar
-            </button>
           </div>
         </div>
         )}
@@ -441,8 +451,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             );
           })}
 
-          {/* Refresh Button */}
-          {onRefresh && (
+          {/* Refresh Button — oculto por padrão */}
+          {SHOW_REFRESH_BUTTON && onRefresh && (
             <button
               onClick={onRefresh}
               className={`w-full flex items-center ${isCollapsed ? 'justify-center px-2' : 'px-3'} py-2 rounded-lg transition-all duration-200 text-sm text-sky-100 hover:bg-sky-700/70 hover:text-white`}

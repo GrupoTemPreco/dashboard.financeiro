@@ -198,16 +198,65 @@ function AppContent() {
     return strCode;
   };
 
-  // Helper: business_unit segue sempre company_code. Inclui forma canônica (02,03,04) e numérica (2,3,4)
-  // para que o .in() encontre registros em qualquer formato no banco (evita diferença no previsto/realizado).
-  const getFilteredBusinessUnits = (_companiesList?: { company_code?: string; company_name?: string }[]): string[] | null => {
-    if (filters.companies.length === 0) return null;
+  // Helper: códigos normalizados das empresas filtradas (por grupo e/ou empresa) — usado em filtros client-side
+  const getFilteredCompanyCodesNormalized = useMemo((): { codes: string[]; hasActive: boolean } => {
+    const hasActive = filters.groups.length > 0 || filters.companies.length > 0;
+    if (!hasActive || companies.length === 0) {
+      return { codes: [], hasActive: false };
+    }
+    let filtered = companies;
+    if (filters.groups.length > 0) {
+      const groupSet = new Set(filters.groups.map((g) => String(g ?? '').trim().toLowerCase()));
+      filtered = filtered.filter((c) => groupSet.has(String(c.group_name ?? '').trim().toLowerCase()));
+    }
+    if (filters.companies.length > 0) {
+      const codeMatches = (a: string, b: string) => {
+        const na = normalizeCode(a || '');
+        const nb = normalizeCode(b || '');
+        if (na === nb) return true;
+        const ca = toCanonicalBusinessUnit(a || '');
+        const cb = toCanonicalBusinessUnit(b || '');
+        return !!(ca && cb && ca === cb);
+      };
+      filtered = filtered.filter((c) =>
+        filters.companies.some((code: string) => codeMatches(String(c.company_code ?? ''), code))
+      );
+    }
+    const codes = filtered.map((c) => normalizeCode(c.company_code ?? ''));
+    return { codes, hasActive: true };
+  }, [companies, filters.groups, filters.companies]);
+
+  // Helper: business_unit deriva de group_name e/ou companies. Inclui forma canônica (02,03,04) e numérica (2,3,4)
+  const getFilteredBusinessUnits = (_companiesList?: { company_code?: string; group_name?: string }[]): string[] | null => {
+    const list = _companiesList ?? companies;
+    if (list.length === 0 || (filters.groups.length === 0 && filters.companies.length === 0)) return null;
+    let filtered = list;
+    if (filters.groups.length > 0) {
+      const groupSet = new Set(filters.groups.map((g) => String(g ?? '').trim().toLowerCase()));
+      filtered = filtered.filter((c) => groupSet.has(String(c.group_name ?? '').trim().toLowerCase()));
+    }
+    if (filters.companies.length > 0) {
+      const codeMatches = (a: string, b: string) => {
+        const na = normalizeCode(a || '');
+        const nb = normalizeCode(b || '');
+        if (na === nb) return true;
+        const ca = toCanonicalBusinessUnit(a || '');
+        const cb = toCanonicalBusinessUnit(b || '');
+        return !!(ca && cb && ca === cb);
+      };
+      filtered = filtered.filter((c) =>
+        filters.companies.some((code: string) => codeMatches(String(c.company_code ?? ''), code))
+      );
+    }
+    if (filtered.length === 0) return ['__NO_MATCH__'];
     const codesSet = new Set<string>();
-    filters.companies.forEach((code: string) => {
+    filtered.forEach((c) => {
+      const code = String(c.company_code ?? '').trim();
+      if (code) codesSet.add(code); // valor exato como no banco
       const canonical = toCanonicalBusinessUnit(code);
       if (canonical) codesSet.add(canonical);
       const norm = normalizeCode(code);
-      if (norm && norm !== canonical) codesSet.add(norm);
+      if (norm) codesSet.add(norm);
     });
     return codesSet.size > 0 ? Array.from(codesSet) : null;
   };
@@ -342,14 +391,18 @@ function AppContent() {
       startDate: filters.startDate,
       endDate: filters.endDate
     };
-    const snapHadCompanies = (snap.companies?.length ?? 0) > 0;
+    const snapHadActiveFilters = (snap.companies?.length ?? 0) > 0 || (snap.groups?.length ?? 0) > 0;
     const shouldApplyState = () => {
       if (thisLoadId !== loadDataVersionRef.current) return false;
-      if (!snapHadCompanies && (filtersRef.current.companies?.length ?? 0) > 0) return false;
+      const curr = filtersRef.current;
+      const currHasFilters = (curr.companies?.length ?? 0) > 0 || (curr.groups?.length ?? 0) > 0;
+      if (!snapHadActiveFilters && currHasFilters) return false;
       return true;
     };
     const markPendingReloadIfStale = () => {
-      if (!snapHadCompanies && (filtersRef.current.companies?.length ?? 0) > 0) pendingLoadAfterCompleteRef.current = true;
+      const curr = filtersRef.current;
+      const currHasFilters = (curr.companies?.length ?? 0) > 0 || (curr.groups?.length ?? 0) > 0;
+      if (!snapHadActiveFilters && currHasFilters) pendingLoadAfterCompleteRef.current = true;
     };
     console.log('🔄 Starting to load data from Supabase...', { loadId: thisLoadId, snapshotCompanies: snap.companies?.length ?? 0, snapshotCompaniesList: snap.companies });
     setDataLoading(true);
@@ -402,18 +455,45 @@ function AppContent() {
 
       const hasActiveImports = activeImportIds.length > 0;
 
-      // business_unit: inclui canônico (02,03,04) e numérico (2,3,4) para não perder registros em qualquer formato
-      const selectedCodes = snap.companies;
+      // business_unit: deriva de group_name e/ou companies. Inclui canônico (02,03,04) e numérico (2,3,4)
       let filteredBusinessUnits: string[] | null = null;
-      if (selectedCodes.length > 0) {
-        const codesSet = new Set<string>();
-        selectedCodes.forEach((code: string) => {
-          const canonical = toCanonicalBusinessUnit(code);
-          if (canonical) codesSet.add(canonical);
-          const norm = normalizeCode(code);
-          if (norm && norm !== canonical) codesSet.add(norm);
-        });
-        filteredBusinessUnits = codesSet.size > 0 ? Array.from(codesSet) : null;
+      if (companiesData && ((snap.groups?.length ?? 0) > 0 || (snap.companies?.length ?? 0) > 0)) {
+        let filtered = companiesData as { company_code?: string; group_name?: string }[];
+        if ((snap.groups?.length ?? 0) > 0) {
+          const groupSet = new Set(snap.groups!.map((g: string) => String(g ?? '').trim().toLowerCase()));
+          filtered = filtered.filter((c: any) => groupSet.has(String(c.group_name ?? '').trim().toLowerCase()));
+        }
+        if ((snap.companies?.length ?? 0) > 0) {
+          const codeMatches = (a: string, b: string) => {
+            const na = normalizeCode(a || '');
+            const nb = normalizeCode(b || '');
+            if (na === nb) return true;
+            const ca = toCanonicalBusinessUnit(a || '');
+            const cb = toCanonicalBusinessUnit(b || '');
+            return !!(ca && cb && ca === cb);
+          };
+          filtered = filtered.filter((c: any) =>
+            snap.companies!.some((code: string) => codeMatches(String(c.company_code ?? ''), code))
+          );
+        }
+        if (filtered.length > 0) {
+          const codesSet = new Set<string>();
+          filtered.forEach((c: any) => {
+            const code = String(c.company_code ?? '').trim();
+            if (code) codesSet.add(code); // valor exato como no banco
+            const canonical = toCanonicalBusinessUnit(code);
+            if (canonical) codesSet.add(canonical);
+            const norm = normalizeCode(code);
+            if (norm) codesSet.add(norm);
+          });
+          filteredBusinessUnits = codesSet.size > 0 ? Array.from(codesSet) : null;
+          if (snap.groups?.length) {
+            console.log(`📌 Filtro grupo(s): ${snap.groups.join(', ')} → ${filtered.length} empresas, ${codesSet.size} business_units:`, Array.from(codesSet).slice(0, 20).join(', ') + (codesSet.size > 20 ? '...' : ''));
+          }
+        } else {
+          // Filtros ativos mas nenhuma empresa corresponde → sentinela para retornar vazio
+          filteredBusinessUnits = ['__NO_MATCH__'];
+        }
       }
 
       // Load accounts payable - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
@@ -422,7 +502,8 @@ function AppContent() {
       if (hasActiveImports) {
         // Carregar registros do período em lotes
         let allData: any[] = [];
-        const batchSize = 500;
+        // Supabase limita ~1000 linhas por query; usar 1000 para maximizar e evitar perda de dados
+        const batchSize = 1000;
         let offset = 0;
         let hasMore = true;
         
@@ -505,27 +586,37 @@ function AppContent() {
         setAccountsPayable(apData);
       }
 
-      // Receita: usar apenas receitas_manuais (tabelas receitas e receita_crediario inativas)
+      // Receita: usar apenas receitas_manuais (paginação 500)
       setRevenues([]);
       setReceitaCrediario([]);
       let receitasManuaisData: any[] = [];
       try {
-        let query = supabase
-          .from('receitas_manuais')
-          .select('id, status, business_unit, conta, descricao, data, valor')
-          .gte('data', startDate)
-          .lte('data', endDate)
-          .order('data', { ascending: false });
-        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-          query = query.in('business_unit', filteredBusinessUnits);
+        let allRec: any[] = [];
+        let offsetRec = 0;
+        let hasMoreRec = true;
+        while (hasMoreRec) {
+          let query = supabase
+            .from('receitas_manuais')
+            .select('id, status, business_unit, conta, descricao, data, valor')
+            .gte('data', startDate)
+            .lte('data', endDate)
+            .order('data', { ascending: false });
+          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+            query = query.in('business_unit', filteredBusinessUnits);
+          }
+          const { data, error } = await query.range(offsetRec, offsetRec + 999);
+          if (error) {
+            console.warn('⚠️ Erro ao carregar receitas_manuais (tabela pode não existir):', error);
+            hasMoreRec = false;
+            break;
+          }
+          const batch = data || [];
+          allRec = [...allRec, ...batch];
+          offsetRec += 1000;
+          hasMoreRec = batch.length === 1000;
         }
-        const { data, error } = await query;
-        if (error) {
-          console.warn('⚠️ Erro ao carregar receitas_manuais (tabela pode não existir):', error);
-        } else {
-          receitasManuaisData = data || [];
-          console.log(`✅ Carregados ${receitasManuaisData.length} registros de receitas_manuais do período ${startDate} a ${endDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
-        }
+        receitasManuaisData = allRec;
+        console.log(`✅ Carregados ${receitasManuaisData.length} registros de receitas_manuais do período ${startDate} a ${endDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
       } catch (err) {
         console.warn('⚠️ Exceção ao carregar receitas_manuais:', err);
       }
@@ -567,7 +658,7 @@ function AppContent() {
           prevEndSales = format(prevEndObj, 'yyyy-MM-dd');
         }
 
-        const batchSizeSales = 1000; // Dentro do limite padrão do Supabase (~1000 linhas); 2000 quebrava a paginação
+        const batchSizeSales = 1000; // Supabase limita ~1000/query; usar 1000 para não perder dados
         let offsetSales = 0;
         let hasMoreSales = true;
         let allSales: any[] = [];
@@ -657,32 +748,38 @@ function AppContent() {
         setDirectCmvSalesTotals(null);
       }
 
-      // Load financial transactions - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
+      // Load financial transactions - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (paginação 500)
       let transactionsData: any[] | null = [];
       if (hasActiveImports) {
         try {
-          let query = supabase
-            .from('transacoes_financeiras')
-            .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
-            .in('import_id', activeImportIds);
-          
-          // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
-          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-            query = query.in('business_unit', filteredBusinessUnits);
+          let allTx: any[] = [];
+          let offsetTx = 0;
+          let hasMoreTx = true;
+          while (hasMoreTx) {
+            let query = supabase
+              .from('transacoes_financeiras')
+              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
+              .in('import_id', activeImportIds)
+              .gte('transaction_date', startDate)
+              .lte('transaction_date', endDate);
+            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+              query = query.in('business_unit', filteredBusinessUnits);
+            }
+            const { data, error } = await query
+              .order('transaction_date', { ascending: false })
+              .range(offsetTx, offsetTx + 999);
+            if (error) {
+              console.warn('⚠️ Error loading financial transactions (table may not exist):', error);
+              hasMoreTx = false;
+              break;
+            }
+            const batch = data || [];
+            allTx = [...allTx, ...batch];
+            offsetTx += 1000;
+            hasMoreTx = batch.length === 1000;
           }
-          
-          const { data, error } = await query
-            .gte('transaction_date', startDate)
-            .lte('transaction_date', endDate)
-            .order('transaction_date', { ascending: false });
-
-          if (error) {
-            console.warn('⚠️ Error loading financial transactions (table may not exist):', error);
-            transactionsData = [];
-          } else {
-            transactionsData = data;
-            console.log(`✅ Carregados ${transactionsData?.length || 0} registros de transacoes_financeiras do período ${startDate} a ${endDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
-          }
+          transactionsData = allTx;
+          console.log(`✅ Carregados ${transactionsData?.length || 0} registros de transacoes_financeiras do período ${startDate} a ${endDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
         } catch (err) {
           console.warn('⚠️ Exception loading financial transactions:', err);
           transactionsData = [];
@@ -693,26 +790,32 @@ function AppContent() {
         setFinancialTransactions(transactionsData);
       }
 
-      // Load forecasted entries - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
+      // Load forecasted entries - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (paginação 500)
       let forecastedData: any[] | null = [];
       if (hasActiveImports) {
-        let query = supabase
-          .from('previstos')
-          .select('import_id, business_unit, due_date, amount, status, chart_of_accounts, supplier, id')
-          .in('import_id', activeImportIds);
-        
-        // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
-        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-          query = query.in('business_unit', filteredBusinessUnits);
+        let allPrev: any[] = [];
+        let offsetPrev = 0;
+        let hasMorePrev = true;
+        while (hasMorePrev) {
+          let query = supabase
+            .from('previstos')
+            .select('import_id, business_unit, due_date, amount, status, chart_of_accounts, supplier, id')
+            .in('import_id', activeImportIds)
+            .gte('due_date', startDate)
+            .lte('due_date', endDate);
+          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+            query = query.in('business_unit', filteredBusinessUnits);
+          }
+          const { data, error } = await query
+            .order('due_date', { ascending: false })
+            .range(offsetPrev, offsetPrev + 999);
+          if (error) throw error;
+          const batch = data || [];
+          allPrev = [...allPrev, ...batch];
+          offsetPrev += 1000;
+          hasMorePrev = batch.length === 1000;
         }
-        
-        const { data, error } = await query
-          .gte('due_date', startDate)
-          .lte('due_date', endDate)
-          .order('due_date', { ascending: false });
-
-        if (error) throw error;
-        forecastedData = data;
+        forecastedData = allPrev;
         console.log(`✅ Carregados ${forecastedData?.length || 0} registros de previstos do período ${startDate} a ${endDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
       }
       if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
@@ -720,36 +823,39 @@ function AppContent() {
         setForecastedEntries(forecastedData);
       }
 
-      // Load revenues DRE - Carregar período amplo (últimos 24 meses) para permitir navegação na tela DRE
-      // A tela DRE filtra localmente conforme o usuário navega entre meses
+      // Load revenues DRE - Carregar período amplo (últimos 24 meses), paginação 500
       let revenuesDREData: any[] | null = [];
       if (hasActiveImports) {
-        // Calcular período amplo: últimos 24 meses a partir da data final
         const wideEndDate = endDate;
         const wideStartDate = new Date(new Date(wideEndDate).setMonth(new Date(wideEndDate).getMonth() - 24))
           .toISOString()
           .split('T')[0];
-        
-        let query = supabase
-          .from('receitas_dre')
-          .select('import_id, business_unit, issue_date, amount, id')
-          .in('import_id', activeImportIds);
-        
-        // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
-        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-          query = query.in('business_unit', filteredBusinessUnits);
+        let allRev: any[] = [];
+        let offsetRev = 0;
+        let hasMoreRev = true;
+        while (hasMoreRev) {
+          let query = supabase
+            .from('receitas_dre')
+            .select('import_id, business_unit, issue_date, amount, id')
+            .in('import_id', activeImportIds)
+            .gte('issue_date', wideStartDate)
+            .lte('issue_date', wideEndDate);
+          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+            query = query.in('business_unit', filteredBusinessUnits);
+          }
+          const { data, error } = await query
+            .order('issue_date', { ascending: false })
+            .range(offsetRev, offsetRev + 999);
+          if (error) {
+            console.error('❌ Error loading revenues DRE:', error);
+            throw error;
+          }
+          const batch = data || [];
+          allRev = [...allRev, ...batch];
+          offsetRev += 1000;
+          hasMoreRev = batch.length === 1000;
         }
-        
-        const { data, error } = await query
-          .gte('issue_date', wideStartDate)
-          .lte('issue_date', wideEndDate)
-          .order('issue_date', { ascending: false });
-
-        if (error) {
-          console.error('❌ Error loading revenues DRE:', error);
-          throw error;
-        }
-        revenuesDREData = data;
+        revenuesDREData = allRev;
         console.log(`✅ Carregados ${revenuesDREData?.length || 0} registros de receitas_dre do período amplo ${wideStartDate} a ${wideEndDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
       }
       if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
@@ -757,36 +863,39 @@ function AppContent() {
         setRevenuesDRE(revenuesDREData);
       }
 
-      // Load CMV DRE - Carregar período amplo (últimos 24 meses) para permitir navegação na tela DRE
-      // A tela DRE filtra localmente conforme o usuário navega entre meses
+      // Load CMV DRE - Carregar período amplo (últimos 24 meses), paginação 500
       let cmvDREData: any[] | null = [];
       if (hasActiveImports) {
-        // Calcular período amplo: últimos 24 meses a partir da data final
         const wideEndDate = endDate;
         const wideStartDate = new Date(new Date(wideEndDate).setMonth(new Date(wideEndDate).getMonth() - 24))
           .toISOString()
           .split('T')[0];
-        
-        let query = supabase
-          .from('cmv_dre')
-          .select('import_id, business_unit, issue_date, amount, chart_of_accounts, status, id')
-          .in('import_id', activeImportIds);
-        
-        // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
-        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-          query = query.in('business_unit', filteredBusinessUnits);
+        let allCmv: any[] = [];
+        let offsetCmv = 0;
+        let hasMoreCmv = true;
+        while (hasMoreCmv) {
+          let query = supabase
+            .from('cmv_dre')
+            .select('import_id, business_unit, issue_date, amount, chart_of_accounts, status, id')
+            .in('import_id', activeImportIds)
+            .gte('issue_date', wideStartDate)
+            .lte('issue_date', wideEndDate);
+          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+            query = query.in('business_unit', filteredBusinessUnits);
+          }
+          const { data, error } = await query
+            .order('issue_date', { ascending: false })
+            .range(offsetCmv, offsetCmv + 999);
+          if (error) {
+            console.error('❌ Error loading CMV DRE:', error);
+            throw error;
+          }
+          const batch = data || [];
+          allCmv = [...allCmv, ...batch];
+          offsetCmv += 1000;
+          hasMoreCmv = batch.length === 1000;
         }
-        
-        const { data, error } = await query
-          .gte('issue_date', wideStartDate)
-          .lte('issue_date', wideEndDate)
-          .order('issue_date', { ascending: false});
-
-        if (error) {
-          console.error('❌ Error loading CMV DRE:', error);
-          throw error;
-        }
-        cmvDREData = data;
+        cmvDREData = allCmv;
         console.log(`✅ Carregados ${cmvDREData?.length || 0} registros de cmv_dre do período amplo ${wideStartDate} a ${wideEndDate}${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
       }
       if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
@@ -794,29 +903,33 @@ function AppContent() {
         setCmvDRE(cmvDREData);
       }
 
-      // Load initial_balances - CARREGAR TODOS OS SALDOS (sem filtro de data)
-      // Carregamos todos para poder buscar o saldo do período e também o mais recente antes do período
-      // Carregar em bloco separado para garantir execução mesmo se outras tabelas falharem
+      // Load initial_balances - CARREGAR TODOS OS SALDOS (sem filtro de data), paginação 500
       try {
         let initialBalancesData: any[] | null = [];
-        
-        // Carregar saldos iniciais (sem filtro de data no banco; filtro de business_unit quando há empresas selecionadas)
-        let query = supabase
-          .from('saldos_iniciais')
-          .select('import_id, business_unit, balance_date, balance, bank_name, id')
-          .order('balance_date', { ascending: false });
-        if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-          query = query.in('business_unit', filteredBusinessUnits);
+        let allBal: any[] = [];
+        let offsetBal = 0;
+        let hasMoreBal = true;
+        while (hasMoreBal) {
+          let query = supabase
+            .from('saldos_iniciais')
+            .select('import_id, business_unit, balance_date, balance, bank_name, id')
+            .order('balance_date', { ascending: false });
+          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+            query = query.in('business_unit', filteredBusinessUnits);
+          }
+          const { data, error } = await query.range(offsetBal, offsetBal + 999);
+          if (error) {
+            console.error('❌ Error loading initial balances:', error);
+            hasMoreBal = false;
+            break;
+          }
+          const batch = data || [];
+          allBal = [...allBal, ...batch];
+          offsetBal += 1000;
+          hasMoreBal = batch.length === 1000;
         }
-        const { data, error } = await query;
-
-        if (error) {
-          console.error('❌ Error loading initial balances:', error);
-          initialBalancesData = [];
-        } else {
-          initialBalancesData = data || [];
-          console.log(`✅ Carregados ${initialBalancesData.length} registros de saldos_iniciais${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
-        }
+        initialBalancesData = allBal;
+        console.log(`✅ Carregados ${initialBalancesData.length} registros de saldos_iniciais${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
         
         if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
         // Sempre definir o estado, mesmo se vazio
@@ -874,17 +987,41 @@ function AppContent() {
       const activeImportIds = (importsData || []).filter((imp: any) => !imp.is_deleted).map((imp: any) => imp.id);
       const hasActiveImports = activeImportIds.length > 0;
 
-      const selectedCodes = filtersRef.current.companies;
+      const f = filtersRef.current;
       let filteredBusinessUnits: string[] | null = null;
-      if (selectedCodes.length > 0) {
-        const codesSet = new Set<string>();
-        selectedCodes.forEach((code: string) => {
-          const canonical = toCanonicalBusinessUnit(code);
-          if (canonical) codesSet.add(canonical);
-          const norm = normalizeCode(code);
-          if (norm && norm !== canonical) codesSet.add(norm);
-        });
-        filteredBusinessUnits = codesSet.size > 0 ? Array.from(codesSet) : null;
+      if (companies.length > 0 && ((f.groups?.length ?? 0) > 0 || (f.companies?.length ?? 0) > 0)) {
+        let filtered = [...companies];
+        if ((f.groups?.length ?? 0) > 0) {
+          const groupSet = new Set(f.groups!.map((g: string) => String(g ?? '').trim().toLowerCase()));
+          filtered = filtered.filter((c) => groupSet.has(String(c.group_name ?? '').trim().toLowerCase()));
+        }
+        if ((f.companies?.length ?? 0) > 0) {
+          const codeMatches = (a: string, b: string) => {
+            const na = normalizeCode(a || '');
+            const nb = normalizeCode(b || '');
+            if (na === nb) return true;
+            const ca = toCanonicalBusinessUnit(a || '');
+            const cb = toCanonicalBusinessUnit(b || '');
+            return !!(ca && cb && ca === cb);
+          };
+          filtered = filtered.filter((c) =>
+            f.companies!.some((code: string) => codeMatches(String(c.company_code ?? ''), code))
+          );
+        }
+        if (filtered.length > 0) {
+          const codesSet = new Set<string>();
+          filtered.forEach((c) => {
+            const code = String(c.company_code ?? '').trim();
+            if (code) codesSet.add(code);
+            const canonical = toCanonicalBusinessUnit(code);
+            if (canonical) codesSet.add(canonical);
+            const norm = normalizeCode(code);
+            if (norm) codesSet.add(norm);
+          });
+          filteredBusinessUnits = codesSet.size > 0 ? Array.from(codesSet) : ['__NO_MATCH__'];
+        } else {
+          filteredBusinessUnits = ['__NO_MATCH__'];
+        }
       }
 
       let apData: any[] = [];
@@ -904,12 +1041,12 @@ function AppContent() {
             .gte('payment_date', rangeStart)
             .lte('payment_date', endDate);
           if (filteredBusinessUnits?.length) q = q.in('business_unit', filteredBusinessUnits);
-          const { data, error } = await q.order('payment_date', { ascending: false }).range(offset, offset + 499);
+          const { data, error } = await q.order('payment_date', { ascending: false }).range(offset, offset + 999);
           if (error) throw error;
           if (data?.length) {
             allAp.push(...data);
-            offset += 500;
-            hasMore = data.length === 500;
+            offset += 1000;
+            hasMore = data.length === 1000;
           } else hasMore = false;
         }
         offset = 0;
@@ -922,42 +1059,58 @@ function AppContent() {
             .gte('due_date', rangeStart)
             .lte('due_date', endDate);
           if (filteredBusinessUnits?.length) q2 = q2.in('business_unit', filteredBusinessUnits);
-          const { data: data2, error: err2 } = await q2.order('due_date', { ascending: false }).range(offset, offset + 499);
+          const { data: data2, error: err2 } = await q2.order('due_date', { ascending: false }).range(offset, offset + 999);
           if (err2) throw err2;
           if (data2?.length) {
             const ids = new Set(allAp.map((x: any) => x.id));
             allAp.push(...data2.filter((x: any) => !ids.has(x.id)));
-            offset += 500;
-            hasMore = data2.length === 500;
+            offset += 1000;
+            hasMore = data2.length === 1000;
           } else hasMore = false;
         }
         apData = allAp;
       }
 
       try {
-        let q = supabase
-          .from('receitas_manuais')
-          .select('id, status, business_unit, conta, descricao, data, valor')
-          .gte('data', rangeStart)
-          .lte('data', endDate)
-          .order('data', { ascending: false });
-        if (filteredBusinessUnits?.length) q = q.in('business_unit', filteredBusinessUnits);
-        const { data, error } = await q;
-        if (!error) receitasManuaisData = data || [];
+        let offsetRm = 0;
+        let hasMoreRm = true;
+        while (hasMoreRm) {
+          let q = supabase
+            .from('receitas_manuais')
+            .select('id, status, business_unit, conta, descricao, data, valor')
+            .gte('data', rangeStart)
+            .lte('data', endDate)
+            .order('data', { ascending: false });
+          if (filteredBusinessUnits?.length) q = q.in('business_unit', filteredBusinessUnits);
+          const { data, error } = await q.range(offsetRm, offsetRm + 999);
+          if (!error && data?.length) {
+            receitasManuaisData = [...receitasManuaisData, ...data];
+            offsetRm += 1000;
+            hasMoreRm = data.length === 1000;
+          } else hasMoreRm = false;
+        }
       } catch (_) {}
 
       if (hasActiveImports) {
         try {
-          let q = supabase
-            .from('transacoes_financeiras')
-            .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
-            .in('import_id', activeImportIds)
-            .gte('transaction_date', rangeStart)
-            .lte('transaction_date', endDate)
-            .order('transaction_date', { ascending: false });
-          if (filteredBusinessUnits?.length) q = q.in('business_unit', filteredBusinessUnits);
-          const { data, error } = await q;
-          if (!error) transactionsData = data || [];
+          let offsetTf = 0;
+          let hasMoreTf = true;
+          while (hasMoreTf) {
+            let q = supabase
+              .from('transacoes_financeiras')
+              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
+              .in('import_id', activeImportIds)
+              .gte('transaction_date', rangeStart)
+              .lte('transaction_date', endDate)
+              .order('transaction_date', { ascending: false });
+            if (filteredBusinessUnits?.length) q = q.in('business_unit', filteredBusinessUnits);
+            const { data, error } = await q.range(offsetTf, offsetTf + 999);
+            if (!error && data?.length) {
+              transactionsData = [...transactionsData, ...data];
+              offsetTf += 1000;
+              hasMoreTf = data.length === 1000;
+            } else hasMoreTf = false;
+          }
         } catch (_) {}
       }
 
@@ -972,12 +1125,12 @@ function AppContent() {
     } finally {
       setCalendarDataLoading(false);
     }
-  }, []);
+  }, [companies]);
 
-  // Carregar dados do calendário ao mudar mês, modo acumulado ou filtro de empresas
+  // Carregar dados do calendário ao mudar mês, modo acumulado ou filtro de empresas/grupos
   useEffect(() => {
     loadCalendarData(calendarDate.year, calendarDate.month, calendarAccumulatedMode);
-  }, [calendarDate.year, calendarDate.month, calendarAccumulatedMode, filters.companies, loadCalendarData]);
+  }, [calendarDate.year, calendarDate.month, calendarAccumulatedMode, filters.companies, filters.groups, loadCalendarData]);
 
   const loadImportsFromSupabase = async () => {
     try {
@@ -3224,25 +3377,18 @@ function AppContent() {
       return filtered;
     }
 
-    const hasActiveFilters = filters.companies.length > 0;
+    const { codes: normalizedCompanyCodes, hasActive: hasActiveFilters } = getFilteredCompanyCodesNormalized;
 
     // Se não há filtros de empresa/grupo ativos, retorna apenas com filtro de data
     if (!hasActiveFilters) {
       return filtered;
     }
 
-    // Filtra saldos baseado em grupos e empresas selecionados
-    const filteredCompanyCodes = companies
-      .filter(c => filters.companies.length === 0 || filters.companies.some((code: string) => String(code).trim() === String(c.company_code ?? '').trim() || normalizeCode(code) === normalizeCode(c.company_code)))
-      .map(c => c.company_code);
-
-    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-
     return filtered.filter(bal => {
       const normalizedBU = normalizeCode(bal.business_unit);
       return normalizedCompanyCodes.includes(normalizedBU);
     });
-  }, [initialBalances, companies, filters.groups, filters.companies, filters.startDate]);
+  }, [initialBalances, companies, getFilteredCompanyCodesNormalized, filters.startDate]);
 
   // Dados detalhados para Saldo Inicial (saldos bancários) - agrupados por banco e filtrados por empresas/grupos
   const getFilteredInitialBalances = useMemo(() => {
@@ -3292,10 +3438,8 @@ function AppContent() {
     const allBalances = (getFilteredInitialBalancesRaw || []).filter(bal => !!bal.balance_date);
     const balancesInPeriod = startDateObj ? allBalances.filter(bal => new Date(bal.balance_date) >= startDateObj) : [];
     let allBalancesForBeforePeriod = (initialBalances || []).filter(bal => !!bal.balance_date);
-    if (companies.length > 0 && (filters.companies.length > 0)) {
-      const normalizedCompanyCodes = companies
-        .filter(c => filters.companies.length === 0 || filters.companies.some((code: string) => String(code).trim() === String(c.company_code ?? '').trim() || normalizeCode(code) === normalizeCode(c.company_code)))
-        .map(c => normalizeCode(c.company_code));
+    if (companies.length > 0 && getFilteredCompanyCodesNormalized.hasActive) {
+      const normalizedCompanyCodes = getFilteredCompanyCodesNormalized.codes;
       allBalancesForBeforePeriod = allBalancesForBeforePeriod.filter(bal => normalizedCompanyCodes.includes(normalizeCode(bal.business_unit)));
     }
     const balancesBeforePeriodFiltered = startDateObj ? allBalancesForBeforePeriod.filter(bal => new Date(bal.balance_date) < startDateObj) : [];
@@ -3329,7 +3473,7 @@ function AppContent() {
       bank_name: bal.bank_name || '-',
       status: 'realizado'
     }));
-  }, [getFilteredInitialBalancesRaw, initialBalances, companies, filters.groups, filters.companies, filters.startDate, showLatestInitialBalance]);
+  }, [getFilteredInitialBalancesRaw, initialBalances, companies, getFilteredCompanyCodesNormalized, filters.startDate, showLatestInitialBalance]);
 
   // Dados detalhados para Total de Recebimentos (receitas + receita_crediario + transações positivas)
   const getFilteredTotalInflows = useMemo(() => {
@@ -4301,18 +4445,12 @@ function AppContent() {
 
     // Aplicar filtros de empresas/grupos se houver (mas sem filtro de data)
     let balancesBeforePeriod = allBalancesForBeforePeriod;
-    if (companies.length > 0) {
-      const hasActiveFilters = filters.companies.length > 0;
-      if (hasActiveFilters) {
-        const filteredCompanyCodes = companies
-          .filter(c => filters.companies.length === 0 || filters.companies.some((code: string) => String(code).trim() === String(c.company_code ?? '').trim() || normalizeCode(code) === normalizeCode(c.company_code)))
-          .map(c => c.company_code);
-        const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-        balancesBeforePeriod = allBalancesForBeforePeriod.filter(bal => {
-          const normalizedBU = normalizeCode(bal.business_unit);
-          return normalizedCompanyCodes.includes(normalizedBU);
-        });
-      }
+    if (companies.length > 0 && getFilteredCompanyCodesNormalized.hasActive) {
+      const normalizedCompanyCodes = getFilteredCompanyCodesNormalized.codes;
+      balancesBeforePeriod = allBalancesForBeforePeriod.filter(bal => {
+        const normalizedBU = normalizeCode(bal.business_unit);
+        return normalizedCompanyCodes.includes(normalizedBU);
+      });
     }
 
     // Filtrar apenas saldos antes do período (balance_date < startDate)
@@ -4463,30 +4601,14 @@ function AppContent() {
 
   // Saldo inicial para o calendário (SEM filtro de período, apenas empresas/grupos)
   const getCalendarInitialBalances = useMemo(() => {
-    // Se não há empresas cadastradas, mostra todos os saldos
-    if (companies.length === 0) {
-      return initialBalances;
-    }
-
-    const hasActiveFilters = filters.companies.length > 0;
-
-    // Se não há filtros ativos, mostra todos os saldos
-    if (!hasActiveFilters) {
-      return initialBalances;
-    }
-
-    // Filtra saldos baseado em grupos e empresas selecionados (SEM filtro de data)
-    const filteredCompanyCodes = companies
-      .filter(c => filters.companies.length === 0 || filters.companies.some((code: string) => String(code).trim() === String(c.company_code ?? '').trim() || normalizeCode(code) === normalizeCode(c.company_code)))
-      .map(c => c.company_code);
-
-    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-
+    if (companies.length === 0) return initialBalances;
+    const { codes: normalizedCompanyCodes, hasActive: hasActiveFilters } = getFilteredCompanyCodesNormalized;
+    if (!hasActiveFilters) return initialBalances;
     return initialBalances.filter(bal => {
       const normalizedBU = normalizeCode(bal.business_unit);
       return normalizedCompanyCodes.includes(normalizedBU);
     });
-  }, [initialBalances, companies, filters.groups, filters.companies]);
+  }, [initialBalances, companies, getFilteredCompanyCodesNormalized]);
 
   // Calculate daily cash flow based on actual data from database (SEM filtro de período)
   const dailyCashFlow = useMemo(() => {
@@ -4497,14 +4619,7 @@ function AppContent() {
     const endDate = new Date(today.getFullYear(), today.getMonth() + 18, 0); // 18 meses à frente (último dia do mês)
 
     const days: any[] = [];
-    
-    // Filtro de empresas/grupos (mesmo usado no calendário)
-    const hasActiveFilters = filters.companies.length > 0;
-    const filteredCompanyCodes = companies
-      .filter(c => filters.companies.length === 0 || filters.companies.some((code: string) => String(code).trim() === String(c.company_code ?? '').trim() || normalizeCode(code) === normalizeCode(c.company_code)))
-      .map(c => c.company_code);
-    const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-    
+    const { codes: normalizedCompanyCodes, hasActive: hasActiveFilters } = getFilteredCompanyCodesNormalized;
     const filterByCompany = (item: any) => {
       if (companies.length === 0 || !hasActiveFilters) return true;
       const normalizedBU = normalizeCode(item.business_unit);
@@ -4708,7 +4823,7 @@ function AppContent() {
     }
 
     return days;
-  }, [getFilteredRevenues, accountsPayable, forecastedEntries, financialTransactions, initialBalances, companies, filters.groups, filters.companies, calendarAccumulatedMode]);
+  }, [getFilteredRevenues, accountsPayable, forecastedEntries, financialTransactions, initialBalances, companies, getFilteredCompanyCodesNormalized, calendarAccumulatedMode]);
 
   // Fluxo diário do calendário: usa dados carregados por loadCalendarData, due_date para previsto, payment_date para realizado, sem forecastedEntries
   const calendarDailyCashFlow = useMemo(() => {
@@ -4728,11 +4843,7 @@ function AppContent() {
     const rangeEnd = lastDay;
 
     const days: any[] = [];
-    const hasActiveFilters = filters.companies.length > 0;
-    const filteredCompanyCodes = companies
-      .filter(c => filters.companies.length === 0 || filters.companies.some((code: string) => String(code).trim() === String(c.company_code ?? '').trim() || normalizeCode(code) === normalizeCode(c.company_code)))
-      .map(c => c.company_code);
-    const normalizedCompanyCodes = filteredCompanyCodes.map((code: string) => normalizeCode(code));
+    const { codes: normalizedCompanyCodes, hasActive: hasActiveFilters } = getFilteredCompanyCodesNormalized;
     const filterByCompany = (item: any) => {
       if (companies.length === 0 || !hasActiveFilters) return true;
       return normalizedCompanyCodes.includes(normalizeCode(item.business_unit));
@@ -4809,7 +4920,7 @@ function AppContent() {
       days.push({ date: dateStr, forecastedInflows: dayForecastedInflows, actualInflows: dayActualInflows, forecastedOutflows: dayForecastedOutflows, actualOutflows: dayActualOutflows, forecastedBalance, actualBalance });
     }
     return days;
-  }, [calendarViewData, calendarDate.year, calendarDate.month, calendarAccumulatedMode, getCalendarInitialBalances, companies, filters.companies, filters.groups]);
+  }, [calendarViewData, calendarDate.year, calendarDate.month, calendarAccumulatedMode, getCalendarInitialBalances, companies, getFilteredCompanyCodesNormalized]);
 
   const calendarData = useMemo(() => {
     const year = calendarDate.year;
@@ -4873,25 +4984,16 @@ function AppContent() {
     // Filter initial_balances based on company selection
     let filteredBalances = initialBalances;
 
-    if (companies.length > 0) {
-      const hasActiveFilters = filters.companies.length > 0;
-
-      if (hasActiveFilters) {
-        const filteredCompanyCodes = companies
-          .filter(c => filters.companies.length === 0 || filters.companies.some((code: string) => String(code).trim() === String(c.company_code ?? '').trim() || normalizeCode(code) === normalizeCode(c.company_code)))
-          .map(c => c.company_code);
-
-        filteredBalances = initialBalances.filter(bal => {
-          const normalizedCompanyCodes = filteredCompanyCodes.map(code => normalizeCode(code));
-          const normalizedBU = normalizeCode(bal.business_unit);
-          return normalizedCompanyCodes.includes(normalizedBU);
-        });
-      }
+    if (companies.length > 0 && getFilteredCompanyCodesNormalized.hasActive) {
+      const normalizedCompanyCodes = getFilteredCompanyCodesNormalized.codes;
+      filteredBalances = initialBalances.filter(bal => {
+        const normalizedBU = normalizeCode(bal.business_unit);
+        return normalizedCompanyCodes.includes(normalizedBU);
+      });
     }
 
-    // Get unique bank names
     return [...new Set(filteredBalances.map(b => b.bank_name))];
-  }, [initialBalances, companies, filters.groups, filters.companies]);
+  }, [initialBalances, companies, getFilteredCompanyCodesNormalized]);
 
   // Generate chart data from daily cash flow
   const cashFlowData = useMemo(() => {
