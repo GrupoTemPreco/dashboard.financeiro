@@ -33,6 +33,9 @@ export interface Notification {
       skippedHeaderFooter: number;
       invalid: number;
     };
+    /** Alertas fixos de qualidade do plano de contas (CAP / DRE) */
+    capCoaMatch?: boolean;
+    capCoaDedupeKey?: string;
   };
 }
 

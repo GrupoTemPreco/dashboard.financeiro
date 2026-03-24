@@ -7,6 +7,7 @@ interface NotificationContextType {
   markAsRead: (id: string) => void;
   markAllAsRead: () => void;
   removeNotification: (id: string) => void;
+  removeNotificationsWhere: (predicate: (n: Notification) => boolean) => void;
   clearAll: () => void;
   unreadCount: number;
 }
@@ -71,6 +72,10 @@ export const NotificationProvider: React.FC<{ children: ReactNode }> = ({ childr
     setNotifications(prev => prev.filter(n => n.id !== id));
   }, []);
 
+  const removeNotificationsWhere = useCallback((predicate: (n: Notification) => boolean) => {
+    setNotifications(prev => prev.filter(n => !predicate(n)));
+  }, []);
+
   const clearAll = useCallback(() => {
     setNotifications([]);
   }, []);
@@ -85,6 +90,7 @@ export const NotificationProvider: React.FC<{ children: ReactNode }> = ({ childr
         markAsRead,
         markAllAsRead,
         removeNotification,
+        removeNotificationsWhere,
         clearAll,
         unreadCount
       }}

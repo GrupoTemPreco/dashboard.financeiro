@@ -1,11 +1,20 @@
-import React, { useState, useEffect } from 'react';
-import { TrendingUp, TrendingDown, DollarSign, Calculator, Target, BarChart3, ChevronLeft, ChevronRight, Save, Edit2, ChevronDown, ChevronRight as ChevronRightIcon } from 'lucide-react';
+import React, { useState, useEffect, useMemo, Fragment } from 'react';
+import { TrendingUp, TrendingDown, DollarSign, Calculator, Target, BarChart3, Save, Edit2, ChevronDown, ChevronRight as ChevronRightIcon, AlertTriangle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { startOfMonth, endOfMonth, subMonths, format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
+import { startOfMonth, endOfMonth, subMonths, format, parseISO } from 'date-fns';
 import { CardSkeleton } from './CardSkeleton';
 import { ChartSkeleton } from './ChartSkeleton';
+import {
+  DespesasOperacionaisTable,
+  computeDespesasOperacionaisValuesMap,
+  getDespesasOperacionaisPeriodLabels
+} from './DespesasOperacionaisTable';
+import { computeDeducoesValuesMap } from '../lib/dreDeducoesValues';
+import { computeLucrosDistribuidosValuesMap } from '../lib/dreLucrosDistribuidosValues';
+import { computeInvestimentoValuesMap } from '../lib/dreInvestimentoValues';
+import { computeFinanciamentoValuesMap } from '../lib/dreFinanciamentoValues';
+import { computeOutrasReceitasDespesasValuesMap } from '../lib/dreOutrasReceitasDespesasValues';
 
 interface DREData {
   category: string;
@@ -52,6 +61,9 @@ interface DREPageProps {
   };
   companies: any[];
   darkMode?: boolean;
+  onRefresh?: () => void;
+  lastAccountsPayableImportAt?: string | null;
+  loading?: boolean;
 }
 
 export const DREPage: React.FC<DREPageProps> = ({
@@ -63,17 +75,29 @@ export const DREPage: React.FC<DREPageProps> = ({
   nonOperationalAccounts,
   filters,
   companies,
-  darkMode = false
+  darkMode = false,
+  onRefresh,
+  lastAccountsPayableImportAt = null,
+  loading: drePageLoading = false
 }) => {
   const [selectedMetric, setSelectedMetric] = useState<'revenue' | 'cmv' | 'operatingExpenses' | 'ebitda' | 'netProfit'>('revenue');
   const [selectedMonth, setSelectedMonth] = useState<Date>(new Date());
-  const [selectedBusinessUnit, setSelectedBusinessUnit] = useState<string>('all');
+  const [selectedBusinessUnit] = useState<string>('all');
   const [selectedPeriod, setSelectedPeriod] = useState<string>(format(new Date(), 'yyyy-MM'));
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [editingBudget, setEditingBudget] = useState<string | null>(null);
   const [tempBudgetValue, setTempBudgetValue] = useState<string>('');
   const [expandedAccounts, setExpandedAccounts] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (filters.startDate) {
+      const raw = filters.startDate.substring(0, 10);
+      const d = parseISO(`${raw}T12:00:00`);
+      if (!isNaN(d.getTime())) setSelectedMonth(d);
+      setSelectedPeriod(`${raw.substring(0, 7)}`);
+    }
+  }, [filters.startDate, filters.endDate]);
 
   // Normalize company code (same logic as App.tsx)
   const normalizeCode = (code: any): string => {
@@ -87,18 +111,32 @@ export const DREPage: React.FC<DREPageProps> = ({
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
       currency: 'BRL',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
     }).format(value);
   };
 
   const getCurrentMonthDates = () => {
+    if (filters.startDate && filters.endDate) {
+      return {
+        start: filters.startDate.substring(0, 10),
+        end: filters.endDate.substring(0, 10)
+      };
+    }
     const start = format(startOfMonth(selectedMonth), 'yyyy-MM-dd');
     const end = format(endOfMonth(selectedMonth), 'yyyy-MM-dd');
     return { start, end };
   };
 
   const getPreviousMonthDates = () => {
+    if (filters.startDate && filters.endDate) {
+      const startDate = parseISO(filters.startDate.substring(0, 10));
+      const prevMonthDate = subMonths(startDate, 1);
+      return {
+        start: format(startOfMonth(prevMonthDate), 'yyyy-MM-dd'),
+        end: format(endOfMonth(prevMonthDate), 'yyyy-MM-dd')
+      };
+    }
     const previousMonth = subMonths(selectedMonth, 1);
     const start = format(startOfMonth(previousMonth), 'yyyy-MM-dd');
     const end = format(endOfMonth(previousMonth), 'yyyy-MM-dd');
@@ -299,95 +337,118 @@ export const DREPage: React.FC<DREPageProps> = ({
     { id: 'receita-liquida', name: 'Receita Líquida', level: 1, editable: false, bg: 'bg-blue-100', bold: true, formula: 'receita-deducoes', expandable: false },
     { id: 'cmv', name: 'CMV', level: 1, editable: true, bg: 'bg-red-50', bold: true, expandable: false },
     { id: 'lucro-bruto', name: 'Lucro Bruto', level: 1, editable: false, bg: 'bg-green-100', bold: true, formula: 'receitaliq-cmv', expandable: false },
-    { id: 'despesas-op', name: 'Despesas Operacionais', level: 1, editable: false, bg: 'bg-orange-50', bold: true, formula: 'sum', expandable: true },
-    { id: 'despesas-op-pessoal', name: 'Despesas operacionais com pessoal', level: 2, editable: false, bg: '', bold: true, formula: 'sum', parent: 'despesas-op', expandable: true },
-    { name: 'Salários Fixos + Horas Extras', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Custo com Motoboy', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Convênio Makebella', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Comissões e Premiações Sobre Vendas', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: '13º. Salário e Férias', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Endomarketing', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Vale Transporte', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Encargos - FGTS', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Encargos - INSS / IRPF', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'FGTS Multa Recisória', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Verba Rescisória', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Uniforme', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Exames Médicos', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Encargo em Atraso - INSS / IRRF', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Encargo em Atraso - FGTS', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Indenização Trabalhista', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { name: 'Pró-Labore', level: 3, editable: true, bg: '', parent: 'despesas-op-pessoal' },
-    { id: 'despesas-op-assessorias', name: 'Despesas operacionais com assessorias', level: 2, editable: false, bg: '', bold: true, formula: 'sum', parent: 'despesas-op', expandable: true },
-    { name: 'Aluguel do POS de Cartão e Crédito', level: 3, editable: true, bg: '', parent: 'despesas-op-assessorias' },
-    { name: 'Escritório de Contabilidade', level: 3, editable: true, bg: '', parent: 'despesas-op-assessorias' },
-    { name: 'Assessoria Juridica', level: 3, editable: true, bg: '', parent: 'despesas-op-assessorias' },
-    { name: 'Cursos, Treinamentos e Despesas de Viagem', level: 3, editable: true, bg: '', parent: 'despesas-op-assessorias' },
-    { name: 'Entidades', level: 3, editable: true, bg: '', parent: 'despesas-op-assessorias' },
-    { name: 'Sistemas e Servidores', level: 3, editable: true, bg: '', parent: 'despesas-op-assessorias' },
-    { name: 'Manutenção de Software + Hardware', level: 3, editable: true, bg: '', parent: 'despesas-op-assessorias' },
-    { name: 'Outras Despesas com Assessorias', level: 3, editable: true, bg: '', parent: 'despesas-op-assessorias' },
-    { name: 'Mensalidades', level: 3, editable: true, bg: '', parent: 'despesas-op-assessorias' },
-    { name: 'Alarmes e Segurança', level: 3, editable: true, bg: '', parent: 'despesas-op-assessorias' },
-    { id: 'despesas-op-admin', name: 'Despesas operacionais administrativas', level: 2, editable: false, bg: '', bold: true, formula: 'sum', parent: 'despesas-op', expandable: true },
-    { name: 'Seguro da Empresa (Imóvel e Veículos)', level: 3, editable: true, bg: '', parent: 'despesas-op-admin' },
-    { name: 'Manutenção de Veículos', level: 3, editable: true, bg: '', parent: 'despesas-op-admin' },
-    { name: 'Prosegur', level: 3, editable: true, bg: '', parent: 'despesas-op-admin' },
-    { name: 'Combustível Operacional', level: 3, editable: true, bg: '', parent: 'despesas-op-admin' },
-    { name: 'Prestador de Serviço Terceirizado', level: 3, editable: true, bg: '', parent: 'despesas-op-admin' },
-    { id: 'despesas-op-func', name: 'Despesas operacionais com funcionamento', level: 2, editable: false, bg: '', bold: true, formula: 'sum', parent: 'despesas-op', expandable: true },
-    { name: 'Aluguel', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'IPTU', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'Energia Elétrica', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'Água / Esgoto', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'Telefone / Acesso a Internet', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'Consumo Interno', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'Consumo Interno - Lojas', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'Mat.Limpeza / Faxina', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'Manutenção de Instalações', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'Taxas e Licenças da Farmácia', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'TFE -Tx Fiscalização Estabelecimento', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'TFA - Tx de Fiscalização Anuncios', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'Promoção e Propaganda', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { name: 'Outras Despesas de Funcionamento', level: 3, editable: true, bg: '', parent: 'despesas-op-func' },
-    { id: 'despesas-financeiras', name: 'Despesas financeiras', level: 2, editable: false, bg: '', bold: true, formula: 'sum', parent: 'despesas-op', expandable: true },
-    { name: 'Juros de Cheque, Duplicatas e Demais Juros', level: 3, editable: true, bg: '', parent: 'despesas-financeiras' },
-    { name: 'Tarifas Bancárias', level: 3, editable: true, bg: '', parent: 'despesas-financeiras' },
-    { name: 'Produtos Vencidos', level: 3, editable: true, bg: '', parent: 'despesas-financeiras' },
-    { name: 'Fundo de Troco - Lojas', level: 3, editable: true, bg: '', parent: 'despesas-financeiras' },
-    { name: 'Quebra de Inventário', level: 3, editable: true, bg: '', parent: 'despesas-financeiras' },
-    { id: 'despesas-extras', name: 'Despesas Extras', level: 2, editable: true, bg: '', bold: true, parent: 'despesas-op' },
-    { id: 'despesas-rateio', name: 'Despesas com rateio', level: 2, editable: false, bg: '', bold: true, formula: 'sum', parent: 'despesas-op', expandable: true },
-    { name: 'Aporte Escritório', level: 3, editable: true, bg: '', parent: 'despesas-rateio' },
+    {
+      id: 'despesas-op',
+      name: 'Despesas Operacionais',
+      level: 1,
+      editable: false,
+      bg: 'bg-orange-50',
+      bold: true,
+      formula: 'sum',
+      expandable: true
+    },
     { id: 'ebitda', name: 'EBITDA', level: 1, editable: false, bg: 'bg-green-200', bold: true, formula: 'lucrobruto-despop', expandable: false },
     { id: 'despesas-nao-op', name: 'Despesas não operacionais', level: 1, editable: false, bg: 'bg-purple-50', bold: true, formula: 'sum', expandable: true },
     { id: 'outras-rec-desp', name: 'Outras receitas e despesas', level: 2, editable: false, bg: '', bold: true, formula: 'sum', parent: 'despesas-nao-op', expandable: true },
-    { name: 'Receita Reembolsável - Makebella', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
-    { name: 'Despesa Reembolsável - Makebella', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
-    { name: 'Receita Reembolsável - Outros', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
-    { name: 'Despesa Reembolsável - Outros', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
-    { name: 'Receita Reembolsável - XBrothers', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
-    { name: 'Despesa Reembolsável - XBrothers', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
-    { name: 'Receita Reembolsável - ESCPP', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
-    { name: 'Despesa Reembolsável - ESCPP', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
+    { id: 'ord-rec-makebella', name: 'Receita Reembolsável - Makebella', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
+    { id: 'ord-desp-makebella', name: 'Despesa Reembolsável - Makebella', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
+    { id: 'ord-rec-outros', name: 'Receita Reembolsável - Outros', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
+    { id: 'ord-desp-outros', name: 'Despesa Reembolsável - Outros', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
+    { id: 'ord-rec-xbrothers', name: 'Receita Reembolsável - XBrothers', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
+    { id: 'ord-desp-xbrothers', name: 'Despesa Reembolsável - XBrothers', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
+    { id: 'ord-rec-escpp', name: 'Receita Reembolsável - ESCPP', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
+    { id: 'ord-desp-escpp', name: 'Despesa Reembolsável - ESCPP', level: 3, editable: true, bg: '', parent: 'outras-rec-desp' },
     { id: 'desp-financiamento', name: 'Despesas com financiamento', level: 2, editable: false, bg: '', bold: true, formula: 'sum', parent: 'despesas-nao-op', expandable: true },
-    { name: 'Empréstimos Recebidos', level: 3, editable: true, bg: '', parent: 'desp-financiamento' },
-    { name: 'Pagamento de Empréstimo / Financiamento', level: 3, editable: true, bg: '', parent: 'desp-financiamento' },
-    { name: 'Pagamento Via Cartão', level: 3, editable: true, bg: '', parent: 'desp-financiamento' },
-    { name: 'Empréstimos Recebidos via Cartão', level: 3, editable: true, bg: '', parent: 'desp-financiamento' },
+    { id: 'fin-emprestimos-recebidos', name: 'Empréstimos Recebidos', level: 3, editable: true, bg: '', parent: 'desp-financiamento' },
+    { id: 'fin-emprestimos-via-cartao', name: 'Empréstimos Recebidos via Cartão', level: 3, editable: true, bg: '', parent: 'desp-financiamento' },
+    { id: 'fin-pagamento-emprestimo', name: 'Pagamento de Empréstimo / Financiamento', level: 3, editable: true, bg: '', parent: 'desp-financiamento' },
+    { id: 'fin-pagamento-via-cartao', name: 'Pagamento Via Cartão', level: 3, editable: true, bg: '', parent: 'desp-financiamento' },
     { id: 'desp-investimento', name: 'Despesas com investimento', level: 2, editable: false, bg: '', bold: true, formula: 'sum', parent: 'despesas-nao-op', expandable: true },
-    { name: 'Investimentos Financeiros', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
-    { name: 'Investimento - Societário / Comercial', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
-    { name: 'Invest. Maq. / Equip. / Moveis', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
-    { name: 'Cartão de Crédito', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
-    { name: 'Reforma do Imóvel', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
+    { id: 'inv-financeiros', name: 'Investimentos Financeiros', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
+    { id: 'inv-societario', name: 'Investimento - Societário / Comercial', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
+    { id: 'inv-maq-equip', name: 'Invest. Maq. / Equip. / Moveis', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
+    { id: 'inv-cartao-credito', name: 'Cartão de Crédito', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
+    { id: 'inv-reforma', name: 'Reforma do Imóvel', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
     { name: 'Recebimento de Dividendos', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
-    { name: 'Rendimento Financeiro', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
+    { id: 'inv-rendimento', name: 'Rendimento Financeiro', level: 3, editable: true, bg: '', parent: 'desp-investimento' },
     { id: 'lucros-distrib', name: 'Lucros distribuidos', level: 2, editable: false, bg: '', bold: true, formula: 'sum', parent: 'despesas-nao-op', expandable: true },
-    { name: 'Distribuição de Lucros', level: 3, editable: true, bg: '', parent: 'lucros-distrib' },
-    { name: 'Capital de Investimentos', level: 3, editable: true, bg: '', parent: 'lucros-distrib' },
+    {
+      id: 'lucros-distribuicao',
+      name: 'Distribuição de Lucros',
+      level: 3,
+      editable: true,
+      bg: '',
+      parent: 'lucros-distrib'
+    },
+    {
+      id: 'lucros-capital-investimentos',
+      name: 'Capital de Investimentos',
+      level: 3,
+      editable: true,
+      bg: '',
+      parent: 'lucros-distrib'
+    },
     { id: 'lucro-liquido', name: 'Lucro Líquido', level: 1, editable: false, bg: 'bg-purple-100', bold: true, formula: 'ebitda-despnaoop', expandable: false }
   ];
+
+  const despesasValuesMap = useMemo(
+    () => computeDespesasOperacionaisValuesMap(accountsPayable, filters, companies),
+    [accountsPayable, filters.startDate, filters.endDate, filters.groups, filters.companies, companies]
+  );
+
+  const deducoesValuesMap = useMemo(
+    () => computeDeducoesValuesMap(accountsPayable, filters, companies),
+    [accountsPayable, filters.startDate, filters.endDate, filters.groups, filters.companies, companies]
+  );
+
+  const lucrosDistribuidosValuesMap = useMemo(
+    () => computeLucrosDistribuidosValuesMap(accountsPayable, filters, companies),
+    [accountsPayable, filters.startDate, filters.endDate, filters.groups, filters.companies, companies]
+  );
+
+  const investimentoValuesMap = useMemo(
+    () => computeInvestimentoValuesMap(accountsPayable, filters, companies),
+    [accountsPayable, filters.startDate, filters.endDate, filters.groups, filters.companies, companies]
+  );
+
+  const financiamentoValuesMap = useMemo(
+    () => computeFinanciamentoValuesMap(accountsPayable, filters, companies),
+    [accountsPayable, filters.startDate, filters.endDate, filters.groups, filters.companies, companies]
+  );
+
+  const outrasReceitasDespesasValuesMap = useMemo(
+    () => computeOutrasReceitasDespesasValuesMap(accountsPayable, filters, companies),
+    [accountsPayable, filters.startDate, filters.endDate, filters.groups, filters.companies, companies]
+  );
+
+  const zeroApPeriodCell = { prevRealizado: 0, curRealizado: 0, curPrevisto: 0 };
+
+  const OUTRAS_REC_DESP_MAPPED_IDS = new Set([
+    'ord-rec-makebella',
+    'ord-desp-makebella',
+    'ord-rec-outros',
+    'ord-desp-outros',
+    'ord-rec-xbrothers',
+    'ord-desp-xbrothers',
+    'ord-rec-escpp',
+    'ord-desp-escpp'
+  ]);
+
+  const FINANCIAMENTO_MAPPED_IDS = new Set([
+    'fin-emprestimos-recebidos',
+    'fin-emprestimos-via-cartao',
+    'fin-pagamento-emprestimo',
+    'fin-pagamento-via-cartao'
+  ]);
+
+  const INVESTIMENTO_MAPPED_IDS = new Set([
+    'inv-financeiros',
+    'inv-societario',
+    'inv-maq-equip',
+    'inv-cartao-credito',
+    'inv-reforma',
+    'inv-rendimento'
+  ]);
 
   // Toggle expansão de conta
   const toggleExpand = (accountId: string) => {
@@ -478,6 +539,40 @@ export const DREPage: React.FC<DREPageProps> = ({
 
   // Calcula o valor de uma conta recursivamente (soma das subcontas)
   const getAccountValueRecursive = (account: any, month: 'current' | 'previous'): number => {
+    if (account.id === 'despesas-op') {
+      const v = despesasValuesMap['despesas-op'] ?? zeroApPeriodCell;
+      return month === 'current' ? v.curRealizado : v.prevRealizado;
+    }
+
+    if (
+      account.id === 'deducoes-simples' ||
+      account.id === 'deducoes-icms' ||
+      account.id === 'deducoes-parcelamento'
+    ) {
+      const v = deducoesValuesMap[account.id as string] ?? zeroApPeriodCell;
+      return month === 'current' ? v.curRealizado : v.prevRealizado;
+    }
+
+    if (account.id === 'lucros-distribuicao' || account.id === 'lucros-capital-investimentos') {
+      const v = lucrosDistribuidosValuesMap[account.id as string] ?? zeroApPeriodCell;
+      return month === 'current' ? v.curRealizado : v.prevRealizado;
+    }
+
+    if (account.id && INVESTIMENTO_MAPPED_IDS.has(account.id)) {
+      const v = investimentoValuesMap[account.id] ?? zeroApPeriodCell;
+      return month === 'current' ? v.curRealizado : v.prevRealizado;
+    }
+
+    if (account.id && FINANCIAMENTO_MAPPED_IDS.has(account.id)) {
+      const v = financiamentoValuesMap[account.id] ?? zeroApPeriodCell;
+      return month === 'current' ? v.curRealizado : v.prevRealizado;
+    }
+
+    if (account.id && OUTRAS_REC_DESP_MAPPED_IDS.has(account.id)) {
+      const v = outrasReceitasDespesasValuesMap[account.id] ?? zeroApPeriodCell;
+      return month === 'current' ? v.curRealizado : v.prevRealizado;
+    }
+
     const { start: currentStart, end: currentEnd } = getCurrentMonthDates();
     const { start: previousStart, end: previousEnd } = getPreviousMonthDates();
 
@@ -555,6 +650,35 @@ export const DREPage: React.FC<DREPageProps> = ({
 
   // Calcula o valor previsto de uma conta recursivamente
   const getForecastedAccountValueRecursive = (account: any): number => {
+    if (account.id === 'despesas-op') {
+      const v = despesasValuesMap['despesas-op'] ?? zeroApPeriodCell;
+      return v.curPrevisto;
+    }
+
+    if (
+      account.id === 'deducoes-simples' ||
+      account.id === 'deducoes-icms' ||
+      account.id === 'deducoes-parcelamento'
+    ) {
+      return deducoesValuesMap[account.id as string]?.curPrevisto ?? 0;
+    }
+
+    if (account.id === 'lucros-distribuicao' || account.id === 'lucros-capital-investimentos') {
+      return lucrosDistribuidosValuesMap[account.id as string]?.curPrevisto ?? 0;
+    }
+
+    if (account.id && INVESTIMENTO_MAPPED_IDS.has(account.id)) {
+      return investimentoValuesMap[account.id]?.curPrevisto ?? 0;
+    }
+
+    if (account.id && FINANCIAMENTO_MAPPED_IDS.has(account.id)) {
+      return financiamentoValuesMap[account.id]?.curPrevisto ?? 0;
+    }
+
+    if (account.id && OUTRAS_REC_DESP_MAPPED_IDS.has(account.id)) {
+      return outrasReceitasDespesasValuesMap[account.id]?.curPrevisto ?? 0;
+    }
+
     const { start, end } = getCurrentMonthDates();
 
     // Se a conta tem fórmula 'sum', calcular a soma das subcontas
@@ -635,6 +759,15 @@ export const DREPage: React.FC<DREPageProps> = ({
     return getAccountValueRecursive(account, month);
   };
 
+  /** Coluna "Orçamento Estratégico" da DRE: só preenchida nas linhas detalhadas de D.O; demais contas usam "-". */
+  const renderDreOrcamentoEstrategicoPlaceholder = () => (
+    <td
+      className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-500' : 'border-gray-200 text-gray-400'}`}
+    >
+      -
+    </td>
+  );
+
   // Helper para renderizar célula de orçamento editável
   const renderBudgetCell = (accountName: string, editable: boolean) => {
     if (!editable) {
@@ -697,6 +830,66 @@ export const DREPage: React.FC<DREPageProps> = ({
 
   // Helper para renderizar uma linha da DRE
   const renderDRERow = (account: any, index: number) => {
+    if (account.id === 'despesas-op') {
+      if (!shouldShowAccount(account)) return null;
+      const v = despesasValuesMap['despesas-op'] ?? { prevRealizado: 0, curRealizado: 0, curPrevisto: 0 };
+      const isOpExpanded = expandedAccounts['despesas-op'];
+      const paddingClass = 'px-4';
+      const fontClass = 'font-semibold';
+      const bgClass =
+        darkMode && account.bg
+          ? account.bg.replace('bg-orange-50', 'bg-amber-950/30')
+          : account.bg || '';
+      return (
+        <Fragment key={`dre-row-despesas-op-${index}`}>
+          <tr className={bgClass}>
+            <td
+              className={`border ${paddingClass} py-3 ${fontClass} ${
+                darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-800'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => toggleExpand('despesas-op')}
+                  className={`p-1 rounded transition-colors ${
+                    darkMode ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-gray-200 text-gray-600'
+                  }`}
+                  title={isOpExpanded ? 'Colapsar' : 'Expandir'}
+                >
+                  {isOpExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
+                </button>
+                <span>{account.name}</span>
+              </div>
+            </td>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+              {formatCurrency(v.prevRealizado)}
+            </td>
+            {renderDreOrcamentoEstrategicoPlaceholder()}
+            {renderBudgetCell(account.name, false)}
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+              {formatCurrency(v.curPrevisto)}
+            </td>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+              {formatCurrency(v.curRealizado)}
+            </td>
+          </tr>
+          {isOpExpanded && (
+            <DespesasOperacionaisTable
+              tbodyOnly
+              accountsPayable={accountsPayable}
+              filters={filters}
+              companies={companies}
+              darkMode={darkMode}
+              onRefresh={onRefresh}
+              lastAccountsPayableImportAt={lastAccountsPayableImportAt}
+              loading={drePageLoading}
+            />
+          )}
+        </Fragment>
+      );
+    }
+
     // Verificar se deve mostrar a conta
     if (!shouldShowAccount(account)) return null;
 
@@ -709,18 +902,6 @@ export const DREPage: React.FC<DREPageProps> = ({
     );
     const forecastedValue = accountForForecast 
       ? getForecastedAccountValueRecursive(accountForForecast)
-      : 0;
-    
-    // Variação = previsto - realizado (em valor e em percentual)
-    const variationValue = forecastedValue - currentValue;
-    const variationPercentage = forecastedValue !== 0 
-      ? ((forecastedValue - currentValue) / forecastedValue) * 100 
-      : 0;
-    
-    // % Receita = realizado - previsto (em valor e em percentual)
-    const revenueDiffValue = currentValue - forecastedValue;
-    const revenueDiffPercentage = forecastedValue !== 0 
-      ? ((currentValue - forecastedValue) / forecastedValue) * 100 
       : 0;
 
     const paddingClass = account.level === 1 ? 'px-4' : account.level === 2 ? 'pl-8 pr-4' : 'pl-12 pr-4';
@@ -766,11 +947,24 @@ export const DREPage: React.FC<DREPageProps> = ({
             )}
             {!hasExpandIcon && <span className="w-6" />}
             <span>{account.name}</span>
+            {account.parent === 'desp-investimento' && !account.id && (
+              <span
+                title="sem id mapeado no cap"
+                className="inline-flex shrink-0 cursor-help"
+                aria-label="sem id mapeado no cap"
+              >
+                <AlertTriangle
+                  className={`w-4 h-4 ${darkMode ? 'text-amber-400' : 'text-amber-600'}`}
+                  aria-hidden
+                />
+              </span>
+            )}
           </div>
         </td>
         <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
           {formatCurrency(previousValue)}
         </td>
+        {renderDreOrcamentoEstrategicoPlaceholder()}
         {renderBudgetCell(account.name, account.editable)}
         <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
           {formatCurrency(forecastedValue)}
@@ -778,100 +972,8 @@ export const DREPage: React.FC<DREPageProps> = ({
         <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
           {formatCurrency(currentValue)}
         </td>
-        <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
-          <div className="flex flex-col items-end">
-            <span>{formatCurrency(variationValue)}</span>
-            <span className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
-              {variationPercentage >= 0 ? '+' : ''}{variationPercentage.toFixed(1)}%
-            </span>
-          </div>
-        </td>
-        <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
-          <div className="flex flex-col items-end">
-            <span>{formatCurrency(revenueDiffValue)}</span>
-            <span className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
-              {revenueDiffPercentage >= 0 ? '+' : ''}{revenueDiffPercentage.toFixed(1)}%
-            </span>
-          </div>
-        </td>
       </tr>
     );
-  };
-
-  // Calcula despesas operacionais (Total de Despesas - igual ao fluxo de caixa)
-  // Usa a mesma lógica do card "Total de Despesas" da tela de fluxo de caixa
-  const calculateOperatingExpenses = (startDate: string, endDate: string) => {
-    if (accountsPayable.length === 0 && financialTransactions.length === 0 && (!forecastedEntries || forecastedEntries.length === 0)) {
-      console.warn('⚠️ Nenhum dado de despesas disponível!');
-      return 0;
-    }
-    
-    // Lista de exclusões (mesma do Total de Despesas)
-    const expensesExclusionList = [
-      'Receita Reembolsável - Makebella',
-      'Despesa Reembolsável - Makebella',
-      'Receita Reembolsável - Outros',
-      'Despesa Reembolsável - Outros',
-      'Receita Reembolsável - XBrothers',
-      'Despesa Reembolsável - XBrothers',
-      'Receita Reembolsável - ESCPP',
-      'Despesa Reembolsável - ESCPP',
-      'Empréstimos Recebidos',
-      'Pagamento de Empréstimo',
-      'Financiamento',
-      'Pagamento Via Cartão',
-      'Empréstimos Recebidos via Cartão',
-      'Investimentos Financeiros',
-      'Investimento - Societário / Comercial',
-      'Invest. Maq. / Equip. / Moveis',
-      'Cartão de Crédito',
-      'Reforma do Imóvel',
-      'Recebimento de Dividendos',
-      'Rendimento Financeiro',
-      'Distribuição de Lucros',
-      'Capital de Investimentos'
-    ];
-    
-    // Despesas de Accounts Payable
-    const apExpenses = accountsPayable
-      .filter(ap => {
-        const dateMatch = ap.payment_date >= startDate && ap.payment_date <= endDate;
-        const isOperational = !expensesExclusionList.some(excluded =>
-          ap.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())
-        );
-        const companyMatch = isCompanyFiltered(ap.business_unit);
-        return dateMatch && isOperational && companyMatch;
-      })
-      .reduce((sum, ap) => sum + Math.abs(parseFloat(ap.amount || 0)), 0);
-
-    // Despesas de Forecasted Entries
-    const feExpenses = forecastedEntries
-      .filter(entry => {
-        const dateMatch = entry.due_date >= startDate && entry.due_date <= endDate;
-        const isOperational = !expensesExclusionList.some(excluded =>
-          entry.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase())
-        );
-        const companyMatch = isCompanyFiltered(entry.business_unit);
-        return dateMatch && isOperational && companyMatch;
-      })
-      .reduce((sum, entry) => sum + Math.abs(parseFloat(entry.amount || 0)), 0);
-
-    // Despesas de Financial Transactions (apenas negativas)
-    const ftExpenses = financialTransactions
-      .filter(ft => {
-        const dateMatch = ft.transaction_date >= startDate && ft.transaction_date <= endDate;
-        const isNegative = parseFloat(ft.amount || 0) < 0;
-        const isOperational = !expensesExclusionList.some(excluded =>
-          (ft.chart_of_accounts?.toLowerCase().includes(excluded.toLowerCase()) ||
-           ft.description?.toLowerCase().includes(excluded.toLowerCase()))
-        );
-        const companyMatch = isCompanyFiltered(ft.business_unit);
-        return dateMatch && isNegative && isOperational && companyMatch;
-      })
-      .reduce((sum, ft) => sum + Math.abs(parseFloat(ft.amount || 0)), 0);
-
-    const total = apExpenses + feExpenses + ftExpenses;
-    return total;
   };
 
   // Calcula EBITDA = Receita - CMV - Despesas Operacionais
@@ -901,24 +1003,23 @@ export const DREPage: React.FC<DREPageProps> = ({
     return ebitda - (apNonOperational + ftNonOperational);
   };
 
-  // Calcula os KPIs para o mês atual selecionado
+  // Calcula os KPIs para o mês atual selecionado (período = filtros globais quando definidos)
   const currentMonthDates = getCurrentMonthDates();
   const previousMonthDates = getPreviousMonthDates();
-  
-  // Usar filtros globais se disponíveis, senão usar o mês selecionado
-  const effectiveStartDate = filters.startDate || currentMonthDates.start;
-  const effectiveEndDate = filters.endDate || currentMonthDates.end;
+
+  const effectiveStartDate = currentMonthDates.start;
+  const effectiveEndDate = currentMonthDates.end;
 
   const currentRevenue = calculateRevenue(effectiveStartDate, effectiveEndDate);
   const currentCmv = calculateCMV(effectiveStartDate, effectiveEndDate);
-  const currentOperatingExpenses = calculateOperatingExpenses(effectiveStartDate, effectiveEndDate);
+  const currentOperatingExpenses = despesasValuesMap['despesas-op']?.curRealizado ?? 0;
   const currentEbitda = calculateEBITDA(currentRevenue, currentCmv, currentOperatingExpenses);
   const currentNetProfit = calculateNetProfit(currentEbitda);
 
   // Calcula os KPIs para o mês anterior
   const previousRevenue = calculateRevenue(previousMonthDates.start, previousMonthDates.end);
   const previousCmv = calculateCMV(previousMonthDates.start, previousMonthDates.end);
-  const previousOperatingExpenses = calculateOperatingExpenses(previousMonthDates.start, previousMonthDates.end);
+  const previousOperatingExpenses = despesasValuesMap['despesas-op']?.prevRealizado ?? 0;
   const previousEbitda = calculateEBITDA(previousRevenue, previousCmv, previousOperatingExpenses);
   const previousNetProfit = calculateNetProfit(previousEbitda);
 
@@ -1116,6 +1217,11 @@ export const DREPage: React.FC<DREPageProps> = ({
 
   const colors = getMetricColor();
 
+  const { currentPeriodLabel: dreCurrentPeriodLabel, previousPeriodLabel: drePreviousPeriodLabel } = useMemo(
+    () => getDespesasOperacionaisPeriodLabels(filters),
+    [filters.startDate, filters.endDate]
+  );
+
   return (
     <div className="space-y-8">
       {/* KPI Cards */}
@@ -1241,83 +1347,10 @@ export const DREPage: React.FC<DREPageProps> = ({
       {/* DRE Table */}
       <div className={`${darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'} rounded-lg shadow-md p-6`}>
         <div className="mb-6">
-          <h2 className={`text-xl font-bold mb-4 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Demonstração do Resultado do Exercício</h2>
-
-          {/* Filters */}
-          <div className="flex items-center gap-4 mb-4 flex-wrap">
-            <div className="flex-1 min-w-[220px]">
-              <label className={`block text-sm font-medium mb-1 ${darkMode ? 'text-slate-200' : 'text-gray-700'}`}>
-                Unidade de Negócio
-              </label>
-              <div
-                className={`rounded-lg border px-3 py-1.5 ${
-                  darkMode ? 'bg-slate-950/40 border-slate-700' : 'bg-white border-gray-200 shadow-sm'
-                }`}
-              >
-                <select
-                  value={selectedBusinessUnit}
-                  onChange={(e) => setSelectedBusinessUnit(e.target.value)}
-                  className={`w-full bg-transparent px-0 py-0 border-none focus:outline-none focus:ring-0 text-sm ${
-                    darkMode ? 'text-slate-100' : 'text-gray-900'
-                  }`}
-                >
-                  <option value="all">Todas as Unidades</option>
-                  {companies.map(c => (
-                    <option key={c.company_code} value={c.company_code}>
-                      {c.company_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="flex-1 min-w-[220px]">
-              <label className={`block text-sm font-medium mb-1 ${darkMode ? 'text-slate-200' : 'text-gray-700'}`}>
-                Período (Orçamento)
-              </label>
-              <div
-                className={`rounded-lg border px-3 py-1.5 ${
-                  darkMode ? 'bg-slate-950/40 border-slate-700' : 'bg-white border-gray-200 shadow-sm'
-                }`}
-              >
-                <input
-                  type="month"
-                  value={selectedPeriod}
-                  onChange={(e) => setSelectedPeriod(e.target.value)}
-                  className={`w-full bg-transparent px-0 py-0 border-none focus:outline-none focus:ring-0 text-sm ${
-                    darkMode ? 'text-slate-100 dre-month-dark' : 'text-gray-900'
-                  }`}
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 pt-6">
-              <button
-                onClick={() => setSelectedMonth(subMonths(selectedMonth, 1))}
-                className="p-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors"
-                title="Mês anterior"
-              >
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-
-              <div className="text-center min-w-[150px]">
-                <div className={`text-sm font-medium ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
-                  {format(selectedMonth, 'MMMM yyyy', { locale: ptBR })}
-                </div>
-                <div className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
-                  vs {format(subMonths(selectedMonth, 1), 'MMM yyyy', { locale: ptBR })}
-                </div>
-              </div>
-
-              <button
-                onClick={() => setSelectedMonth(subMonths(selectedMonth, -1))}
-                className="p-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors"
-                title="Próximo mês"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
+          <h2 className={`text-xl font-bold mb-2 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Demonstração do Resultado do Exercício</h2>
+          <p className={`text-sm mb-4 ${darkMode ? 'text-slate-400' : 'text-gray-600'}`}>
+            Período e empresas seguem os filtros globais do painel. Para o detalhamento de despesas operacionais (mesma base do fluxo de caixa), expanda a linha correspondente.
+          </p>
         </div>
 
         <div className="overflow-x-auto">
@@ -1332,32 +1365,27 @@ export const DREPage: React.FC<DREPageProps> = ({
                 <th className={`border px-4 py-3 text-right text-sm font-semibold ${
                   darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
                 }`}>
-                  {format(subMonths(selectedMonth, 1), 'MMMM', { locale: ptBR })}
+                  {drePreviousPeriodLabel}
                 </th>
                 <th className={`border px-4 py-3 text-right text-sm font-semibold ${
                   darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
                 }`}>
-                  {format(selectedMonth, 'MMM', { locale: ptBR })} Orçamento
+                  Orçamento Estratégico
                 </th>
                 <th className={`border px-4 py-3 text-right text-sm font-semibold ${
                   darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
                 }`}>
-                  {format(selectedMonth, 'MMM', { locale: ptBR })} Previsto
+                  {dreCurrentPeriodLabel} Orçamento
                 </th>
                 <th className={`border px-4 py-3 text-right text-sm font-semibold ${
                   darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
                 }`}>
-                  {format(selectedMonth, 'MMM', { locale: ptBR })} Realizado
+                  {dreCurrentPeriodLabel} Previsto
                 </th>
                 <th className={`border px-4 py-3 text-right text-sm font-semibold ${
                   darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
                 }`}>
-                  Variação
-                </th>
-                <th className={`border px-4 py-3 text-right text-sm font-semibold ${
-                  darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'
-                }`}>
-                  % Receita
+                  {dreCurrentPeriodLabel} Realizado
                 </th>
               </tr>
             </thead>

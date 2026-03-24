@@ -25,15 +25,21 @@ import { filterData, calculateKPIs } from './utils/dataProcessor';
 import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List, Moon, Sun, Eye, EyeOff } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { startOfMonth, endOfMonth, format, parseISO, subMonths, subDays, differenceInCalendarDays, addDays, getDate, setDate, lastDayOfMonth } from 'date-fns';
+import { CapCoaMatchCollector, formatCapCoaLaunchMessage } from './lib/coaCapMatchCollector';
+import { computeDespesasOperacionaisValuesMap } from './components/DespesasOperacionaisTable';
+import { computeDeducoesValuesMap } from './lib/dreDeducoesValues';
+import { computeLucrosDistribuidosValuesMap } from './lib/dreLucrosDistribuidosValues';
+import { computeInvestimentoValuesMap } from './lib/dreInvestimentoValues';
+import { computeFinanciamentoValuesMap } from './lib/dreFinanciamentoValues';
+import { computeOutrasReceitasDespesasValuesMap } from './lib/dreOutrasReceitasDespesasValues';
+import { IMPORT_ADMIN_CODE, CAP_COA_MATCH_DISMISSED_STORAGE_KEY } from './lib/importAdminCode';
 
-const IMPORT_ADMIN_CODE =
-  import.meta.env.VITE_IMPORT_ADMIN_CODE || 'admin123';
 const IMPORT_USER_CODE =
   import.meta.env.VITE_IMPORT_USER_CODE || 'user123';
 
 function AppContent() {
   // Sistema de notificações
-  const { notifications, addNotification } = useNotificationContext();
+  const { notifications, addNotification, removeNotificationsWhere } = useNotificationContext();
   const [activeToast, setActiveToast] = useState<string | null>(null);
 
   const [records, setRecords] = useState<FinancialRecord[]>([]);
@@ -83,6 +89,60 @@ function AppContent() {
     const nextValue = typeof next === 'function' ? (next as (p: Filters) => Filters)(filtersRef.current) : next;
     setFiltersState(nextValue);
   }, []);
+
+  const capCoaMatchIssues = useMemo(() => {
+    const col = new CapCoaMatchCollector();
+    if (!accountsPayable.length) return [];
+    computeDespesasOperacionaisValuesMap(accountsPayable, filters, companies, col);
+    computeDeducoesValuesMap(accountsPayable, filters, companies, col);
+    computeLucrosDistribuidosValuesMap(accountsPayable, filters, companies, col);
+    computeInvestimentoValuesMap(accountsPayable, filters, companies, col);
+    computeFinanciamentoValuesMap(accountsPayable, filters, companies, col);
+    computeOutrasReceitasDespesasValuesMap(accountsPayable, filters, companies, col);
+    return col.getIssues();
+  }, [
+    accountsPayable,
+    filters.startDate,
+    filters.endDate,
+    filters.groups,
+    filters.companies,
+    companies
+  ]);
+
+  useEffect(() => {
+    let dismissed: string[] = [];
+    try {
+      const raw = sessionStorage.getItem(CAP_COA_MATCH_DISMISSED_STORAGE_KEY);
+      if (raw) dismissed = JSON.parse(raw);
+    } catch {
+      dismissed = [];
+    }
+    const dismissedSet = new Set(Array.isArray(dismissed) ? dismissed : []);
+    const visible = capCoaMatchIssues.filter(i => !dismissedSet.has(i.dedupeKey));
+
+    removeNotificationsWhere(n => n.data?.capCoaMatch === true);
+
+    for (const issue of visible) {
+      const title =
+        issue.kind === 'fallback_unique_prefix'
+          ? 'Plano de contas (CAP): texto esperado ausente'
+          : 'Plano de contas (CAP): prefixo ambíguo';
+      const hint =
+        issue.kind === 'fallback_unique_prefix'
+          ? 'Prefixo único no painel: o valor foi alocado, mas o segmento deveria conter o texto da regra. Corrija o plano/lançamento no banco.'
+          : 'Várias linhas usam este prefixo e o segmento não contém o texto esperado — não foi possível classificar só pelo prefixo. Corrija o plano de contas.';
+
+      const message = `${hint}\n\nPrefixo: ${issue.prefix}\nTexto esperado no segmento: "${issue.expectedContains}"\nSegmento: "${issue.segmentMatched}"\nRegra: ${issue.ruleLabel}\n\nLançamento:\n${formatCapCoaLaunchMessage(issue.launch)}`;
+
+      addNotification({
+        type: 'warning',
+        title,
+        message,
+        data: { capCoaMatch: true, capCoaDedupeKey: issue.dedupeKey }
+      });
+    }
+  }, [capCoaMatchIssues, removeNotificationsWhere, addNotification]);
+
   const [calendarDate, setCalendarDate] = useState({
     year: new Date().getFullYear(),
     month: new Date().getMonth()
@@ -5960,6 +6020,9 @@ function AppContent() {
                   filters={filters}
                   companies={companies}
                   darkMode={darkMode}
+                  onRefresh={refreshWithCurrentFilters}
+                  lastAccountsPayableImportAt={lastAccountsPayableImportAt}
+                  loading={dataLoading}
                 />
               )}
             </>

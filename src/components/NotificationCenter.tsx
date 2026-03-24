@@ -2,14 +2,42 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Bell, X, CheckCircle, AlertCircle, Info, AlertTriangle, Trash2, CheckCheck, Download, Eye } from 'lucide-react';
 import { Notification, NotificationType } from '../hooks/useNotifications';
 import { useNotificationContext } from '../contexts/NotificationContext';
+import { IMPORT_ADMIN_CODE, CAP_COA_MATCH_DISMISSED_STORAGE_KEY } from '../lib/importAdminCode';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale/pt-BR';
 
 export const NotificationCenter: React.FC = () => {
-  const { notifications, markAsRead, markAllAsRead, removeNotification, clearAll, unreadCount } = useNotificationContext();
+  const { notifications, markAsRead, markAllAsRead, removeNotification, removeNotificationsWhere, clearAll, unreadCount } =
+    useNotificationContext();
   const [isOpen, setIsOpen] = useState(false);
   const [viewingNotification, setViewingNotification] = useState<Notification | null>(null);
+  const [capDismissOpen, setCapDismissOpen] = useState(false);
+  const [capDismissCode, setCapDismissCode] = useState('');
+  const [capDismissError, setCapDismissError] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const hasCapCoaAlerts = notifications.some(n => n.data?.capCoaMatch === true);
+
+  const dismissCapCoaAlertsWithAdmin = () => {
+    if (capDismissCode.trim() !== IMPORT_ADMIN_CODE) {
+      setCapDismissError('Código inválido.');
+      return;
+    }
+    const keys = notifications.filter(n => n.data?.capCoaMatch && n.data?.capCoaDedupeKey).map(n => n.data!.capCoaDedupeKey!);
+    let existing: string[] = [];
+    try {
+      const raw = sessionStorage.getItem(CAP_COA_MATCH_DISMISSED_STORAGE_KEY);
+      if (raw) existing = JSON.parse(raw);
+    } catch {
+      existing = [];
+    }
+    const merged = [...new Set([...(Array.isArray(existing) ? existing : []), ...keys])];
+    sessionStorage.setItem(CAP_COA_MATCH_DISMISSED_STORAGE_KEY, JSON.stringify(merged));
+    removeNotificationsWhere(n => n.data?.capCoaMatch === true);
+    setCapDismissOpen(false);
+    setCapDismissCode('');
+    setCapDismissError('');
+  };
 
   // Fechar dropdown ao clicar fora
   useEffect(() => {
@@ -221,6 +249,24 @@ export const NotificationCenter: React.FC = () => {
               </div>
             ) : (
               <div className="divide-y divide-gray-200">
+                {hasCapCoaAlerts && (
+                  <div className="p-3 bg-amber-50 border-b border-amber-200 text-xs text-amber-900">
+                    <p className="font-medium mb-1">Alertas de plano de contas (CAP)</p>
+                    <p className="text-amber-800 mb-2">
+                      Corrija o lançamento no banco ou dispense com o código de administrador (mesmo da importação).
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCapDismissError('');
+                        setCapDismissOpen(true);
+                      }}
+                      className="px-2 py-1 rounded bg-amber-200 hover:bg-amber-300 text-amber-950 font-medium"
+                    >
+                      Dispensar com código admin
+                    </button>
+                  </div>
+                )}
                 {notifications.map((notification) => (
                   <div
                     key={notification.id}
@@ -294,16 +340,22 @@ export const NotificationCenter: React.FC = () => {
                                 </button>
                               </>
                             )}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                removeNotification(notification.id);
-                              }}
-                              className="p-1.5 text-gray-500 hover:text-red-600 transition-colors"
-                              title="Remover notificação"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
+                            {notification.data?.capCoaMatch ? (
+                              <span className="text-[10px] text-gray-400 px-1" title="Use &quot;Dispensar com código admin&quot; abaixo">
+                                fixo
+                              </span>
+                            ) : (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeNotification(notification.id);
+                                }}
+                                className="p-1.5 text-gray-500 hover:text-red-600 transition-colors"
+                                title="Remover notificação"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                         </div>
                         {!notification.read && (
@@ -582,6 +634,47 @@ export const NotificationCenter: React.FC = () => {
                 className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors"
               >
                 Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {capDismissOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-lg shadow-xl p-4 w-full max-w-sm border border-gray-200">
+            <h4 className="font-semibold text-gray-900 mb-2">Dispensar alertas de plano de contas</h4>
+            <p className="text-xs text-gray-600 mb-2">Código de administrador (mesmo da importação).</p>
+            <input
+              type="password"
+              autoComplete="off"
+              value={capDismissCode}
+              onChange={e => {
+                setCapDismissCode(e.target.value);
+                setCapDismissError('');
+              }}
+              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm mb-2"
+              placeholder="Código"
+            />
+            {capDismissError ? <p className="text-xs text-red-600 mb-2">{capDismissError}</p> : null}
+            <div className="flex justify-end gap-2 mt-2">
+              <button
+                type="button"
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
+                onClick={() => {
+                  setCapDismissOpen(false);
+                  setCapDismissCode('');
+                  setCapDismissError('');
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded hover:bg-amber-700"
+                onClick={dismissCapCoaAlertsWithAdmin}
+              >
+                Confirmar
               </button>
             </div>
           </div>
