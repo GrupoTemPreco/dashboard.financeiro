@@ -37,6 +37,14 @@ import { IMPORT_ADMIN_CODE, CAP_COA_MATCH_DISMISSED_STORAGE_KEY } from './lib/im
 const IMPORT_USER_CODE =
   import.meta.env.VITE_IMPORT_USER_CODE || 'user123';
 
+/** Contas a pagar: importações ativas ou sem import_id (ex.: carga direta no Supabase). */
+function applyContasAPagarImportFilter(query: any, activeImportIds: string[]): any {
+  if (activeImportIds.length > 0) {
+    return query.or(`import_id.in.(${activeImportIds.join(',')}),import_id.is.null`);
+  }
+  return query.is('import_id', null);
+}
+
 function AppContent() {
   // Sistema de notificações
   const { notifications, addNotification, removeNotificationsWhere } = useNotificationContext();
@@ -559,7 +567,7 @@ function AppContent() {
       // Load accounts payable - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
       // IMPORTANTE: Incluir registros com payment_date no período OU registros sem payment_date mas com due_date no período
       let apData: any[] | null = [];
-      if (hasActiveImports) {
+      {
         // Carregar registros do período em lotes
         let allData: any[] = [];
         // Supabase limita ~1000 linhas por query; usar 1000 para maximizar e evitar perda de dados
@@ -569,10 +577,12 @@ function AppContent() {
         
         // Query 1: Registros com payment_date no período atual OU no mês anterior (para coluna comparativa da tabela Despesas Operacionais)
         while (hasMore) {
-          let query = supabase
-            .from('contas_a_pagar')
-            .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
-            .in('import_id', activeImportIds)
+          let query = applyContasAPagarImportFilter(
+            supabase
+              .from('contas_a_pagar')
+              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id'),
+            activeImportIds
+          )
             .not('payment_date', 'is', null)
             .gte('payment_date', prevStart)
             .lte('payment_date', endDate);
@@ -605,10 +615,12 @@ function AppContent() {
         let offset2 = 0;
         let hasMore2 = true;
         while (hasMore2) {
-          let query2 = supabase
-            .from('contas_a_pagar')
-            .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
-            .in('import_id', activeImportIds)
+          let query2 = applyContasAPagarImportFilter(
+            supabase
+              .from('contas_a_pagar')
+              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id'),
+            activeImportIds
+          )
             .gte('due_date', prevStart)
             .lte('due_date', endDate);
           
@@ -1088,15 +1100,17 @@ function AppContent() {
       let transactionsData: any[] = [];
       let receitasManuaisData: any[] = [];
 
-      if (hasActiveImports) {
+      {
         const allAp: any[] = [];
         let offset = 0;
         let hasMore = true;
         while (hasMore) {
-          let q = supabase
-            .from('contas_a_pagar')
-            .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
-            .in('import_id', activeImportIds)
+          let q = applyContasAPagarImportFilter(
+            supabase
+              .from('contas_a_pagar')
+              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id'),
+            activeImportIds
+          )
             .not('payment_date', 'is', null)
             .gte('payment_date', rangeStart)
             .lte('payment_date', endDate);
@@ -1112,10 +1126,12 @@ function AppContent() {
         offset = 0;
         hasMore = true;
         while (hasMore) {
-          let q2 = supabase
-            .from('contas_a_pagar')
-            .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
-            .in('import_id', activeImportIds)
+          let q2 = applyContasAPagarImportFilter(
+            supabase
+              .from('contas_a_pagar')
+              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id'),
+            activeImportIds
+          )
             .gte('due_date', rangeStart)
             .lte('due_date', endDate);
           if (filteredBusinessUnits?.length) q2 = q2.in('business_unit', filteredBusinessUnits);
@@ -3652,10 +3668,6 @@ function AppContent() {
         .filter((imp: any) => !imp.is_deleted)
         .map((imp: any) => imp.id);
 
-      if (activeImportIds.length === 0) {
-        return { data: [], totalCount: 0, hasMore: false };
-      }
-
       // Obter business units filtrados
       const filteredBusinessUnits = getFilteredBusinessUnits();
 
@@ -3682,10 +3694,12 @@ function AppContent() {
       const offset = page * pageSize;
 
       if (type === 'accounts_payable') {
-        let query = supabase
-          .from('contas_a_pagar')
-          .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id', { count: 'exact' })
-          .in('import_id', activeImportIds);
+        let query = applyContasAPagarImportFilter(
+          supabase
+            .from('contas_a_pagar')
+            .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id', { count: 'exact' }),
+          activeImportIds
+        );
 
         // Aplicar filtros de business_unit (do filtro global ou do modal)
         if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
@@ -3774,6 +3788,9 @@ function AppContent() {
           hasMore: (count || 0) > offset + pageSize
         };
       } else if (type === 'transactions') {
+        if (activeImportIds.length === 0) {
+          return { data: [], totalCount: 0, hasMore: false };
+        }
         let query = supabase
           .from('transacoes_financeiras')
           .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id', { count: 'exact' })
@@ -3849,6 +3866,7 @@ function AppContent() {
             }));
           })(),
           (async () => {
+            if (activeImportIds.length === 0) return [];
             let query = supabase
               .from('transacoes_financeiras')
               .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
@@ -3909,10 +3927,12 @@ function AppContent() {
         let from = 0;
         let hasMore = true;
         while (hasMore) {
-          let q = supabase
-            .from('contas_a_pagar')
-            .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
-            .in('import_id', activeImportIds);
+          let q = applyContasAPagarImportFilter(
+            supabase
+              .from('contas_a_pagar')
+              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id'),
+            activeImportIds
+          );
           if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
             q = q.in('business_unit', filteredBusinessUnits);
           } else if (Array.isArray(filters.businessUnit) && filters.businessUnit.length > 0) {
@@ -4033,10 +4053,12 @@ function AppContent() {
           })(),
           // Contas a pagar
           (async () => {
-            let query = supabase
-              .from('contas_a_pagar')
-              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id', { count: 'exact' })
-              .in('import_id', activeImportIds);
+            let query = applyContasAPagarImportFilter(
+              supabase
+                .from('contas_a_pagar')
+                .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id', { count: 'exact' }),
+              activeImportIds
+            );
 
             if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
               query = query.in('business_unit', filteredBusinessUnits);
@@ -4058,6 +4080,7 @@ function AppContent() {
           })(),
           // Transações
           (async () => {
+            if (activeImportIds.length === 0) return [];
             let query = supabase
               .from('transacoes_financeiras')
               .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id', { count: 'exact' })
@@ -4083,6 +4106,7 @@ function AppContent() {
           })(),
           // Previstos
           (async () => {
+            if (activeImportIds.length === 0) return [];
             let query = supabase
               .from('previstos')
               .select('import_id, business_unit, due_date, amount, status, chart_of_accounts, supplier, id', { count: 'exact' })
@@ -5135,49 +5159,47 @@ function AppContent() {
         vendasPorUsuarioResult = { data: [], error: err };
       }
 
-      if (hasActiveImports) {
-        try {
-          // Carregar contas_a_pagar em lotes para evitar limite do Supabase
-          let allAP: any[] = [];
-          const batchSize = 500;
-          let offset = 0;
-          let hasMore = true;
-          
-          while (hasMore) {
-            let query = supabase
+      try {
+        // Carregar contas_a_pagar em lotes (import ativo ou import_id nulo — automação direta)
+        let allAP: any[] = [];
+        const batchSize = 500;
+        let offset = 0;
+        let hasMore = true;
+
+        while (hasMore) {
+          let query = applyContasAPagarImportFilter(
+            supabase
               .from('contas_a_pagar')
-              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id')
-              .in('import_id', activeImportIds);
-            
-            // Aplicar filtro de business_unit se houver filtros ativos (usa índice composto)
-            if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-              query = query.in('business_unit', filteredBusinessUnits);
-            }
-            
-            const batch = await query
-              .order('payment_date', { ascending: false })
-              .range(offset, offset + batchSize - 1);
-            
-            if (batch.error) {
-              console.error('❌ Erro ao carregar contas_a_pagar para MonthlyComparison:', batch.error);
-              break;
-            }
-            
-            if (batch.data && batch.data.length > 0) {
-              allAP = [...allAP, ...batch.data];
-              offset += batchSize;
-              hasMore = batch.data.length === batchSize;
-            } else {
-              hasMore = false;
-            }
+              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id'),
+            activeImportIds
+          );
+
+          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
+            query = query.in('business_unit', filteredBusinessUnits);
           }
-          
-          apResult = { data: allAP, error: null };
-        } catch (err) {
-          console.error('❌ Exceção ao carregar contas_a_pagar para MonthlyComparison:', err);
-          apResult = { data: [], error: err };
+
+          const batch = await query
+            .order('payment_date', { ascending: false })
+            .range(offset, offset + batchSize - 1);
+
+          if (batch.error) {
+            console.error('❌ Erro ao carregar contas_a_pagar para MonthlyComparison:', batch.error);
+            break;
+          }
+
+          if (batch.data && batch.data.length > 0) {
+            allAP = [...allAP, ...batch.data];
+            offset += batchSize;
+            hasMore = batch.data.length === batchSize;
+          } else {
+            hasMore = false;
+          }
         }
 
+        apResult = { data: allAP, error: null };
+      } catch (err) {
+        console.error('❌ Exceção ao carregar contas_a_pagar para MonthlyComparison:', err);
+        apResult = { data: [], error: err };
       }
 
       const newData = {
