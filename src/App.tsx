@@ -176,7 +176,7 @@ function AppContent() {
   const [initialLoading, setInitialLoading] = useState(true);
   /** Incrementado ao clicar em "Aplicar filtro" no Sidebar — garante que o load rode sempre (incl. ao aplicar de novo com a mesma seleção) */
   const [filterApplyTick, setFilterApplyTick] = useState(0);
-  const [importedFiles, setImportedFiles] = useState<ImportedFile[]>([]);
+  const [, setImportedFiles] = useState<ImportedFile[]>([]);
   /** Maior `updated_at` em contas_a_pagar (inclui edições diretas no Supabase). */
   const [lastContasPagarUpdatedAt, setLastContasPagarUpdatedAt] = useState<string | null>(null);
   const lastContasPagarMetadataFetchAtRef = useRef(0);
@@ -217,7 +217,7 @@ function AppContent() {
     message: ''
   });
   const [importRole, setImportRole] = useState<'none' | 'user' | 'admin'>('none');
-  const [isPermanentlyUnlocked, setIsPermanentlyUnlocked] = useState(false);
+  const [, setIsPermanentlyUnlocked] = useState(false);
   const [dreWarningClosed, setDreWarningClosed] = useState(false);
   const [entregaResultadoHidden, setEntregaResultadoHidden] = useState(true); // padrão: oculto (calendário, gráfico, alertas)
   // unlockClickCount é usado indiretamente através do callback do setState em handleUnlockClick
@@ -688,8 +688,8 @@ function AppContent() {
           }
           
           if (data2 && data2.length > 0) {
-            const existingIds = new Set(allData.map(item => item.id));
-            const newData = data2.filter(item => !existingIds.has(item.id));
+            const existingIds = new Set(allData.map((item: { id: string }) => item.id));
+            const newData = data2.filter((item: { id: string }) => !existingIds.has(item.id));
             allData = [...allData, ...newData];
             offset2 += batchSize;
             hasMore2 = data2.length === batchSize;
@@ -3227,98 +3227,6 @@ function AppContent() {
     }
   };
 
-  // Envia arquivo para a lixeira (soft delete)
-  const handleDeleteFile = async (fileId: string) => {
-    try {
-      const { error } = await supabase
-        .from('importacoes')
-        .update({
-          is_deleted: true,
-          deleted_at: new Date().toISOString()
-        })
-        .eq('id', fileId);
-
-      if (error) throw error;
-
-      // Atualiza UI localmente
-      setImportedFiles(prev =>
-        prev.map(f => (f.id === fileId ? { ...f, isDeleted: true } : f))
-      );
-
-      // Recarrega dados ignorando imports deletados
-      await loadDataFromSupabase();
-    } catch (error) {
-      console.error('Error moving import to trash:', error);
-      alert('Erro ao mover importação para a lixeira');
-    }
-  };
-
-  const handleRestoreFile = async (fileId: string) => {
-    try {
-      const { error } = await supabase
-        .from('importacoes')
-        .update({
-          is_deleted: false,
-          deleted_at: null
-        })
-        .eq('id', fileId);
-
-      if (error) throw error;
-
-      setImportedFiles(prev =>
-        prev.map(f => (f.id === fileId ? { ...f, isDeleted: false } : f))
-      );
-
-      await loadDataFromSupabase();
-    } catch (error) {
-      console.error('Error restoring import from trash:', error);
-      alert('Erro ao restaurar importação');
-    }
-  };
-
-  const handlePermanentDeleteFile = async (fileId: string) => {
-    try {
-      const file = importedFiles.find(f => f.id === fileId);
-      const fileType = file?.type;
-
-      if (fileType) {
-        // Converter tipo em inglês para nome da tabela em português
-        const tableName = getTableNameFromType(fileType);
-        // Usa a função existente que deleta dados relacionados + registro de import
-        await deleteOldImportData(fileId, tableName);
-      } else {
-        const { error } = await supabase
-          .from('importacoes')
-          .delete()
-          .eq('id', fileId);
-        if (error) throw error;
-        setImportedFiles(prev => prev.filter(f => f.id !== fileId));
-      }
-
-      await loadDataFromSupabase();
-      await loadImportsFromSupabase();
-    } catch (error) {
-      console.error('Error permanently deleting import:', error);
-      alert('Erro ao excluir importação permanentemente');
-    }
-  };
-
-  const handleEmptyTrash = async () => {
-    const trashedFiles = importedFiles.filter(f => f.isDeleted);
-    if (trashedFiles.length === 0) return;
-
-    const confirmed = window.confirm(
-      `Tem certeza de que deseja esvaziar a lixeira? ${trashedFiles.length} arquivo(s) serão excluídos permanentemente.`
-    );
-
-    if (!confirmed) return;
-
-    for (const file of trashedFiles) {
-      // eslint-disable-next-line no-await-in-loop
-      await handlePermanentDeleteFile(file.id);
-    }
-  };
-
   const handleRefresh = async () => {
     console.log('🔄 Refreshing data...');
     setCompanies([]);
@@ -4120,7 +4028,11 @@ function AppContent() {
 
             const { data, error } = await query.order('payment_date', { ascending: false });
             if (error) throw error;
-            return (data || []).map(ap => ({ ...ap, source: 'accounts_payable', type: 'Conta a Pagar' }));
+            return (data || []).map((ap: Record<string, unknown>) => ({
+              ...ap,
+              source: 'accounts_payable',
+              type: 'Conta a Pagar'
+            }));
           })(),
           // Transações
           (async () => {
