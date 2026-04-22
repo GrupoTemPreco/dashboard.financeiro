@@ -9,9 +9,10 @@ import { MonthlyComparison } from './components/MonthlyComparison';
 import { CashFlowTable } from './components/CashFlowTable';
 import { AnalyticalInsights } from './components/AnalyticalInsights';
 import { ExpenseBreakdown } from './components/ExpenseBreakdown';
-import { DataImport } from './components/DataImport';
 import { DREPage } from './components/DREPage';
-import { DespesasOperacionaisTable } from './components/DespesasOperacionaisTable';
+import { CompanyFormModal } from './components/CompanyFormModal';
+import { CompanyEditModal } from './components/CompanyEditModal';
+import { DespesasOperacionaisTable, formatLastUpdate } from './components/DespesasOperacionaisTable';
 import { ErrorModal } from './components/ErrorModal';
 import { DuplicateFileModal } from './components/DuplicateFileModal';
 import { ChartSkeleton } from './components/ChartSkeleton';
@@ -32,10 +33,10 @@ import { computeLucrosDistribuidosValuesMap } from './lib/dreLucrosDistribuidosV
 import { computeInvestimentoValuesMap } from './lib/dreInvestimentoValues';
 import { computeFinanciamentoValuesMap } from './lib/dreFinanciamentoValues';
 import { computeOutrasReceitasDespesasValuesMap } from './lib/dreOutrasReceitasDespesasValues';
-import { IMPORT_ADMIN_CODE, CAP_COA_MATCH_DISMISSED_STORAGE_KEY } from './lib/importAdminCode';
+import { CAP_COA_MATCH_DISMISSED_STORAGE_KEY } from './lib/importAdminCode';
 
-const IMPORT_USER_CODE =
-  import.meta.env.VITE_IMPORT_USER_CODE || 'user123';
+/** Mínimo entre duas leituras do selo "última atualização" (contas a pagar); recarga da página reseta. */
+const CONTAS_PAGAR_METADATA_MIN_INTERVAL_MS = 60 * 60 * 1000;
 
 /** Contas a pagar: importações ativas ou sem import_id (ex.: carga direta no Supabase). */
 function applyContasAPagarImportFilter(query: any, activeImportIds: string[]): any {
@@ -83,7 +84,6 @@ function AppContent() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [presentationMode, setPresentationMode] = useState(false);
   const [darkMode, setDarkMode] = useState(true);
-  const [showAccessCode, setShowAccessCode] = useState(false);
   const [filters, setFiltersState] = useState<Filters>({
     companies: [],
     groups: [],
@@ -177,6 +177,11 @@ function AppContent() {
   /** Incrementado ao clicar em "Aplicar filtro" no Sidebar — garante que o load rode sempre (incl. ao aplicar de novo com a mesma seleção) */
   const [filterApplyTick, setFilterApplyTick] = useState(0);
   const [importedFiles, setImportedFiles] = useState<ImportedFile[]>([]);
+  /** Maior `updated_at` em contas_a_pagar (inclui edições diretas no Supabase). */
+  const [lastContasPagarUpdatedAt, setLastContasPagarUpdatedAt] = useState<string | null>(null);
+  const lastContasPagarMetadataFetchAtRef = useRef(0);
+  const [companyFormModalOpen, setCompanyFormModalOpen] = useState(false);
+  const [companyEditModalOpen, setCompanyEditModalOpen] = useState(false);
   const [duplicateFileModal, setDuplicateFileModal] = useState<{
     isOpen: boolean;
     fileName: string;
@@ -212,7 +217,6 @@ function AppContent() {
     message: ''
   });
   const [importRole, setImportRole] = useState<'none' | 'user' | 'admin'>('none');
-  const [importAuthError, setImportAuthError] = useState('');
   const [isPermanentlyUnlocked, setIsPermanentlyUnlocked] = useState(false);
   const [dreWarningClosed, setDreWarningClosed] = useState(false);
   const [entregaResultadoHidden, setEntregaResultadoHidden] = useState(true); // padrão: oculto (calendário, gráfico, alertas)
@@ -230,16 +234,10 @@ function AppContent() {
     }
   }, []);
 
-  // Sempre que sair da página de importação, resetar autenticação (exceto se estiver desbloqueado permanentemente)
+  // Aba "Importar dados" removida: evitar ficar preso nessa rota
   useEffect(() => {
-    if (currentPage !== 'import' && importRole !== 'none' && !isPermanentlyUnlocked) {
-      setImportRole('none');
-      setImportAuthError('');
-    } else if (currentPage === 'import' && isPermanentlyUnlocked && importRole === 'none') {
-      // Se estiver na página de importação e estiver desbloqueado, garantir acesso como admin
-      setImportRole('admin');
-    }
-  }, [currentPage, isPermanentlyUnlocked, importRole]);
+    setCurrentPage(p => (p === 'import' ? 'cashflow' : p));
+  }, []);
 
   // Resetar aviso do DRE quando acessar a página
   useEffect(() => {
@@ -522,6 +520,58 @@ function AppContent() {
         .map((imp: any) => imp.id);
 
       const hasActiveImports = activeImportIds.length > 0;
+
+      // Selo "última atualização" — no máx. a cada 60 min (ref zera a cada recarga da página)
+      const shouldFetchContasPagarMetadata =
+        lastContasPagarMetadataFetchAtRef.current === 0 ||
+        Date.now() - lastContasPagarMetadataFetchAtRef.current >= CONTAS_PAGAR_METADATA_MIN_INTERVAL_MS;
+      if (shouldFetchContasPagarMetadata) {
+        try {
+          const [byUpdated, byCreated] = await Promise.all([
+            supabase
+              .from('contas_a_pagar')
+              .select('updated_at')
+              .not('updated_at', 'is', null)
+              .order('updated_at', { ascending: false, nullsFirst: false })
+              .limit(1)
+              .maybeSingle(),
+            supabase
+              .from('contas_a_pagar')
+              .select('created_at')
+              .not('created_at', 'is', null)
+              .order('created_at', { ascending: false, nullsFirst: false })
+              .limit(1)
+              .maybeSingle()
+          ]);
+          if (byUpdated.error) {
+            console.warn('⚠️ Não foi possível obter max(updated_at) de contas_a_pagar:', byUpdated.error);
+          }
+          if (byCreated.error) {
+            console.warn('⚠️ Não foi possível obter max(created_at) de contas_a_pagar:', byCreated.error);
+          }
+          const tU = byUpdated.data?.updated_at;
+          const tC = byCreated.data?.created_at;
+          const msU = tU ? new Date(tU).getTime() : 0;
+          const msC = tC ? new Date(tC).getTime() : 0;
+          const chosen =
+            msU > 0 && msC > 0
+              ? msU >= msC
+                ? tU!
+                : tC!
+              : msU > 0
+                ? tU!
+                : msC > 0
+                  ? tC!
+                  : null;
+          if (shouldApplyState()) {
+            setLastContasPagarUpdatedAt(chosen);
+            lastContasPagarMetadataFetchAtRef.current = Date.now();
+          }
+        } catch (capTsEx) {
+          console.warn('⚠️ Exceção ao buscar última data em contas_a_pagar:', capTsEx);
+          if (shouldApplyState()) setLastContasPagarUpdatedAt(null);
+        }
+      }
 
       // business_unit: deriva de group_name e/ou companies. Inclui canônico (02,03,04) e numérico (2,3,4)
       let filteredBusinessUnits: string[] | null = null;
@@ -3337,16 +3387,10 @@ function AppContent() {
     return accountsPayable;
   }, [accountsPayable]);
 
-  // Data/hora da última importação de contas a pagar (para indicador na tabela Despesas Operacionais)
-  const lastAccountsPayableImportAt = useMemo(() => {
-    const apImports = importedFiles.filter(f => f.type === 'accounts_payable' && !f.isDeleted);
-    if (apImports.length === 0) return null;
-    const latest = apImports.reduce((best, f) => {
-      const d = f.uploadDate ? new Date(f.uploadDate).getTime() : 0;
-      return d > best.getTime() ? new Date(f.uploadDate!) : best;
-    }, new Date(0));
-    return latest.getTime() > 0 ? latest.toISOString() : null;
-  }, [importedFiles]);
+  const lastContasPagarUpdateLabel = useMemo(
+    () => (lastContasPagarUpdatedAt ? formatLastUpdate(lastContasPagarUpdatedAt) : ''),
+    [lastContasPagarUpdatedAt]
+  );
 
   // Dados já vêm filtrados do banco por data e business_unit quando há filtros ativos
   // Não precisa refiltrar aqui - apenas retorna os dados como estão
@@ -5551,6 +5595,11 @@ function AppContent() {
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         onTogglePresentationMode={togglePresentationMode}
         onRefresh={handleRefresh}
+        onCadastrarEmpresa={() => {
+          setCompanyFormModalOpen(true);
+          setCompanyEditModalOpen(false);
+        }}
+        onEditarEmpresa={importRole === 'admin' ? () => { setCompanyEditModalOpen(true); setCompanyFormModalOpen(false); } : undefined}
       />
       )}
       
@@ -5560,24 +5609,33 @@ function AppContent() {
             <div className="flex justify-between items-center mb-4">
               <h1 className={`text-2xl font-bold ${darkMode ? 'text-slate-100' : 'text-gray-900'}`}>Dashboard Financeiro - Rede Tem Preço & X Brother</h1>
               <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setDarkMode(prev => !prev)}
-                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/80 hover:bg-white shadow-sm border border-slate-200 text-xs font-medium text-gray-700 transition-colors"
-                  title={darkMode ? 'Usar tema claro' : 'Usar tema escuro'}
-                >
-                  {darkMode ? (
-                    <>
-                      <Sun className="w-4 h-4 text-amber-500" />
-                      <span>Tema claro</span>
-                    </>
-                  ) : (
-                    <>
-                      <Moon className="w-4 h-4 text-slate-700" />
-                      <span>Tema escuro</span>
-                    </>
-                  )}
-                </button>
+                <div className="flex items-center gap-2.5">
+                  {lastContasPagarUpdateLabel ? (
+                    <span
+                      className={`text-sm tabular-nums ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}
+                      title="Data/hora do registro de contas a pagar alterado por último no banco (inclui edições no Supabase)"
+                    >
+                      Última atualização: {lastContasPagarUpdateLabel}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setDarkMode(prev => !prev)}
+                    className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60 ${
+                      darkMode
+                        ? 'border-slate-600/80 bg-slate-800/90 text-amber-400 hover:bg-slate-700 hover:text-amber-300'
+                        : 'border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50'
+                    }`}
+                    title={darkMode ? 'Tema claro' : 'Tema escuro'}
+                    aria-label={darkMode ? 'Ativar tema claro' : 'Ativar tema escuro'}
+                  >
+                    {darkMode ? (
+                      <Sun className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                    ) : (
+                      <Moon className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                    )}
+                  </button>
+                </div>
                 <button
                   onClick={togglePresentationMode}
                   className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
@@ -5595,39 +5653,33 @@ function AppContent() {
                 <p className={`${darkMode ? 'text-slate-400' : 'text-gray-600'} mt-2`}>Visão geral financeira e métricas de desempenho</p>
               </div>
               <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setDarkMode(prev => !prev)}
-                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/80 hover:bg-white shadow-sm border border-slate-200 text-xs font-medium text-gray-700 transition-colors"
-                  title={darkMode ? 'Usar tema claro' : 'Usar tema escuro'}
-                >
-                  {darkMode ? (
-                    <>
-                      <Sun className="w-4 h-4 text-amber-500" />
-                      <span>Tema claro</span>
-                    </>
-                  ) : (
-                    <>
-                      <Moon className="w-4 h-4 text-slate-700" />
-                      <span>Tema escuro</span>
-                    </>
-                  )}
-                </button>
-                {currentPage === 'import' && importRole !== 'none' && (
+                <div className="flex items-center gap-2.5">
+                  {lastContasPagarUpdateLabel ? (
+                    <span
+                      className={`text-sm tabular-nums ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}
+                      title="Data/hora do registro de contas a pagar alterado por último no banco (inclui edições no Supabase)"
+                    >
+                      Última atualização: {lastContasPagarUpdateLabel}
+                    </span>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={() => {
-                      setImportRole('none');
-                      setImportAuthError('');
-                      // Desativar desbloqueio permanente ao sair
-                      setIsPermanentlyUnlocked(false);
-                      localStorage.removeItem('importPermanentlyUnlocked');
-                    }}
-                    className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 shadow-sm"
+                    onClick={() => setDarkMode(prev => !prev)}
+                    className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60 ${
+                      darkMode
+                        ? 'border-slate-600/80 bg-slate-800/90 text-amber-400 hover:bg-slate-700 hover:text-amber-300'
+                        : 'border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50'
+                    }`}
+                    title={darkMode ? 'Tema claro' : 'Tema escuro'}
+                    aria-label={darkMode ? 'Ativar tema claro' : 'Ativar tema escuro'}
                   >
-                    Sair
+                    {darkMode ? (
+                      <Sun className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                    ) : (
+                      <Moon className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                    )}
                   </button>
-                )}
+                </div>
               </div>
             </div>
           )}
@@ -5832,7 +5884,6 @@ function AppContent() {
                 companies={companies}
                 darkMode={darkMode}
                 onRefresh={refreshWithCurrentFilters}
-                lastAccountsPayableImportAt={lastAccountsPayableImportAt}
                 loading={dataLoading}
               />
 
@@ -6043,143 +6094,31 @@ function AppContent() {
                   companies={companies}
                   darkMode={darkMode}
                   onRefresh={refreshWithCurrentFilters}
-                  lastAccountsPayableImportAt={lastAccountsPayableImportAt}
                   loading={dataLoading}
                 />
               )}
             </>
           )}
 
-          {currentPage === 'import' && (
-            <div className="space-y-4">
-              {importRole === 'none' ? (
-                <div className="flex items-center justify-center min-h-[400px]">
-                  <div className={`max-w-md w-full shadow-lg rounded-xl border p-6 ${
-                    darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
-                  }`}>
-                    <h2 className={`text-lg font-semibold mb-2 ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>
-                      Área restrita de importação
-                    </h2>
-                    <p className={`text-xs mb-4 ${darkMode ? 'text-slate-400' : 'text-gray-600'}`}>
-                      Para acessar a importação de dados, escolha o tipo de
-                      acesso e informe o código correspondente.
-                    </p>
-                    <form
-                      className="space-y-4"
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const formData = new FormData(e.currentTarget as HTMLFormElement);
-                        const code = String(formData.get('accessCode') || '').trim();
-                        const role = String(formData.get('role') || 'user') as
-                          | 'user'
-                          | 'admin';
-                        if (!code) {
-                          setImportAuthError('Informe o código de acesso.');
-                          return;
-                        }
-                        const expectedCode =
-                          role === 'admin' ? IMPORT_ADMIN_CODE : IMPORT_USER_CODE;
-                        if (code !== expectedCode) {
-                          setImportAuthError('Código inválido para o tipo selecionado.');
-                          return;
-                        }
-                        setImportRole(role);
-                        setImportAuthError('');
-                      }}
-                    >
-                      <div>
-                        <span className={`block text-xs font-medium mb-1 ${darkMode ? 'text-slate-200' : 'text-gray-700'}`}>
-                          Tipo de acesso
-                        </span>
-                        <div className="flex items-center gap-4 text-xs">
-                          <label className="inline-flex items-center gap-1">
-                            <input
-                              type="radio"
-                              name="role"
-                              value="user"
-                              defaultChecked
-                              className={`h-3 w-3 text-blue-500 ${darkMode ? 'border-slate-600' : 'border-gray-300'}`}
-                            />
-                            <span>Usuário (visualização / importação)</span>
-                          </label>
-                          <label className="inline-flex items-center gap-1">
-                            <input
-                              type="radio"
-                              name="role"
-                              value="admin"
-                              className={`h-3 w-3 text-blue-500 ${darkMode ? 'border-slate-600' : 'border-gray-300'}`}
-                            />
-                            <span>Admin (todas as ações)</span>
-                          </label>
-                        </div>
-                      </div>
-                      <div>
-                        <label
-                          htmlFor="accessCode"
-                          className={`block text-xs font-medium mb-1 ${darkMode ? 'text-slate-200' : 'text-gray-700'}`}
-                        >
-                          Código de acesso
-                        </label>
-                        <div className="relative">
-                          <input
-                            id="accessCode"
-                            name="accessCode"
-                            type={showAccessCode ? 'text' : 'password'}
-                            className={`w-full rounded-md px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                              darkMode ? 'border-slate-600 bg-slate-900 text-slate-100' : 'border-gray-300'
-                            }`}
-                            placeholder="Digite o código"
-                            autoComplete="off"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowAccessCode(prev => !prev)}
-                            className="absolute inset-y-0 right-2 flex items-center text-slate-400 hover:text-slate-600"
-                            title={showAccessCode ? 'Ocultar código' : 'Mostrar código'}
-                            tabIndex={-1}
-                          >
-                            {showAccessCode ? (
-                              <EyeOff className="w-4 h-4" />
-                            ) : (
-                              <Eye className="w-4 h-4" />
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                      {importAuthError && (
-                        <p className="text-xs text-red-600">{importAuthError}</p>
-                      )}
-                      <div className="flex justify-end gap-2">
-                        <button
-                          type="submit"
-                          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
-                        >
-                          Entrar
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                </div>
-              ) : (
-                <DataImport
-                  onFileUpload={handleDataImport}
-                  onSaveCompany={handleSaveCompany}
-                  onUpdateCompany={handleUpdateCompany}
-                  onRefreshCompanies={handleRefreshCompanies}
-                  companies={companies}
-                  importedFiles={importedFiles}
-                  onDeleteFile={handleDeleteFile}
-                  onRestoreFile={handleRestoreFile}
-                  onPermanentDeleteFile={handlePermanentDeleteFile}
-                  onEmptyTrash={handleEmptyTrash}
-                  isAdmin={importRole === 'admin'}
-                  darkMode={darkMode}
-                />
-              )}
-            </div>
-          )}
         </div>
       </div>
+
+      <CompanyFormModal
+        isOpen={companyFormModalOpen}
+        onClose={() => setCompanyFormModalOpen(false)}
+        onSave={handleSaveCompany}
+        darkMode={darkMode}
+      />
+      {importRole === 'admin' && (
+        <CompanyEditModal
+          isOpen={companyEditModalOpen}
+          onClose={() => setCompanyEditModalOpen(false)}
+          companies={companies}
+          onUpdate={handleUpdateCompany}
+          onRefresh={handleRefreshCompanies}
+          darkMode={darkMode}
+        />
+      )}
 
       <KPIDetailModal
         isOpen={modalState.isOpen}

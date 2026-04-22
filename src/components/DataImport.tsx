@@ -1,8 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileText, Trash2, CheckCircle, AlertCircle, Download, Info, ChevronDown, ChevronUp, Plus, Edit2 } from 'lucide-react';
+import { Upload, FileText, Trash2, CheckCircle, AlertCircle, Download, Info, ChevronDown, ChevronUp } from 'lucide-react';
 import { ImportedFile } from '../types/financial';
-import { CompanyFormModal } from './CompanyFormModal';
-import { CompanyEditModal } from './CompanyEditModal';
 
 interface Company {
   id: string;
@@ -15,9 +13,6 @@ interface Company {
 interface DataImportProps {
   onFileUpload: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario' | 'vendas_por_usuario', currentIndex?: number, totalFiles?: number) => Promise<void>;
   onFileSelectWithMode?: (file: File, type: 'companies' | 'accounts_payable' | 'revenues' | 'financial_transactions' | 'forecasted_entries' | 'transactions' | 'revenues_dre' | 'cmv_dre' | 'initial_balances' | 'orcamento_dre' | 'receita_crediario' | 'vendas_por_usuario', currentIndex?: number, totalFiles?: number) => void;
-  onSaveCompany?: (company: { company_code: string; company_name: string; name: string; group_name: string }) => Promise<void>;
-  onUpdateCompany?: (id: string, company: { company_code: string; company_name: string; name: string; group_name: string }) => Promise<void>;
-  onRefreshCompanies?: () => Promise<void>;
   companies?: Company[];
   importedFiles: ImportedFile[];
   onDeleteFile: (fileId: string) => void;
@@ -31,9 +26,6 @@ interface DataImportProps {
 export const DataImport: React.FC<DataImportProps> = ({
   onFileUpload,
   onFileSelectWithMode,
-  onSaveCompany,
-  onUpdateCompany,
-  onRefreshCompanies,
   companies = [],
   importedFiles,
   onDeleteFile,
@@ -46,8 +38,6 @@ export const DataImport: React.FC<DataImportProps> = ({
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [instructionsOpen, setInstructionsOpen] = useState(false);
   const [importedFilesOpen, setImportedFilesOpen] = useState(false);
-  const [companyModalOpen, setCompanyModalOpen] = useState(false);
-  const [companyEditModalOpen, setCompanyEditModalOpen] = useState(false);
   const [selectedImportDate, setSelectedImportDate] = useState<string>('');
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     all: true,
@@ -889,30 +879,6 @@ export const DataImport: React.FC<DataImportProps> = ({
           )}
         </div>
 
-        {/* Cadastrar Empresa Button */}
-        <div className="relative flex-1 min-w-[200px]">
-          <button
-            onClick={() => setCompanyModalOpen(true)}
-            className="w-full flex items-center justify-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-          >
-            <Plus className="w-5 h-5 mr-2" />
-            <span className="font-medium">Cadastrar Empresa</span>
-          </button>
-        </div>
-
-        {/* Editar Empresa Button - Apenas para Admin */}
-        {isAdmin && (
-          <div className="relative flex-1 min-w-[200px]">
-            <button
-              onClick={() => setCompanyEditModalOpen(true)}
-              className="w-full flex items-center justify-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <Edit2 className="w-5 h-5 mr-2" />
-              <span className="font-medium">Editar Empresa</span>
-            </button>
-          </div>
-        )}
-
         {/* Imported Files Dropdown */}
         <div className="relative flex-1 min-w-[200px]">
           <button
@@ -1323,28 +1289,6 @@ export const DataImport: React.FC<DataImportProps> = ({
         </div>
         )}
       </div>
-
-      {/* Company Form Modal */}
-      {onSaveCompany && (
-        <CompanyFormModal
-          isOpen={companyModalOpen}
-          onClose={() => setCompanyModalOpen(false)}
-          onSave={onSaveCompany}
-          darkMode={darkMode}
-        />
-      )}
-
-      {/* Company Edit Modal */}
-      {onUpdateCompany && onRefreshCompanies && (
-        <CompanyEditModal
-          isOpen={companyEditModalOpen}
-          onClose={() => setCompanyEditModalOpen(false)}
-          companies={companies}
-          onUpdate={onUpdateCompany}
-          onRefresh={onRefreshCompanies}
-          darkMode={darkMode}
-        />
-      )}
 
     </div>
   );

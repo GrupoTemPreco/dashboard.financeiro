@@ -1,5 +1,6 @@
-import React, { useRef, useEffect, useMemo } from 'react';
-import { Upload, Building2, Users, Calendar, Filter, BarChart3, TrendingUp, Activity, FileText, ChevronLeft, ChevronRight, Maximize, ChevronDown, Check, RefreshCw, X } from 'lucide-react';
+import React, { useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { Building2, Users, Calendar, Filter, BarChart3, TrendingUp, Activity, FileText, ChevronLeft, ChevronRight, Maximize, ChevronDown, Check, RefreshCw, X, Plus, Edit2 } from 'lucide-react';
 import { Filters } from '../types/financial';
 
 // Filtro de grupos ativo — filtra por group_name (empresas/lojas do grupo)
@@ -22,6 +23,9 @@ interface SidebarProps {
   onToggleCollapse: () => void;
   onTogglePresentationMode: () => void;
   onRefresh?: () => void;
+  onCadastrarEmpresa: () => void;
+  /** Se ausente, o item "Editar empresa" não é exibido (apenas admin). */
+  onEditarEmpresa?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -37,13 +41,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isCollapsed,
   onToggleCollapse,
   onTogglePresentationMode,
-  onRefresh
+  onRefresh,
+  onCadastrarEmpresa,
+  onEditarEmpresa
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [groupDropdownOpen, setGroupDropdownOpen] = React.useState(false);
   const [companyDropdownOpen, setCompanyDropdownOpen] = React.useState(false);
   const [bankDropdownOpen, setBankDropdownOpen] = React.useState(false);
   const [periodDropdownOpen, setPeriodDropdownOpen] = React.useState(false);
+  const [empresasMenuOpen, setEmpresasMenuOpen] = React.useState(false);
+  const [empresasMenuPos, setEmpresasMenuPos] = React.useState<{ top: number; left: number } | null>(null);
+  const empresasNavBtnRef = useRef<HTMLButtonElement | null>(null);
   const [tempStartDate, setTempStartDate] = React.useState(filters.startDate || '');
   const [tempEndDate, setTempEndDate] = React.useState(filters.endDate || '');
   // Estado pendente: todos os filtros só são aplicados ao clicar em "Aplicar filtro"
@@ -89,6 +98,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const codeMatches = (a: string, b: string) => a === b || normalizeCode(a) === normalizeCode(b);
   const isCompanySelected = (code: string) => pendingCompanies.some(c => codeMatches(c, code));
 
+  const updateEmpresasMenuPos = useCallback(() => {
+    const el = empresasNavBtnRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const gap = 6;
+    const menuWidth = 208;
+    const vw = window.innerWidth;
+    let left = r.right + gap;
+    if (left + menuWidth > vw - 8) {
+      left = Math.max(8, r.left - menuWidth - gap);
+    }
+    setEmpresasMenuPos({ top: r.top, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!empresasMenuOpen) {
+      setEmpresasMenuPos(null);
+      return;
+    }
+    updateEmpresasMenuPos();
+    const onReposition = () => updateEmpresasMenuPos();
+    window.addEventListener('resize', onReposition);
+    window.addEventListener('scroll', onReposition, true);
+    return () => {
+      window.removeEventListener('resize', onReposition);
+      window.removeEventListener('scroll', onReposition, true);
+    };
+  }, [empresasMenuOpen, updateEmpresasMenuPos]);
+
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
@@ -98,12 +136,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const pages = [
     { id: 'cashflow', name: 'Fluxo de Caixa', icon: TrendingUp },
-    { id: 'dre', name: 'DRE', icon: FileText },
-    { id: 'import', name: 'Importar Dados', icon: Upload }
+    { id: 'dre', name: 'DRE', icon: FileText }
   ];
 
   return (
-    <div className={`${isCollapsed ? 'w-16' : 'w-56'} bg-gradient-to-b from-slate-950 via-blue-900 to-indigo-900 text-white h-full overflow-y-auto scrollbar-vertical shadow-xl transition-all duration-300`}>
+    <div
+      className={`${isCollapsed ? 'w-16' : 'w-56'} shrink-0 flex flex-col min-h-0 bg-gradient-to-b from-slate-950 via-blue-900 to-indigo-900 text-white h-full overflow-y-auto overflow-x-hidden scrollbar-vertical shadow-xl transition-[width] duration-300`}
+    >
       <div className={`${isCollapsed ? 'p-3' : 'p-4'} border-b border-sky-700 flex items-center justify-between`}>
         {!isCollapsed && (
           <div>
@@ -411,7 +450,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         )}
 
-        {/* Click outside to close dropdowns */}
+        {/* Click outside to fechar dropdowns (menu Empresas usa portal com backdrop próprio) */}
         {(groupDropdownOpen || companyDropdownOpen || bankDropdownOpen || periodDropdownOpen) && (
           <div 
             className="fixed inset-0 z-5" 
@@ -450,6 +489,86 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
             );
           })}
+
+          <div className="min-w-0">
+            <button
+              type="button"
+              ref={empresasNavBtnRef}
+              onClick={e => {
+                e.stopPropagation();
+                setEmpresasMenuOpen(v => !v);
+                setGroupDropdownOpen(false);
+                setCompanyDropdownOpen(false);
+                setBankDropdownOpen(false);
+                setPeriodDropdownOpen(false);
+              }}
+              className={`w-full min-w-0 flex items-center ${isCollapsed ? 'justify-center px-2' : 'px-3'} py-2 rounded-lg transition-all duration-200 text-sm ${
+                empresasMenuOpen
+                  ? 'bg-sky-600/50 text-white'
+                  : 'text-sky-100 hover:bg-sky-700/70 hover:text-white'
+              }`}
+              title="Empresas"
+              aria-haspopup="menu"
+              aria-expanded={empresasMenuOpen}
+            >
+              <Building2 className={`w-4 h-4 shrink-0 ${!isCollapsed ? 'mr-2' : ''}`} />
+              {!isCollapsed && (
+                <>
+                  <span className="flex-1 text-left truncate">Empresas</span>
+                  <ChevronDown
+                    className={`w-4 h-4 shrink-0 text-blue-200 transition-transform ${empresasMenuOpen ? 'rotate-180' : ''}`}
+                  />
+                </>
+              )}
+            </button>
+            {empresasMenuOpen &&
+              typeof document !== 'undefined' &&
+              createPortal(
+                <>
+                  <div
+                    className="fixed inset-0 z-[200] bg-slate-950/20"
+                    aria-hidden
+                    onClick={() => setEmpresasMenuOpen(false)}
+                  />
+                  {empresasMenuPos && (
+                    <div
+                      role="menu"
+                      className="fixed z-[210] w-52 min-w-[13rem] rounded-lg border border-blue-800/90 bg-blue-950/98 py-0.5 shadow-2xl backdrop-blur-sm"
+                      style={{ top: empresasMenuPos.top, left: empresasMenuPos.left }}
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="w-full text-left px-2.5 py-1.5 text-xs sm:text-sm text-sky-100 hover:bg-blue-800/80 flex items-center gap-2"
+                        onClick={() => {
+                          setEmpresasMenuOpen(false);
+                          onCadastrarEmpresa();
+                        }}
+                      >
+                        <Plus className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                        Cadastrar empresa
+                      </button>
+                      {onEditarEmpresa && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="w-full text-left px-2.5 py-1.5 text-xs sm:text-sm text-sky-100 hover:bg-blue-800/80 flex items-center gap-2"
+                          onClick={() => {
+                            setEmpresasMenuOpen(false);
+                            onEditarEmpresa();
+                          }}
+                        >
+                          <Edit2 className="w-3.5 h-3.5 shrink-0 text-sky-300" />
+                          Editar empresa
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </>,
+                document.body
+              )}
+          </div>
 
           {/* Refresh Button — oculto por padrão */}
           {SHOW_REFRESH_BUTTON && onRefresh && (

@@ -62,7 +62,6 @@ interface DREPageProps {
   companies: any[];
   darkMode?: boolean;
   onRefresh?: () => void;
-  lastAccountsPayableImportAt?: string | null;
   loading?: boolean;
 }
 
@@ -77,7 +76,6 @@ export const DREPage: React.FC<DREPageProps> = ({
   companies,
   darkMode = false,
   onRefresh,
-  lastAccountsPayableImportAt = null,
   loading: drePageLoading = false
 }) => {
   const [selectedMetric, setSelectedMetric] = useState<'revenue' | 'cmv' | 'operatingExpenses' | 'ebitda' | 'netProfit'>('revenue');
@@ -882,7 +880,6 @@ export const DREPage: React.FC<DREPageProps> = ({
               companies={companies}
               darkMode={darkMode}
               onRefresh={onRefresh}
-              lastAccountsPayableImportAt={lastAccountsPayableImportAt}
               loading={drePageLoading}
             />
           )}

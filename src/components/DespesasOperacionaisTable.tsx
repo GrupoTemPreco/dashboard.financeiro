@@ -19,8 +19,6 @@ export interface DespesasOperacionaisTableProps {
   companies: any[];
   darkMode?: boolean;
   onRefresh?: () => void;
-  /** Data/hora da última importação de contas a pagar (ISO string), para exibir "Última atualização" */
-  lastAccountsPayableImportAt?: string | null;
   /** Exibe overlay de carregamento igual ao dos cards (spinner + "Carregando...") */
   loading?: boolean;
   /** Omitir título e bloco superior (uso embutido na DRE) */
@@ -39,7 +37,8 @@ const normalizeCode = (code: any): string => {
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 
-function formatLastUpdate(isoString: string): string {
+/** Formata data/hora para o selo "Última atualização" (fuso do navegador). */
+export function formatLastUpdate(isoString: string): string {
   try {
     const d = new Date(isoString);
     if (isNaN(d.getTime())) return '';
@@ -253,7 +252,6 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
   companies,
   darkMode = false,
   onRefresh,
-  lastAccountsPayableImportAt = null,
   loading = false,
   embedded = false,
   tbodyOnly = false
@@ -572,8 +570,6 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     );
   };
 
-  const lastUpdateFormatted = lastAccountsPayableImportAt ? formatLastUpdate(lastAccountsPayableImportAt) : '';
-
   if (tbodyOnly) {
     if (loading) {
       return (
@@ -604,11 +600,6 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
       {!embedded && (
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-4">
           <h2 className={`text-lg font-bold ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Despesas Operacionais</h2>
-          {lastUpdateFormatted && (
-            <span className={`text-sm ${darkMode ? 'text-slate-400' : 'text-gray-500'}`} title="Última importação do importador de contas a pagar">
-              Última atualização: {lastUpdateFormatted}
-            </span>
-          )}
         </div>
       )}
       <div
