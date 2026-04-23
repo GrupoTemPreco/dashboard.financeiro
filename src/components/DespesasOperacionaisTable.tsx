@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
 import { format, parseISO, subMonths, startOfMonth, endOfMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { supabase } from '../lib/supabase';
-import { DESPESAS_OP_STRUCTURE } from '../lib/despesasOpStructure';
+import { DESPESAS_OP_ROOT_SECTION_IDS, DESPESAS_OP_STRUCTURE } from '../lib/despesasOpStructure';
 import { parseCoaSegments, matchApSegmentsToCoaRule } from '../lib/coaApSegmentMatch';
 import type { CapCoaMatchCollector } from '../lib/coaCapMatchCollector';
 
@@ -402,6 +402,101 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     [filters.startDate, filters.endDate]
   );
 
+  const totalGeral = useMemo(() => {
+    const z = { prevRealizado: 0, curRealizado: 0, curPrevisto: 0, orcamento: 0, orcamentoEstrategico: 0 };
+    for (const id of DESPESAS_OP_ROOT_SECTION_IDS) {
+      const v = valuesMap[id];
+      if (v) {
+        z.prevRealizado += v.prevRealizado;
+        z.curRealizado += v.curRealizado;
+        z.curPrevisto += v.curPrevisto;
+      }
+      const keys = descendantAccountKeysMap[id] ?? [];
+      for (const k of keys) {
+        const o = orcamentoData[k];
+        z.orcamento += o?.orcamento ?? 0;
+        z.orcamentoEstrategico += o?.orcamento_estrategico ?? 0;
+      }
+    }
+    return z;
+  }, [valuesMap, orcamentoData, descendantAccountKeysMap]);
+
+  const renderTotalGeralRow = () => {
+    const fontClass = 'font-bold';
+    const bgClass = darkMode ? 'bg-slate-800/80' : 'bg-slate-100';
+    const orc = totalGeral.orcamento;
+    const orcEst = totalGeral.orcamentoEstrategico;
+    const forecastedValue = totalGeral.curPrevisto;
+    return (
+      <tr key="total-geral-despesas" className={bgClass}>
+        <td
+          className={`border px-4 py-3 ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}
+        >
+          <div className="flex items-center gap-2">
+            <span className="w-6" />
+            <span>Total geral</span>
+          </div>
+        </td>
+        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+          {formatCurrency(totalGeral.prevRealizado)}
+        </td>
+        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+          {formatCurrency(orcEst)}
+        </td>
+        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+          {formatCurrency(orc)}
+        </td>
+        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}>
+          <div className="flex items-center justify-end gap-1">
+            {orc > 0 && forecastedValue > orc && (
+              <span title="Previsto acima do orçamento">
+                <AlertTriangle className={`w-4 h-4 shrink-0 ${darkMode ? 'text-red-400' : 'text-red-600'}`} aria-hidden />
+              </span>
+            )}
+            <span
+              className={
+                orc > 0
+                  ? forecastedValue > orc
+                    ? darkMode
+                      ? 'text-red-400'
+                      : 'text-red-600'
+                    : forecastedValue < orc
+                      ? darkMode
+                        ? 'text-emerald-400'
+                        : 'text-emerald-600'
+                      : darkMode
+                        ? 'text-slate-100'
+                        : 'text-gray-800'
+                  : darkMode
+                    ? 'text-slate-100'
+                    : 'text-gray-800'
+              }
+            >
+              {formatCurrency(forecastedValue)}
+            </span>
+          </div>
+        </td>
+        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+          {formatCurrency(totalGeral.curRealizado)}
+        </td>
+        {SHOW_VARIATION_COLUMNS && (
+          <>
+            <td
+              className={`border px-4 py-3 text-right text-slate-500 ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}
+            >
+              —
+            </td>
+            <td
+              className={`border px-4 py-3 text-right text-slate-500 ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}
+            >
+              —
+            </td>
+          </>
+        )}
+      </tr>
+    );
+  };
+
   const renderRow = (account: any, index: number) => {
     if (tbodyOnly && account.id === 'despesas-op') return null;
     if (!shouldShowAccount(account)) return null;
@@ -590,6 +685,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     }
     return (
       <>
+        {renderTotalGeralRow()}
         {DESPESAS_OP_STRUCTURE.map((account, index) => renderRow(account, index))}
       </>
     );
@@ -639,6 +735,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
             </tr>
           </thead>
           <tbody>
+            {renderTotalGeralRow()}
             {DESPESAS_OP_STRUCTURE.map((account, index) => renderRow(account, index))}
           </tbody>
         </table>

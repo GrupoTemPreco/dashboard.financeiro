@@ -19,17 +19,23 @@ export interface DespesaOperacionalStructureRow {
   budgetAccountKey?: string;
 }
 
+/**
+ * Seções de nível 1 (raiz) cujos totais somam a linha «Total geral» no topo da tabela.
+ * Acrescente aqui o `id` de qualquer bloco irmã (ex.: novas seções fora de despesas-op).
+ */
+export const DESPESAS_OP_ROOT_SECTION_IDS: readonly string[] = ['despesas-op-mercadorias', 'despesas-op'];
+
 export const DESPESAS_OP_STRUCTURE: DespesaOperacionalStructureRow[] = [
-  { id: 'despesas-op', name: 'Despesas Operacionais', level: 1, editable: false, bg: 'bg-orange-50', bold: true, formula: 'sum', parent: null as string | null, expandable: true },
+  /** Seção à parte: não entra no total de «Despesas Operacionais» (despesas-op). */
   {
     id: 'despesas-op-mercadorias',
     name: 'Despesas com mercadorias',
-    level: 2,
+    level: 1,
     editable: false,
     bg: '',
     bold: true,
     formula: 'sum',
-    parent: 'despesas-op',
+    parent: null as string | null,
     expandable: true
   },
   {
@@ -115,6 +121,17 @@ export const DESPESAS_OP_STRUCTURE: DespesaOperacionalStructureRow[] = [
     parent: 'despesas-op-mercadorias',
     chartOfAccountsPrefix: '06.7',
     chartOfAccountsSegmentContains: 'Perfumaria'
+  },
+  {
+    id: 'despesas-op',
+    name: 'Despesas Operacionais',
+    level: 1,
+    editable: false,
+    bg: 'bg-orange-50',
+    bold: true,
+    formula: 'sum',
+    parent: null as string | null,
+    expandable: true
   },
   { id: 'imposto-venda', name: 'Imposto sobre venda', level: 2, editable: false, bg: '', bold: true, formula: 'sum', parent: 'despesas-op', expandable: true },
   { name: 'Simples Nacional pago no período (R$)', level: 3, editable: true, bg: '', parent: 'imposto-venda', chartOfAccountsPrefix: '03.1', chartOfAccountsSegmentContains: 'Simples Nacional' },
