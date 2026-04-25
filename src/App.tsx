@@ -5792,6 +5792,7 @@ function AppContent() {
               {/* Despesas Operacionais (tabela igual à DRE, só esta seção) */}
               <DespesasOperacionaisTable
                 accountsPayable={accountsPayable}
+                vendasPorUsuarioRows={vendasPorUsuarioRows}
                 filters={filters}
                 companies={companies}
                 darkMode={darkMode}

@@ -15,6 +15,7 @@ const SHOW_MERCADORIAS_NEW_BADGE = true;
 
 export interface DespesasOperacionaisTableProps {
   accountsPayable: any[];
+  vendasPorUsuarioRows?: any[];
   filters: { startDate: string; endDate: string; groups: string[]; companies: string[] };
   companies: any[];
   darkMode?: boolean;
@@ -36,6 +37,8 @@ const normalizeCode = (code: any): string => {
 
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+const formatPercentage = (value: number) =>
+  `${new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value)}%`;
 
 /** Formata data/hora para o selo "Última atualização" (fuso do navegador). */
 export function formatLastUpdate(isoString: string): string {
@@ -248,6 +251,7 @@ export function computeDespesasOperacionaisValuesMap(
 
 export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableProps> = ({
   accountsPayable,
+  vendasPorUsuarioRows = [],
   filters,
   companies,
   darkMode = false,
@@ -256,6 +260,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
   embedded = false,
   tbodyOnly = false
 }) => {
+  const [isByStoreModalOpen, setIsByStoreModalOpen] = useState(false);
   // Padrão: Despesas Operacionais expandida (filhos visíveis); ainda é possível encolher/abrir
   const [expandedAccounts, setExpandedAccounts] = useState<Record<string, boolean>>({
     'despesas-op': true,
@@ -309,6 +314,93 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
   }, []);
 
   const currentStart = useMemo(() => getCurrentPeriod().start, [filters.startDate, filters.endDate]);
+  const previousPeriod = useMemo(() => {
+    if (!currentStart) return { start: '', end: '' };
+    const prevMonthDate = subMonths(parseISO(currentStart), 1);
+    return {
+      start: format(startOfMonth(prevMonthDate), 'yyyy-MM-dd'),
+      end: format(endOfMonth(prevMonthDate), 'yyyy-MM-dd')
+    };
+  }, [currentStart]);
+
+  const mercadoriasComparison = useMemo(() => {
+    const current = getCurrentPeriod();
+    const curStart = (current.start || '').substring(0, 10);
+    const curEnd = (current.end || '').substring(0, 10);
+    const prevStart = (previousPeriod.start || '').substring(0, 10);
+    const prevEnd = (previousPeriod.end || '').substring(0, 10);
+    const toDate = (v: any) => (v == null ? '' : String(v).split('T')[0]);
+    const num = (v: any) => Number(v) || 0;
+    const statusLower = (s: any) => String(s || '').toLowerCase().trim();
+    const isRealizado = (s: any) => ['realizado', 'pago', 'paid'].includes(statusLower(s));
+    const isMercadorias04 = (coa: any) => String(coa || '').toLowerCase().includes('04.0');
+
+    let allowedBusinessUnits: Set<string> | null = null;
+    if (companies.length > 0) {
+      const hasActive = filters.groups.length > 0 || filters.companies.length > 0;
+      if (hasActive) {
+        allowedBusinessUnits = new Set(
+          companies
+            .filter(
+              c =>
+                (filters.groups.length === 0 || filters.groups.includes(c.group_name)) &&
+                (filters.companies.length === 0 ||
+                  filters.companies.some(
+                    (code: string) =>
+                      String(code).trim() === String(c.company_code ?? '').trim() ||
+                      normalizeCode(code) === normalizeCode(c.company_code ?? '')
+                  ))
+            )
+            .map(c => normalizeCode(c.company_code))
+        );
+      }
+    }
+    const businessUnitAllowed = (businessUnit: any) =>
+      allowedBusinessUnits === null || allowedBusinessUnits.has(normalizeCode(businessUnit));
+
+    const faturamentoPrev = (vendasPorUsuarioRows || [])
+      .filter(r => {
+        const d = toDate(r.data);
+        return d && d >= prevStart && d <= prevEnd && businessUnitAllowed(r.business_unit);
+      })
+      .reduce((sum, r) => sum + num(r.amount), 0);
+    const faturamentoAtual = (vendasPorUsuarioRows || [])
+      .filter(r => {
+        const d = toDate(r.data);
+        return d && d >= curStart && d <= curEnd && businessUnitAllowed(r.business_unit);
+      })
+      .reduce((sum, r) => sum + num(r.amount), 0);
+
+    const cmvPrev = (accountsPayable || [])
+      .filter(ap => {
+        const d = toDate(ap.payment_date);
+        return (
+          d &&
+          d >= prevStart &&
+          d <= prevEnd &&
+          isRealizado(ap.status) &&
+          isMercadorias04(ap.chart_of_accounts) &&
+          businessUnitAllowed(ap.business_unit)
+        );
+      })
+      .reduce((sum, ap) => sum + Math.abs(num(ap.amount)), 0);
+
+    const cmvAtual = (accountsPayable || [])
+      .filter(ap => {
+        const d = toDate(ap.payment_date);
+        return (
+          d &&
+          d >= curStart &&
+          d <= curEnd &&
+          isRealizado(ap.status) &&
+          isMercadorias04(ap.chart_of_accounts) &&
+          businessUnitAllowed(ap.business_unit)
+        );
+      })
+      .reduce((sum, ap) => sum + Math.abs(num(ap.amount)), 0);
+
+    return { faturamentoPrev, cmvPrev, faturamentoAtual, cmvAtual };
+  }, [accountsPayable, vendasPorUsuarioRows, companies, filters.groups, filters.companies, filters.startDate, filters.endDate, previousPeriod.start, previousPeriod.end]);
 
   const valuesMap = useMemo(
     () => computeDespesasOperacionaisValuesMap(accountsPayable, filters, companies),
@@ -401,6 +493,189 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     () => getDespesasOperacionaisPeriodLabels(filters),
     [filters.startDate, filters.endDate]
   );
+  const isCurrentMonthOpenForTrend = useMemo(() => {
+    const current = getCurrentPeriod();
+    const start = (current.start || '').substring(0, 10);
+    if (!start) return false;
+    const d = parseISO(start);
+    const today = new Date();
+    return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth();
+  }, [filters.startDate, filters.endDate]);
+
+  const getIndicatorClass = useCallback((metric: 'cmv' | 'cap', percent: number) => {
+    if (!Number.isFinite(percent)) return darkMode ? 'text-slate-100' : 'text-gray-800';
+    if (metric === 'cmv') {
+      if (percent <= 60) return darkMode ? 'text-emerald-400' : 'text-emerald-600';
+      if (percent <= 62.5) return darkMode ? 'text-amber-400' : 'text-amber-600';
+      return darkMode ? 'text-red-400' : 'text-red-600';
+    }
+    if (percent <= 20) return darkMode ? 'text-emerald-400' : 'text-emerald-600';
+    if (percent <= 22.5) return darkMode ? 'text-amber-400' : 'text-amber-600';
+    return darkMode ? 'text-red-400' : 'text-red-600';
+  }, [darkMode]);
+
+  const byStoreComparisonRows = useMemo(() => {
+    const current = getCurrentPeriod();
+    const curStart = (current.start || '').substring(0, 10);
+    const curEnd = (current.end || '').substring(0, 10);
+    const prevStart = (previousPeriod.start || '').substring(0, 10);
+    const prevEnd = (previousPeriod.end || '').substring(0, 10);
+    const today = new Date();
+    const currentStartDate = curStart ? parseISO(curStart) : null;
+    const isCurrentMonthOpen =
+      currentStartDate != null &&
+      currentStartDate.getFullYear() === today.getFullYear() &&
+      currentStartDate.getMonth() === today.getMonth();
+    const prevEndDay = prevEnd ? Number(prevEnd.substring(8, 10)) : 0;
+    const cappedPrevDay = prevEndDay > 0 ? Math.min(today.getDate(), prevEndDay) : today.getDate();
+    const prevComparableEnd = prevStart ? `${prevStart.substring(0, 8)}${String(cappedPrevDay).padStart(2, '0')}` : '';
+    const toDate = (v: any) => (v == null ? '' : String(v).split('T')[0]);
+    const num = (v: any) => Number(v) || 0;
+    const statusLower = (s: any) => String(s || '').toLowerCase().trim();
+    const isRealizado = (s: any) => ['realizado', 'pago', 'paid'].includes(statusLower(s));
+    const isMercadorias04 = (coa: any) => String(coa || '').toLowerCase().includes('04.0');
+    const despesasOperacionaisLeafAccounts = DESPESAS_OP_STRUCTURE.filter(
+      account => account.formula !== 'sum' && account.parent !== 'despesas-op-mercadorias'
+    );
+    const segmentsCache = new Map<string, string[]>();
+    const getSegments = (coa: any): string[] => {
+      if (coa == null || coa === '') return [];
+      const key = String(coa).trim();
+      let seg = segmentsCache.get(key);
+      if (seg === undefined) {
+        seg = parseCoaSegments(key);
+        segmentsCache.set(key, seg);
+      }
+      return seg;
+    };
+    const apMatchesAccount = (ap: any, account: any): boolean => {
+      const segments = getSegments(ap.chart_of_accounts);
+      if (segments.length === 0) return false;
+      const prefix = account.chartOfAccountsPrefix;
+      const name = (account.name || account.id) ?? '';
+      if (prefix) return matchApSegmentsToCoaRule(segments, account);
+      return segments.some(seg => seg === name || seg.toLowerCase() === name.toLowerCase());
+    };
+    const isCapDespesasOperacionais = (ap: any) =>
+      despesasOperacionaisLeafAccounts.some(account => apMatchesAccount(ap, account));
+
+    let allowedBusinessUnits: Set<string> | null = null;
+    if (companies.length > 0) {
+      const hasActive = filters.groups.length > 0 || filters.companies.length > 0;
+      if (hasActive) {
+        allowedBusinessUnits = new Set(
+          companies
+            .filter(
+              c =>
+                (filters.groups.length === 0 || filters.groups.includes(c.group_name)) &&
+                (filters.companies.length === 0 ||
+                  filters.companies.some(
+                    (code: string) =>
+                      String(code).trim() === String(c.company_code ?? '').trim() ||
+                      normalizeCode(code) === normalizeCode(c.company_code ?? '')
+                  ))
+            )
+            .map(c => normalizeCode(c.company_code))
+        );
+      }
+    }
+    const businessUnitAllowed = (businessUnit: any) =>
+      allowedBusinessUnits === null || allowedBusinessUnits.has(normalizeCode(businessUnit));
+
+    const companyNameByCode = new Map<string, string>();
+    for (const c of companies || []) {
+      const code = normalizeCode(c.company_code);
+      if (!code) continue;
+      const name = String(c.company_name || c.name || c.fantasy_name || c.razao_social || c.group_name || code).trim();
+      companyNameByCode.set(code, name || code);
+    }
+
+    const bucket = new Map<string, {
+      businessUnit: string;
+      loja: string;
+      faturamentoPrev: number;
+      faturamentoPrevComparativo: number;
+      capPrev: number;
+      cmvPrev: number;
+      faturamentoAtual: number;
+      capAtual: number;
+      cmvAtual: number;
+    }>();
+
+    const ensureRow = (rawBusinessUnit: any) => {
+      const code = normalizeCode(rawBusinessUnit || 'Sem unidade');
+      if (!bucket.has(code)) {
+        bucket.set(code, {
+          businessUnit: code,
+          loja: companyNameByCode.get(code) || String(rawBusinessUnit || code),
+          faturamentoPrev: 0,
+          faturamentoPrevComparativo: 0,
+          capPrev: 0,
+          cmvPrev: 0,
+          faturamentoAtual: 0,
+          capAtual: 0,
+          cmvAtual: 0
+        });
+      }
+      return bucket.get(code)!;
+    };
+
+    for (const sale of vendasPorUsuarioRows || []) {
+      if (!businessUnitAllowed(sale.business_unit)) continue;
+      const d = toDate(sale.data);
+      if (!d) continue;
+      const row = ensureRow(sale.business_unit);
+      if (d >= prevStart && d <= prevEnd) row.faturamentoPrev += num(sale.amount);
+      if (d >= prevStart && d <= prevComparableEnd) row.faturamentoPrevComparativo += num(sale.amount);
+      if (d >= curStart && d <= curEnd) row.faturamentoAtual += num(sale.amount);
+    }
+
+    for (const ap of accountsPayable || []) {
+      if (!businessUnitAllowed(ap.business_unit)) continue;
+      if (!isRealizado(ap.status)) continue;
+      const d = toDate(ap.payment_date);
+      if (!d) continue;
+      const row = ensureRow(ap.business_unit);
+      const amount = Math.abs(num(ap.amount));
+      const isCmv = isMercadorias04(ap.chart_of_accounts);
+      const isCap = isCapDespesasOperacionais(ap);
+      if (d >= prevStart && d <= prevEnd) {
+        if (isCmv) row.cmvPrev += amount;
+        else if (isCap) row.capPrev += amount;
+      }
+      if (d >= curStart && d <= curEnd) {
+        if (isCmv) row.cmvAtual += amount;
+        else if (isCap) row.capAtual += amount;
+      }
+    }
+
+    return Array.from(bucket.values()).sort((a, b) => b.capAtual - a.capAtual);
+  }, [
+    accountsPayable,
+    vendasPorUsuarioRows,
+    companies,
+    filters.groups,
+    filters.companies,
+    filters.startDate,
+    filters.endDate,
+    previousPeriod.start,
+    previousPeriod.end
+  ]);
+
+  const byStoreTotals = useMemo(() => {
+    return byStoreComparisonRows.reduce(
+      (acc, row) => ({
+        faturamentoPrev: acc.faturamentoPrev + row.faturamentoPrev,
+        faturamentoPrevComparativo: acc.faturamentoPrevComparativo + row.faturamentoPrevComparativo,
+        capPrev: acc.capPrev + row.capPrev,
+        cmvPrev: acc.cmvPrev + row.cmvPrev,
+        faturamentoAtual: acc.faturamentoAtual + row.faturamentoAtual,
+        capAtual: acc.capAtual + row.capAtual,
+        cmvAtual: acc.cmvAtual + row.cmvAtual
+      }),
+      { faturamentoPrev: 0, faturamentoPrevComparativo: 0, capPrev: 0, cmvPrev: 0, faturamentoAtual: 0, capAtual: 0, cmvAtual: 0 }
+    );
+  }, [byStoreComparisonRows]);
 
   const totalGeral = useMemo(() => {
     const z = { prevRealizado: 0, curRealizado: 0, curPrevisto: 0, orcamento: 0, orcamentoEstrategico: 0 };
@@ -427,6 +702,10 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     const orc = totalGeral.orcamento;
     const orcEst = totalGeral.orcamentoEstrategico;
     const forecastedValue = totalGeral.curPrevisto;
+    const prevRevenue = mercadoriasComparison.faturamentoPrev;
+    const curRevenue = mercadoriasComparison.faturamentoAtual;
+    const prevRealizadoPct = prevRevenue > 0 ? (totalGeral.prevRealizado / prevRevenue) * 100 : null;
+    const curRealizadoPct = curRevenue > 0 ? (totalGeral.curRealizado / curRevenue) * 100 : null;
     return (
       <tr key="total-geral-despesas" className={bgClass}>
         <td
@@ -437,9 +716,23 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
             <span>Total geral</span>
           </div>
         </td>
-        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
-          {formatCurrency(totalGeral.prevRealizado)}
-        </td>
+        {!tbodyOnly && (
+          <>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+              {formatCurrency(mercadoriasComparison.faturamentoPrev)}
+            </td>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+              <span className={prevRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : (darkMode ? 'text-slate-100' : 'text-gray-800')}>
+                {formatCurrency(totalGeral.prevRealizado)}{prevRealizadoPct == null ? '' : ` (${formatPercentage(prevRealizadoPct)})`}
+              </span>
+            </td>
+          </>
+        )}
+        {tbodyOnly && (
+          <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+            {formatCurrency(totalGeral.prevRealizado)}
+          </td>
+        )}
         <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
           {formatCurrency(orcEst)}
         </td>
@@ -476,9 +769,23 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
             </span>
           </div>
         </td>
-        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
-          {formatCurrency(totalGeral.curRealizado)}
-        </td>
+        {!tbodyOnly && (
+          <>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+              {formatCurrency(mercadoriasComparison.faturamentoAtual)}
+            </td>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+              <span className={curRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : (darkMode ? 'text-slate-100' : 'text-gray-800')}>
+                {formatCurrency(totalGeral.curRealizado)}{curRealizadoPct == null ? '' : ` (${formatPercentage(curRealizadoPct)})`}
+              </span>
+            </td>
+          </>
+        )}
+        {tbodyOnly && (
+          <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+            {formatCurrency(totalGeral.curRealizado)}
+          </td>
+        )}
         {SHOW_VARIATION_COLUMNS && (
           <>
             <td
@@ -503,6 +810,9 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
 
     const rowKey = account.id ?? account.name;
     const v = valuesMap[rowKey] ?? { prevRealizado: 0, curRealizado: 0, curPrevisto: 0 };
+    const showMercadoriasComparison = !tbodyOnly && account.level === 1;
+    const isMercadoriasRow = rowKey === 'despesas-op-mercadorias';
+    const realizedIndicatorMetric: 'cmv' | 'cap' = isMercadoriasRow ? 'cmv' : 'cap';
     const previousValue = v.prevRealizado;
     const currentValue = v.curRealizado;
     const forecastedValue = v.curPrevisto;
@@ -510,6 +820,10 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     const variationPercentage = forecastedValue !== 0 ? ((forecastedValue - currentValue) / forecastedValue) * 100 : 0;
     const revenueDiffValue = currentValue - forecastedValue;
     const revenueDiffPercentage = forecastedValue !== 0 ? ((currentValue - forecastedValue) / forecastedValue) * 100 : 0;
+    const prevRevenue = mercadoriasComparison.faturamentoPrev;
+    const curRevenue = mercadoriasComparison.faturamentoAtual;
+    const prevRealizadoPct = prevRevenue > 0 ? (previousValue / prevRevenue) * 100 : null;
+    const curRealizadoPct = curRevenue > 0 ? (currentValue / curRevenue) * 100 : null;
 
     const accountKey = getAccountKey(account);
     const isSumRow = account.formula === 'sum';
@@ -613,9 +927,25 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
             </div>
           </div>
         </td>
-        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
-          {formatCurrency(previousValue)}
-        </td>
+        {!tbodyOnly && (
+          <>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-slate-500'}`}>
+              {showMercadoriasComparison ? formatCurrency(mercadoriasComparison.faturamentoPrev) : '-'}
+            </td>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-slate-500'}`}>
+              {showMercadoriasComparison ? (
+                <span className={prevRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass(realizedIndicatorMetric, prevRealizadoPct)}>
+                  {formatCurrency(previousValue)}{prevRealizadoPct == null ? '' : ` (${isMercadoriasRow ? `CMV ${formatPercentage(prevRealizadoPct)}` : formatPercentage(prevRealizadoPct)})`}
+                </span>
+              ) : '-'}
+            </td>
+          </>
+        )}
+        {tbodyOnly && (
+          <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+            {formatCurrency(previousValue)}
+          </td>
+        )}
         {renderOrcamentoCell('orcamento_estrategico')}
         {renderOrcamentoCell('orcamento')}
         <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}>
@@ -638,9 +968,25 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
             </span>
           </div>
         </td>
-        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
-          {formatCurrency(currentValue)}
-        </td>
+        {!tbodyOnly && (
+          <>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-slate-500'}`}>
+              {showMercadoriasComparison ? formatCurrency(mercadoriasComparison.faturamentoAtual) : '-'}
+            </td>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-slate-500'}`}>
+              {showMercadoriasComparison ? (
+                <span className={curRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass(realizedIndicatorMetric, curRealizadoPct)}>
+                  {formatCurrency(currentValue)}{curRealizadoPct == null ? '' : ` (${isMercadoriasRow ? `CMV ${formatPercentage(curRealizadoPct)}` : formatPercentage(curRealizadoPct)})`}
+                </span>
+              ) : '-'}
+            </td>
+          </>
+        )}
+        {tbodyOnly && (
+          <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+            {formatCurrency(currentValue)}
+          </td>
+        )}
         {SHOW_VARIATION_COLUMNS && (
           <>
             <td className={`border px-4 py-3 text-right ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
@@ -670,7 +1016,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
       return (
         <tr className={darkMode ? 'bg-slate-900' : ''}>
           <td
-            colSpan={6}
+            colSpan={tbodyOnly ? 6 : 8}
             className={`border px-4 py-8 text-center ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}
           >
             <div className="flex flex-col items-center gap-2">
@@ -694,8 +1040,19 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
   return (
     <div className={embedded ? 'mb-0' : 'mb-8'}>
       {!embedded && (
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <h2 className={`text-lg font-bold ${darkMode ? 'text-slate-100' : 'text-gray-800'}`}>Despesas Operacionais</h2>
+          <button
+            type="button"
+            onClick={() => setIsByStoreModalOpen(true)}
+            className={`px-3 py-1.5 rounded-md text-sm font-medium border transition-colors ${
+              darkMode
+                ? 'bg-slate-800 border-slate-600 text-slate-100 hover:bg-slate-700'
+                : 'bg-white border-gray-300 text-gray-800 hover:bg-gray-50'
+            }`}
+          >
+            Ver por loja
+          </button>
         </div>
       )}
       <div
@@ -708,7 +1065,10 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                 Conta
               </th>
               <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
-                {previousPeriodLabel}
+                Faturamento (mês anterior)
+              </th>
+              <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
+                {previousPeriodLabel} Realizado
               </th>
               <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
                 Orçamento Estratégico
@@ -718,6 +1078,9 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
               </th>
               <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
                 {currentPeriodLabel} Previsto
+              </th>
+              <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
+                Faturamento (mês atual)
               </th>
               <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
                 {currentPeriodLabel} Realizado
@@ -751,6 +1114,153 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
           </div>
         )}
       </div>
+      {isByStoreModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className={`w-full max-w-7xl max-h-[88vh] overflow-hidden rounded-lg border shadow-xl ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'}`}>
+            <div className={`flex items-center justify-between px-4 py-3 border-b ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}>
+              <h3 className={`text-base font-semibold ${darkMode ? 'text-slate-100' : 'text-gray-900'}`}>Despesas Operacionais por loja</h3>
+              <button
+                type="button"
+                onClick={() => setIsByStoreModalOpen(false)}
+                className={`px-2 py-1 rounded text-sm ${darkMode ? 'text-slate-200 hover:bg-slate-800' : 'text-gray-700 hover:bg-gray-100'}`}
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="overflow-auto max-h-[76vh]">
+              <table className="min-w-full border-collapse">
+                <thead>
+                  <tr className={darkMode ? 'bg-slate-800' : 'bg-gray-50'}>
+                    <th className={`sticky top-0 border px-4 py-3 text-left text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>Loja</th>
+                    <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>Faturamento {previousPeriodLabel}</th>
+                    <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>CAP {previousPeriodLabel}</th>
+                    <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>CMV {previousPeriodLabel}</th>
+                    <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>Faturamento {currentPeriodLabel}</th>
+                    <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>CAP {currentPeriodLabel}</th>
+                    <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>CMV {currentPeriodLabel}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byStoreComparisonRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className={`border px-4 py-8 text-center text-sm ${darkMode ? 'border-slate-700 text-slate-400' : 'border-gray-200 text-gray-500'}`}>
+                        Sem dados para o período selecionado.
+                      </td>
+                    </tr>
+                  ) : (
+                    <>
+                      {byStoreComparisonRows.map(row => {
+                        const capPrevPct = row.faturamentoPrev > 0 ? (row.capPrev / row.faturamentoPrev) * 100 : null;
+                        const cmvPrevPct = row.faturamentoPrev > 0 ? (row.cmvPrev / row.faturamentoPrev) * 100 : null;
+                        const capAtualPct = row.faturamentoAtual > 0 ? (row.capAtual / row.faturamentoAtual) * 100 : null;
+                        const cmvAtualPct = row.faturamentoAtual > 0 ? (row.cmvAtual / row.faturamentoAtual) * 100 : null;
+                        const faturamentoComparativo = isCurrentMonthOpenForTrend ? row.faturamentoPrevComparativo : row.faturamentoPrev;
+                        const faturamentoTrend: 'up' | 'down' | 'equal' =
+                          row.faturamentoAtual > faturamentoComparativo ? 'up' : row.faturamentoAtual < faturamentoComparativo ? 'down' : 'equal';
+                        const faturamentoTrendClass =
+                          faturamentoTrend === 'up'
+                            ? (darkMode ? 'text-emerald-400' : 'text-emerald-600')
+                            : faturamentoTrend === 'down'
+                              ? (darkMode ? 'text-red-400' : 'text-red-600')
+                              : (darkMode ? 'text-amber-400' : 'text-amber-600');
+                        const faturamentoTrendSymbol = faturamentoTrend === 'up' ? '↑' : faturamentoTrend === 'down' ? '↓' : '=';
+                        return (
+                          <tr key={row.businessUnit} className={darkMode ? 'hover:bg-slate-800/40' : 'hover:bg-gray-50'}>
+                            <td className={`border px-4 py-3 text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>{row.loja}</td>
+                            <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>{formatCurrency(row.faturamentoPrev)}</td>
+                            <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={capPrevPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cap', capPrevPct)}>
+                                {formatCurrency(row.capPrev)}{capPrevPct == null ? '' : ` (${formatPercentage(capPrevPct)})`}
+                              </span>
+                            </td>
+                            <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={cmvPrevPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvPrevPct)}>
+                                {cmvPrevPct == null ? '-' : formatPercentage(cmvPrevPct)}
+                              </span>
+                            </td>
+                            <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className="inline-flex items-center justify-end gap-2">
+                                <span>{formatCurrency(row.faturamentoAtual)}</span>
+                                <span className={`font-bold ${faturamentoTrendClass}`} title={isCurrentMonthOpenForTrend ? 'Comparado ao acumulado até hoje do mês anterior' : 'Comparado ao mês anterior fechado'}>
+                                  {faturamentoTrendSymbol}
+                                </span>
+                              </span>
+                            </td>
+                            <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={capAtualPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cap', capAtualPct)}>
+                                {formatCurrency(row.capAtual)}{capAtualPct == null ? '' : ` (${formatPercentage(capAtualPct)})`}
+                              </span>
+                            </td>
+                            <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={cmvAtualPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvAtualPct)}>
+                                {cmvAtualPct == null ? '-' : formatPercentage(cmvAtualPct)}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {(() => {
+                        const capPrevPct = byStoreTotals.faturamentoPrev > 0 ? (byStoreTotals.capPrev / byStoreTotals.faturamentoPrev) * 100 : null;
+                        const cmvPrevPct = byStoreTotals.faturamentoPrev > 0 ? (byStoreTotals.cmvPrev / byStoreTotals.faturamentoPrev) * 100 : null;
+                        const capAtualPct = byStoreTotals.faturamentoAtual > 0 ? (byStoreTotals.capAtual / byStoreTotals.faturamentoAtual) * 100 : null;
+                        const cmvAtualPct = byStoreTotals.faturamentoAtual > 0 ? (byStoreTotals.cmvAtual / byStoreTotals.faturamentoAtual) * 100 : null;
+                        const faturamentoComparativoTotal = isCurrentMonthOpenForTrend ? byStoreTotals.faturamentoPrevComparativo : byStoreTotals.faturamentoPrev;
+                        const faturamentoTrendTotal: 'up' | 'down' | 'equal' =
+                          byStoreTotals.faturamentoAtual > faturamentoComparativoTotal
+                            ? 'up'
+                            : byStoreTotals.faturamentoAtual < faturamentoComparativoTotal
+                              ? 'down'
+                              : 'equal';
+                        const faturamentoTrendTotalClass =
+                          faturamentoTrendTotal === 'up'
+                            ? (darkMode ? 'text-emerald-400' : 'text-emerald-600')
+                            : faturamentoTrendTotal === 'down'
+                              ? (darkMode ? 'text-red-400' : 'text-red-600')
+                              : (darkMode ? 'text-amber-400' : 'text-amber-600');
+                        const faturamentoTrendTotalSymbol = faturamentoTrendTotal === 'up' ? '↑' : faturamentoTrendTotal === 'down' ? '↓' : '=';
+                        return (
+                          <tr className={darkMode ? 'bg-slate-800/70' : 'bg-gray-100'}>
+                            <td className={`border px-4 py-3 text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>Total</td>
+                            <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>{formatCurrency(byStoreTotals.faturamentoPrev)}</td>
+                            <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={capPrevPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cap', capPrevPct)}>
+                                {formatCurrency(byStoreTotals.capPrev)}{capPrevPct == null ? '' : ` (${formatPercentage(capPrevPct)})`}
+                              </span>
+                            </td>
+                            <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={cmvPrevPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvPrevPct)}>
+                                {cmvPrevPct == null ? '-' : formatPercentage(cmvPrevPct)}
+                              </span>
+                            </td>
+                            <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className="inline-flex items-center justify-end gap-2">
+                                <span>{formatCurrency(byStoreTotals.faturamentoAtual)}</span>
+                                <span className={`font-bold ${faturamentoTrendTotalClass}`} title={isCurrentMonthOpenForTrend ? 'Comparado ao acumulado até hoje do mês anterior' : 'Comparado ao mês anterior fechado'}>
+                                  {faturamentoTrendTotalSymbol}
+                                </span>
+                              </span>
+                            </td>
+                            <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={capAtualPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cap', capAtualPct)}>
+                                {formatCurrency(byStoreTotals.capAtual)}{capAtualPct == null ? '' : ` (${formatPercentage(capAtualPct)})`}
+                              </span>
+                            </td>
+                            <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={cmvAtualPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvAtualPct)}>
+                                {cmvAtualPct == null ? '-' : formatPercentage(cmvAtualPct)}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })()}
+                    </>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
