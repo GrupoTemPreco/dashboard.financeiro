@@ -3,12 +3,13 @@ import { ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
 import { format, parseISO, subMonths, startOfMonth, endOfMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { supabase } from '../lib/supabase';
-import { DESPESAS_OP_ROOT_SECTION_IDS, DESPESAS_OP_STRUCTURE } from '../lib/despesasOpStructure';
+import { DESPESAS_OP_ROOT_SECTION_IDS, DESPESAS_OP_STRUCTURE, despesasOpValuesMapKey } from '../lib/despesasOpStructure';
 import { parseCoaSegments, matchApSegmentsToCoaRule } from '../lib/coaApSegmentMatch';
 import type { CapCoaMatchCollector } from '../lib/coaCapMatchCollector';
 
 // Colunas de variação (Variação e % Receita) ocultas por enquanto — ver docs/OCULTOS.md
 const SHOW_VARIATION_COLUMNS = false;
+const SHOW_BUDGET_COLUMNS = false;
 
 /** Selo no acordeão «Despesas com mercadorias» — passe para false quando não for mais novidade */
 const SHOW_MERCADORIAS_NEW_BADGE = true;
@@ -222,7 +223,7 @@ export function computeDespesasOperacionaisValuesMap(
 
   for (const account of DESPESAS_OP_STRUCTURE) {
     if (account.formula === 'sum') continue;
-    const key = (account as any).id ?? (account as any).name;
+    const key = despesasOpValuesMapKey(account);
     map[key] = {
       prevRealizado: sumFromList(prevRealizadoList, account),
       curRealizado: sumFromList(curRealizadoList, account),
@@ -232,11 +233,11 @@ export function computeDespesasOperacionaisValuesMap(
   for (let i = DESPESAS_OP_STRUCTURE.length - 1; i >= 0; i--) {
     const account = DESPESAS_OP_STRUCTURE[i];
     if (account.formula !== 'sum') continue;
-    const key = (account as any).id ?? (account as any).name;
+    const key = despesasOpValuesMapKey(account);
     const subAccounts = DESPESAS_OP_STRUCTURE.filter(acc => acc.parent === account.id || acc.parent === account.name);
     map[key] = subAccounts.reduce(
       (acc, sub: any) => {
-        const v = map[sub.id ?? sub.name] ?? ZERO;
+        const v = map[despesasOpValuesMapKey(sub)] ?? ZERO;
         return {
           prevRealizado: acc.prevRealizado + v.prevRealizado,
           curRealizado: acc.curRealizado + v.curRealizado,
@@ -299,7 +300,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
         const key = getAccountKey(acc);
         if (key) keys.push(key);
         else {
-          const subId = (acc as any).id ?? (acc as any).name;
+          const subId = despesasOpValuesMapKey(acc);
           keys.push(...getDescendantKeys(subId));
         }
       }
@@ -307,7 +308,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     };
     for (const account of DESPESAS_OP_STRUCTURE) {
       if (account.formula !== 'sum') continue;
-      const idOrName = (account as any).id ?? (account as any).name;
+      const idOrName = despesasOpValuesMapKey(account);
       map[idOrName] = getDescendantKeys(idOrName);
     }
     return map;
@@ -733,12 +734,16 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
             {formatCurrency(totalGeral.prevRealizado)}
           </td>
         )}
-        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
-          {formatCurrency(orcEst)}
-        </td>
-        <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
-          {formatCurrency(orc)}
-        </td>
+        {SHOW_BUDGET_COLUMNS && (
+          <>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+              {formatCurrency(orcEst)}
+            </td>
+            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200'}`}>
+              {formatCurrency(orc)}
+            </td>
+          </>
+        )}
         <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}>
           <div className="flex items-center justify-end gap-1">
             {orc > 0 && forecastedValue > orc && (
@@ -808,11 +813,12 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     if (tbodyOnly && account.id === 'despesas-op') return null;
     if (!shouldShowAccount(account)) return null;
 
-    const rowKey = account.id ?? account.name;
+    const rowKey = despesasOpValuesMapKey(account);
     const v = valuesMap[rowKey] ?? { prevRealizado: 0, curRealizado: 0, curPrevisto: 0 };
-    const showMercadoriasComparison = !tbodyOnly && account.level === 1;
+    const showRevenueColumns = !tbodyOnly && account.level === 1;
     const isMercadoriasRow = rowKey === 'despesas-op-mercadorias';
-    const realizedIndicatorMetric: 'cmv' | 'cap' = isMercadoriasRow ? 'cmv' : 'cap';
+    const isMercadoriasDescendant = account.parent === 'despesas-op-mercadorias';
+    const realizedIndicatorMetric: 'cmv' | 'cap' = isMercadoriasRow || isMercadoriasDescendant ? 'cmv' : 'cap';
     const previousValue = v.prevRealizado;
     const currentValue = v.curRealizado;
     const forecastedValue = v.curPrevisto;
@@ -827,7 +833,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
 
     const accountKey = getAccountKey(account);
     const isSumRow = account.formula === 'sum';
-    const descendantKeys = isSumRow ? (descendantAccountKeysMap[(account as any).id ?? (account as any).name] ?? []) : [];
+    const descendantKeys = isSumRow ? (descendantAccountKeysMap[despesasOpValuesMapKey(account)] ?? []) : [];
     const orcamento = accountKey
       ? (orcamentoData[accountKey]?.orcamento ?? 0)
       : isSumRow
@@ -930,14 +936,19 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
         {!tbodyOnly && (
           <>
             <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-slate-500'}`}>
-              {showMercadoriasComparison ? formatCurrency(mercadoriasComparison.faturamentoPrev) : '-'}
+              {showRevenueColumns ? formatCurrency(mercadoriasComparison.faturamentoPrev) : '-'}
             </td>
-            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-slate-500'}`}>
-              {showMercadoriasComparison ? (
+            <td className={`border px-4 py-3 text-right tabular-nums ${fontClass} ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}>
+              {showRevenueColumns ? (
                 <span className={prevRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass(realizedIndicatorMetric, prevRealizadoPct)}>
                   {formatCurrency(previousValue)}{prevRealizadoPct == null ? '' : ` (${isMercadoriasRow ? `CMV ${formatPercentage(prevRealizadoPct)}` : formatPercentage(prevRealizadoPct)})`}
                 </span>
-              ) : '-'}
+              ) : (
+                <span className={prevRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : (darkMode ? 'text-slate-100' : 'text-gray-800')}>
+                  {formatCurrency(previousValue)}
+                  {prevRealizadoPct == null ? '' : ` (${isMercadoriasDescendant ? `CMV ${formatPercentage(prevRealizadoPct)}` : formatPercentage(prevRealizadoPct)})`}
+                </span>
+              )}
             </td>
           </>
         )}
@@ -946,8 +957,12 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
             {formatCurrency(previousValue)}
           </td>
         )}
-        {renderOrcamentoCell('orcamento_estrategico')}
-        {renderOrcamentoCell('orcamento')}
+        {SHOW_BUDGET_COLUMNS && (
+          <>
+            {renderOrcamentoCell('orcamento_estrategico')}
+            {renderOrcamentoCell('orcamento')}
+          </>
+        )}
         <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}>
           <div className="flex items-center justify-end gap-1">
             {orcamento > 0 && forecastedValue > orcamento && (
@@ -971,14 +986,19 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
         {!tbodyOnly && (
           <>
             <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-slate-500'}`}>
-              {showMercadoriasComparison ? formatCurrency(mercadoriasComparison.faturamentoAtual) : '-'}
+              {showRevenueColumns ? formatCurrency(mercadoriasComparison.faturamentoAtual) : '-'}
             </td>
-            <td className={`border px-4 py-3 text-right ${fontClass} ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-slate-500'}`}>
-              {showMercadoriasComparison ? (
+            <td className={`border px-4 py-3 text-right tabular-nums ${fontClass} ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}>
+              {showRevenueColumns ? (
                 <span className={curRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass(realizedIndicatorMetric, curRealizadoPct)}>
                   {formatCurrency(currentValue)}{curRealizadoPct == null ? '' : ` (${isMercadoriasRow ? `CMV ${formatPercentage(curRealizadoPct)}` : formatPercentage(curRealizadoPct)})`}
                 </span>
-              ) : '-'}
+              ) : (
+                <span className={curRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : (darkMode ? 'text-slate-100' : 'text-gray-800')}>
+                  {formatCurrency(currentValue)}
+                  {curRealizadoPct == null ? '' : ` (${isMercadoriasDescendant ? `CMV ${formatPercentage(curRealizadoPct)}` : formatPercentage(curRealizadoPct)})`}
+                </span>
+              )}
             </td>
           </>
         )}
@@ -1012,11 +1032,12 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
   };
 
   if (tbodyOnly) {
+    const visibleColumnCount = SHOW_BUDGET_COLUMNS ? 6 : 4;
     if (loading) {
       return (
         <tr className={darkMode ? 'bg-slate-900' : ''}>
           <td
-            colSpan={tbodyOnly ? 6 : 8}
+            colSpan={visibleColumnCount}
             className={`border px-4 py-8 text-center ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}
           >
             <div className="flex flex-col items-center gap-2">
@@ -1070,12 +1091,16 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
               <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
                 {previousPeriodLabel} Realizado
               </th>
-              <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
-                Orçamento Estratégico
-              </th>
-              <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
-                {currentPeriodLabel} Orçamento
-              </th>
+              {SHOW_BUDGET_COLUMNS && (
+                <>
+                  <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
+                    Orçamento Estratégico
+                  </th>
+                  <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
+                    {currentPeriodLabel} Orçamento
+                  </th>
+                </>
+              )}
               <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
                 {currentPeriodLabel} Previsto
               </th>
@@ -1175,7 +1200,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                             </td>
                             <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
                               <span className={cmvPrevPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvPrevPct)}>
-                                {cmvPrevPct == null ? '-' : formatPercentage(cmvPrevPct)}
+                                {cmvPrevPct == null ? '-' : `${formatCurrency(row.cmvPrev)} (${formatPercentage(cmvPrevPct)})`}
                               </span>
                             </td>
                             <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
@@ -1193,7 +1218,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                             </td>
                             <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
                               <span className={cmvAtualPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvAtualPct)}>
-                                {cmvAtualPct == null ? '-' : formatPercentage(cmvAtualPct)}
+                                {cmvAtualPct == null ? '-' : `${formatCurrency(row.cmvAtual)} (${formatPercentage(cmvAtualPct)})`}
                               </span>
                             </td>
                           </tr>
@@ -1229,7 +1254,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                             </td>
                             <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
                               <span className={cmvPrevPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvPrevPct)}>
-                                {cmvPrevPct == null ? '-' : formatPercentage(cmvPrevPct)}
+                                {cmvPrevPct == null ? '-' : `${formatCurrency(byStoreTotals.cmvPrev)} (${formatPercentage(cmvPrevPct)})`}
                               </span>
                             </td>
                             <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
@@ -1247,7 +1272,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                             </td>
                             <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
                               <span className={cmvAtualPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvAtualPct)}>
-                                {cmvAtualPct == null ? '-' : formatPercentage(cmvAtualPct)}
+                                {cmvAtualPct == null ? '-' : `${formatCurrency(byStoreTotals.cmvAtual)} (${formatPercentage(cmvAtualPct)})`}
                               </span>
                             </td>
                           </tr>

@@ -25,6 +25,13 @@ export interface DespesaOperacionalStructureRow {
  */
 export const DESPESAS_OP_ROOT_SECTION_IDS: readonly string[] = ['despesas-op-mercadorias', 'despesas-op'];
 
+/** Chave única no mapa de valores (igual em `computeDespesasOperacionaisValuesMap` e na tabela). */
+export function despesasOpValuesMapKey(account: Pick<DespesaOperacionalStructureRow, 'id' | 'name'>): string {
+  const rawId = account.id;
+  if (rawId != null && String(rawId).trim() !== '') return String(rawId).trim();
+  return String(account.name ?? '').trim();
+}
+
 export const DESPESAS_OP_STRUCTURE: DespesaOperacionalStructureRow[] = [
   /** Seção à parte: não entra no total de «Despesas Operacionais» (despesas-op). */
   {
