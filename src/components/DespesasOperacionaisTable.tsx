@@ -262,6 +262,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
   tbodyOnly = false
 }) => {
   const [isByStoreModalOpen, setIsByStoreModalOpen] = useState(false);
+  const [mercadoriasParentMode, setMercadoriasParentMode] = useState<'cmp' | 'cmv_vendas'>('cmp');
   // Padrão: Despesas Operacionais expandida (filhos visíveis); ainda é possível encolher/abrir
   const [expandedAccounts, setExpandedAccounts] = useState<Record<string, boolean>>({
     'despesas-op': true,
@@ -400,7 +401,21 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
       })
       .reduce((sum, ap) => sum + Math.abs(num(ap.amount)), 0);
 
-    return { faturamentoPrev, cmvPrev, faturamentoAtual, cmvAtual };
+    const cmvVendasPrev = (vendasPorUsuarioRows || [])
+      .filter(r => {
+        const d = toDate(r.data);
+        return d && d >= prevStart && d <= prevEnd && businessUnitAllowed(r.business_unit);
+      })
+      .reduce((sum, r) => sum + Math.abs(num(r.custo)), 0);
+
+    const cmvVendasAtual = (vendasPorUsuarioRows || [])
+      .filter(r => {
+        const d = toDate(r.data);
+        return d && d >= curStart && d <= curEnd && businessUnitAllowed(r.business_unit);
+      })
+      .reduce((sum, r) => sum + Math.abs(num(r.custo)), 0);
+
+    return { faturamentoPrev, cmvPrev, faturamentoAtual, cmvAtual, cmvVendasPrev, cmvVendasAtual };
   }, [accountsPayable, vendasPorUsuarioRows, companies, filters.groups, filters.companies, filters.startDate, filters.endDate, previousPeriod.start, previousPeriod.end]);
 
   const valuesMap = useMemo(
@@ -598,9 +613,11 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
       faturamentoPrevComparativo: number;
       capPrev: number;
       cmvPrev: number;
+      cmvVendasPrev: number;
       faturamentoAtual: number;
       capAtual: number;
       cmvAtual: number;
+      cmvVendasAtual: number;
     }>();
 
     const ensureRow = (rawBusinessUnit: any) => {
@@ -613,9 +630,11 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
           faturamentoPrevComparativo: 0,
           capPrev: 0,
           cmvPrev: 0,
+          cmvVendasPrev: 0,
           faturamentoAtual: 0,
           capAtual: 0,
-          cmvAtual: 0
+          cmvAtual: 0,
+          cmvVendasAtual: 0
         });
       }
       return bucket.get(code)!;
@@ -628,7 +647,9 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
       const row = ensureRow(sale.business_unit);
       if (d >= prevStart && d <= prevEnd) row.faturamentoPrev += num(sale.amount);
       if (d >= prevStart && d <= prevComparableEnd) row.faturamentoPrevComparativo += num(sale.amount);
+      if (d >= prevStart && d <= prevEnd) row.cmvVendasPrev += Math.abs(num(sale.custo));
       if (d >= curStart && d <= curEnd) row.faturamentoAtual += num(sale.amount);
+      if (d >= curStart && d <= curEnd) row.cmvVendasAtual += Math.abs(num(sale.custo));
     }
 
     for (const ap of accountsPayable || []) {
@@ -670,11 +691,13 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
         faturamentoPrevComparativo: acc.faturamentoPrevComparativo + row.faturamentoPrevComparativo,
         capPrev: acc.capPrev + row.capPrev,
         cmvPrev: acc.cmvPrev + row.cmvPrev,
+        cmvVendasPrev: acc.cmvVendasPrev + row.cmvVendasPrev,
         faturamentoAtual: acc.faturamentoAtual + row.faturamentoAtual,
         capAtual: acc.capAtual + row.capAtual,
-        cmvAtual: acc.cmvAtual + row.cmvAtual
+        cmvAtual: acc.cmvAtual + row.cmvAtual,
+        cmvVendasAtual: acc.cmvVendasAtual + row.cmvVendasAtual
       }),
-      { faturamentoPrev: 0, faturamentoPrevComparativo: 0, capPrev: 0, cmvPrev: 0, faturamentoAtual: 0, capAtual: 0, cmvAtual: 0 }
+      { faturamentoPrev: 0, faturamentoPrevComparativo: 0, capPrev: 0, cmvPrev: 0, cmvVendasPrev: 0, faturamentoAtual: 0, capAtual: 0, cmvAtual: 0, cmvVendasAtual: 0 }
     );
   }, [byStoreComparisonRows]);
 
@@ -828,8 +851,12 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
     const revenueDiffPercentage = forecastedValue !== 0 ? ((currentValue - forecastedValue) / forecastedValue) * 100 : 0;
     const prevRevenue = mercadoriasComparison.faturamentoPrev;
     const curRevenue = mercadoriasComparison.faturamentoAtual;
-    const prevRealizadoPct = prevRevenue > 0 ? (previousValue / prevRevenue) * 100 : null;
-    const curRealizadoPct = curRevenue > 0 ? (currentValue / curRevenue) * 100 : null;
+    const parentPrevValue = mercadoriasParentMode === 'cmv_vendas' ? mercadoriasComparison.cmvVendasPrev : previousValue;
+    const parentCurValue = mercadoriasParentMode === 'cmv_vendas' ? mercadoriasComparison.cmvVendasAtual : currentValue;
+    const effectivePreviousValue = isMercadoriasRow ? parentPrevValue : previousValue;
+    const effectiveCurrentValue = isMercadoriasRow ? parentCurValue : currentValue;
+    const prevRealizadoPct = prevRevenue > 0 ? (effectivePreviousValue / prevRevenue) * 100 : null;
+    const curRealizadoPct = curRevenue > 0 ? (effectiveCurrentValue / curRevenue) * 100 : null;
 
     const accountKey = getAccountKey(account);
     const isSumRow = account.formula === 'sum';
@@ -941,12 +968,12 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
             <td className={`border px-4 py-3 text-right tabular-nums ${fontClass} ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}>
               {showRevenueColumns ? (
                 <span className={prevRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass(realizedIndicatorMetric, prevRealizadoPct)}>
-                  {formatCurrency(previousValue)}{prevRealizadoPct == null ? '' : ` (${isMercadoriasRow ? `CMV ${formatPercentage(prevRealizadoPct)}` : formatPercentage(prevRealizadoPct)})`}
+                  {formatCurrency(effectivePreviousValue)}{prevRealizadoPct == null ? '' : ` (${isMercadoriasRow ? `${mercadoriasParentMode === 'cmv_vendas' ? 'CMV' : 'CMP'} ${formatPercentage(prevRealizadoPct)}` : formatPercentage(prevRealizadoPct)})`}
                 </span>
               ) : (
                 <span className={prevRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : (darkMode ? 'text-slate-100' : 'text-gray-800')}>
-                  {formatCurrency(previousValue)}
-                  {prevRealizadoPct == null ? '' : ` (${isMercadoriasDescendant ? `CMV ${formatPercentage(prevRealizadoPct)}` : formatPercentage(prevRealizadoPct)})`}
+                  {formatCurrency(effectivePreviousValue)}
+                  {prevRealizadoPct == null ? '' : ` (${isMercadoriasDescendant ? `CMP ${formatPercentage(prevRealizadoPct)}` : formatPercentage(prevRealizadoPct)})`}
                 </span>
               )}
             </td>
@@ -990,13 +1017,29 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
             </td>
             <td className={`border px-4 py-3 text-right tabular-nums ${fontClass} ${darkMode ? 'border-slate-700' : 'border-gray-200'}`}>
               {showRevenueColumns ? (
-                <span className={curRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass(realizedIndicatorMetric, curRealizadoPct)}>
-                  {formatCurrency(currentValue)}{curRealizadoPct == null ? '' : ` (${isMercadoriasRow ? `CMV ${formatPercentage(curRealizadoPct)}` : formatPercentage(curRealizadoPct)})`}
-                </span>
+                <div className="flex items-center justify-end gap-2">
+                  <span className={curRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass(realizedIndicatorMetric, curRealizadoPct)}>
+                    {formatCurrency(effectiveCurrentValue)}{curRealizadoPct == null ? '' : ` (${isMercadoriasRow ? `${mercadoriasParentMode === 'cmv_vendas' ? 'CMV' : 'CMP'} ${formatPercentage(curRealizadoPct)}` : formatPercentage(curRealizadoPct)})`}
+                  </span>
+                  {isMercadoriasRow && (
+                    <button
+                      type="button"
+                      onClick={() => setMercadoriasParentMode(prev => (prev === 'cmp' ? 'cmv_vendas' : 'cmp'))}
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                        darkMode
+                          ? 'border-slate-600 text-slate-200 hover:bg-slate-800'
+                          : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+                      }`}
+                      title={mercadoriasParentMode === 'cmp' ? 'Alternar para CMV (vendas)' : 'Alternar para CMP (pago)'}
+                    >
+                      {mercadoriasParentMode === 'cmp' ? 'Ver CMV' : 'Ver CMP'}
+                    </button>
+                  )}
+                </div>
               ) : (
                 <span className={curRealizadoPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : (darkMode ? 'text-slate-100' : 'text-gray-800')}>
-                  {formatCurrency(currentValue)}
-                  {curRealizadoPct == null ? '' : ` (${isMercadoriasDescendant ? `CMV ${formatPercentage(curRealizadoPct)}` : formatPercentage(curRealizadoPct)})`}
+                  {formatCurrency(effectiveCurrentValue)}
+                  {curRealizadoPct == null ? '' : ` (${isMercadoriasDescendant ? `CMP ${formatPercentage(curRealizadoPct)}` : formatPercentage(curRealizadoPct)})`}
                 </span>
               )}
             </td>
@@ -1089,7 +1132,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                 Faturamento (mês anterior)
               </th>
               <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
-                {previousPeriodLabel} Realizado
+                {previousPeriodLabel} Pago
               </th>
               {SHOW_BUDGET_COLUMNS && (
                 <>
@@ -1108,7 +1151,7 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                 Faturamento (mês atual)
               </th>
               <th className={`border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-700'}`}>
-                {currentPeriodLabel} Realizado
+                {currentPeriodLabel} Pago
               </th>
               {SHOW_VARIATION_COLUMNS && (
                 <>
@@ -1159,16 +1202,18 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                     <th className={`sticky top-0 border px-4 py-3 text-left text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>Loja</th>
                     <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>Faturamento {previousPeriodLabel}</th>
                     <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>CAP {previousPeriodLabel}</th>
+                    <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>CMP {previousPeriodLabel}</th>
                     <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>CMV {previousPeriodLabel}</th>
                     <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>Faturamento {currentPeriodLabel}</th>
                     <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>CAP {currentPeriodLabel}</th>
+                    <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>CMP {currentPeriodLabel}</th>
                     <th className={`sticky top-0 border px-4 py-3 text-right text-sm font-semibold ${darkMode ? 'border-slate-700 text-slate-100 bg-slate-800' : 'border-gray-200 text-gray-700 bg-gray-50'}`}>CMV {currentPeriodLabel}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {byStoreComparisonRows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className={`border px-4 py-8 text-center text-sm ${darkMode ? 'border-slate-700 text-slate-400' : 'border-gray-200 text-gray-500'}`}>
+                      <td colSpan={9} className={`border px-4 py-8 text-center text-sm ${darkMode ? 'border-slate-700 text-slate-400' : 'border-gray-200 text-gray-500'}`}>
                         Sem dados para o período selecionado.
                       </td>
                     </tr>
@@ -1177,8 +1222,10 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                       {byStoreComparisonRows.map(row => {
                         const capPrevPct = row.faturamentoPrev > 0 ? (row.capPrev / row.faturamentoPrev) * 100 : null;
                         const cmvPrevPct = row.faturamentoPrev > 0 ? (row.cmvPrev / row.faturamentoPrev) * 100 : null;
+                        const cmvVendasPrevPct = row.faturamentoPrev > 0 ? (row.cmvVendasPrev / row.faturamentoPrev) * 100 : null;
                         const capAtualPct = row.faturamentoAtual > 0 ? (row.capAtual / row.faturamentoAtual) * 100 : null;
                         const cmvAtualPct = row.faturamentoAtual > 0 ? (row.cmvAtual / row.faturamentoAtual) * 100 : null;
+                        const cmvVendasAtualPct = row.faturamentoAtual > 0 ? (row.cmvVendasAtual / row.faturamentoAtual) * 100 : null;
                         const faturamentoComparativo = isCurrentMonthOpenForTrend ? row.faturamentoPrevComparativo : row.faturamentoPrev;
                         const faturamentoTrend: 'up' | 'down' | 'equal' =
                           row.faturamentoAtual > faturamentoComparativo ? 'up' : row.faturamentoAtual < faturamentoComparativo ? 'down' : 'equal';
@@ -1204,6 +1251,11 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                               </span>
                             </td>
                             <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={cmvVendasPrevPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvVendasPrevPct)}>
+                                {cmvVendasPrevPct == null ? '-' : `${formatCurrency(row.cmvVendasPrev)} (${formatPercentage(cmvVendasPrevPct)})`}
+                              </span>
+                            </td>
+                            <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
                               <span className="inline-flex items-center justify-end gap-2">
                                 <span>{formatCurrency(row.faturamentoAtual)}</span>
                                 <span className={`font-bold ${faturamentoTrendClass}`} title={isCurrentMonthOpenForTrend ? 'Comparado ao acumulado até hoje do mês anterior' : 'Comparado ao mês anterior fechado'}>
@@ -1221,14 +1273,21 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                                 {cmvAtualPct == null ? '-' : `${formatCurrency(row.cmvAtual)} (${formatPercentage(cmvAtualPct)})`}
                               </span>
                             </td>
+                            <td className={`border px-4 py-3 text-right text-sm ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={cmvVendasAtualPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvVendasAtualPct)}>
+                                {cmvVendasAtualPct == null ? '-' : `${formatCurrency(row.cmvVendasAtual)} (${formatPercentage(cmvVendasAtualPct)})`}
+                              </span>
+                            </td>
                           </tr>
                         );
                       })}
                       {(() => {
                         const capPrevPct = byStoreTotals.faturamentoPrev > 0 ? (byStoreTotals.capPrev / byStoreTotals.faturamentoPrev) * 100 : null;
                         const cmvPrevPct = byStoreTotals.faturamentoPrev > 0 ? (byStoreTotals.cmvPrev / byStoreTotals.faturamentoPrev) * 100 : null;
+                        const cmvVendasPrevPct = byStoreTotals.faturamentoPrev > 0 ? (byStoreTotals.cmvVendasPrev / byStoreTotals.faturamentoPrev) * 100 : null;
                         const capAtualPct = byStoreTotals.faturamentoAtual > 0 ? (byStoreTotals.capAtual / byStoreTotals.faturamentoAtual) * 100 : null;
                         const cmvAtualPct = byStoreTotals.faturamentoAtual > 0 ? (byStoreTotals.cmvAtual / byStoreTotals.faturamentoAtual) * 100 : null;
+                        const cmvVendasAtualPct = byStoreTotals.faturamentoAtual > 0 ? (byStoreTotals.cmvVendasAtual / byStoreTotals.faturamentoAtual) * 100 : null;
                         const faturamentoComparativoTotal = isCurrentMonthOpenForTrend ? byStoreTotals.faturamentoPrevComparativo : byStoreTotals.faturamentoPrev;
                         const faturamentoTrendTotal: 'up' | 'down' | 'equal' =
                           byStoreTotals.faturamentoAtual > faturamentoComparativoTotal
@@ -1258,6 +1317,11 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                               </span>
                             </td>
                             <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={cmvVendasPrevPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvVendasPrevPct)}>
+                                {cmvVendasPrevPct == null ? '-' : `${formatCurrency(byStoreTotals.cmvVendasPrev)} (${formatPercentage(cmvVendasPrevPct)})`}
+                              </span>
+                            </td>
+                            <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
                               <span className="inline-flex items-center justify-end gap-2">
                                 <span>{formatCurrency(byStoreTotals.faturamentoAtual)}</span>
                                 <span className={`font-bold ${faturamentoTrendTotalClass}`} title={isCurrentMonthOpenForTrend ? 'Comparado ao acumulado até hoje do mês anterior' : 'Comparado ao mês anterior fechado'}>
@@ -1273,6 +1337,11 @@ export const DespesasOperacionaisTableInner: React.FC<DespesasOperacionaisTableP
                             <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
                               <span className={cmvAtualPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvAtualPct)}>
                                 {cmvAtualPct == null ? '-' : `${formatCurrency(byStoreTotals.cmvAtual)} (${formatPercentage(cmvAtualPct)})`}
+                              </span>
+                            </td>
+                            <td className={`border px-4 py-3 text-right text-sm font-bold ${darkMode ? 'border-slate-700 text-slate-100' : 'border-gray-200 text-gray-900'}`}>
+                              <span className={cmvVendasAtualPct == null ? (darkMode ? 'text-slate-500' : 'text-gray-400') : getIndicatorClass('cmv', cmvVendasAtualPct)}>
+                                {cmvVendasAtualPct == null ? '-' : `${formatCurrency(byStoreTotals.cmvVendasAtual)} (${formatPercentage(cmvVendasAtualPct)})`}
                               </span>
                             </td>
                           </tr>

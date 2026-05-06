@@ -770,7 +770,11 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
       const normalized = String(v).replace(/\./g, '').replace(',', '.');
       return parseFloat(normalized) || 0;
     };
-    const rowsWithData = editSaldoRows.filter(r => r.data || r.unidade?.trim() || r.banco || r.bancoOutro?.trim() || r.valor?.trim());
+    // Em "Semana/Dia", a data vem pré-preenchida em todas as linhas.
+    // Para permitir salvamento parcial, validamos apenas linhas efetivamente iniciadas.
+    const hasMeaningfulInput = (r: { unidade?: string; banco?: string; bancoOutro?: string; valor?: string }) =>
+      !!(r.unidade?.trim() || r.banco || r.bancoOutro?.trim() || r.valor?.trim());
+    const rowsWithData = editSaldoRows.filter(r => hasMeaningfulInput(r));
     const invalid = rowsWithData.some(r => !r.data?.trim() || !r.unidade?.trim() || parseValor(r.valor) === 0);
     if (rowsWithData.length > 0 && invalid) {
       notify({ type: 'error', title: 'Campos obrigatórios', message: 'Em cada linha preencha: Unidade, Banco (ou Outro), Valor e Data.' });

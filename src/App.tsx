@@ -1032,13 +1032,10 @@ function AppContent() {
         let offsetBal = 0;
         let hasMoreBal = true;
         while (hasMoreBal) {
-          let query = supabase
+          const query = supabase
             .from('saldos_iniciais')
             .select('import_id, business_unit, balance_date, balance, bank_name, id')
             .order('balance_date', { ascending: false });
-          if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
-            query = query.in('business_unit', filteredBusinessUnits);
-          }
           const { data, error } = await query.range(offsetBal, offsetBal + 999);
           if (error) {
             console.error('❌ Error loading initial balances:', error);
@@ -3389,14 +3386,14 @@ function AppContent() {
   const getFilteredInitialBalancesRaw = useMemo(() => {
     let filtered = initialBalances;
 
-    // Filtrar por data do saldo (balance_date) - pega saldos até o início do período
-    // Se há filtro de data inicial, considera apenas saldos com balance_date <= startDate
-    // (ou seja, o saldo que estava no início do período filtrado)
-    if (filters.startDate) {
+    // Filtrar por data do saldo (balance_date) até o FIM do período selecionado.
+    // Isso permite que lançamentos dentro do período (ex.: semana/dia) participem do card e detalhamento.
+    const periodEnd = (filters.endDate?.trim() || filters.startDate?.trim() || '');
+    if (periodEnd) {
       filtered = filtered.filter(bal => {
         const balanceDate = bal.balance_date;
         if (!balanceDate) return true; // Se não tem data, mantém
-        return balanceDate <= filters.startDate;
+        return balanceDate <= periodEnd;
       });
     }
 
@@ -3416,7 +3413,7 @@ function AppContent() {
       const normalizedBU = normalizeCode(bal.business_unit);
       return normalizedCompanyCodes.includes(normalizedBU);
     });
-  }, [initialBalances, companies, getFilteredCompanyCodesNormalized, filters.startDate]);
+  }, [initialBalances, companies, getFilteredCompanyCodesNormalized, filters.startDate, filters.endDate]);
 
   // Dados detalhados para Saldo Inicial (saldos bancários) - agrupados por banco e filtrados por empresas/grupos
   const getFilteredInitialBalances = useMemo(() => {
@@ -3481,8 +3478,12 @@ function AppContent() {
         else if ((bal.balance_date || '') < (existing.balance_date || '')) acc[key] = bal;
         return acc;
       }, {} as Record<string, any>);
-    } else if (showLatestInitialBalance && balancesBeforePeriodFiltered.length > 0) {
-      balancesToUse = balancesBeforePeriodFiltered.reduce((acc, bal) => {
+    } else if (showLatestInitialBalance && (balancesBeforePeriodFiltered.length > 0 || allBalancesForBeforePeriod.length > 0)) {
+      // Prioriza o mais recente antes do período; se não houver, usa o mais recente disponível em qualquer data.
+      const latestCandidates = balancesBeforePeriodFiltered.length > 0
+        ? balancesBeforePeriodFiltered
+        : allBalancesForBeforePeriod;
+      balancesToUse = latestCandidates.reduce((acc, bal) => {
         const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
         const existing = acc[key];
         if (!existing || (bal.balance_date || '') > (existing.balance_date || '')) acc[key] = bal;
@@ -4493,6 +4494,9 @@ function AppContent() {
       });
     }
 
+    // Guardar todos os saldos já filtrados por empresa/grupo (sem corte de data)
+    const balancesAnyDateFiltered = balancesBeforePeriod;
+
     // Filtrar apenas saldos antes do período (balance_date < startDate)
     // IMPORTANTE: Se não há startDate, não podemos filtrar por data
     let balancesBeforePeriodFiltered: any[] = [];
@@ -4584,8 +4588,18 @@ function AppContent() {
         console.log(`  - isLatestBeforePeriod: ${isLatestBeforePeriod}`);
         
         // Se não houver saldos antes do período, retornar indicador de que não há saldo
-        if (!isLatestBeforePeriod) {
-          console.log('⚠️ Nenhum saldo encontrado antes do período após agrupamento');
+      if (!isLatestBeforePeriod) {
+        // Fallback: se não houver saldo antes do período, usar o saldo mais recente disponível.
+        console.log('⚠️ Nenhum saldo antes do período; aplicando fallback para o mais recente disponível.');
+        balancesToUse = balancesAnyDateFiltered.reduce((acc, bal) => {
+          const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
+          const existing = acc[key];
+          if (!existing) acc[key] = bal;
+          else if ((bal.balance_date || '') > (existing.balance_date || '')) acc[key] = bal;
+          return acc;
+        }, {} as Record<string, any>);
+
+        if (Object.keys(balancesToUse).length === 0) {
           result.initialBalance = {
             forecasted: 0,
             actual: 0,
@@ -4595,6 +4609,7 @@ function AppContent() {
           };
           return result;
         }
+      }
       }
 
       // Usar apenas a data mais recente: não somar valores de datas diferentes
@@ -4623,7 +4638,7 @@ function AppContent() {
         forecasted: calculatedInitialBalance || 0,
         actual: calculatedInitialBalance || 0,
         date: calculatedInitialBalanceDate,
-        hasBalance: hasBalanceInPeriod,
+        hasBalance: hasBalanceInPeriod || balancesOnMostRecentDate.length > 0,
         isLatestBeforePeriod: isLatestBeforePeriod
       };
     }
