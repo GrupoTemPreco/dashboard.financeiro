@@ -614,6 +614,39 @@ function AppContent() {
         }
       }
 
+      // Saldos iniciais: carregar CEDO (antes dos returns por shouldApplyState das outras tabelas),
+      // senão o estado initialBalances fica vazio e o card/detalhes divergem do modal Lançados.
+      try {
+        let allBal: any[] = [];
+        let offsetBal = 0;
+        let hasMoreBal = true;
+        while (hasMoreBal) {
+          const query = supabase
+            .from('saldos_iniciais')
+            .select('import_id, business_unit, balance_date, balance, bank_name, id, created_at')
+            .order('balance_date', { ascending: false });
+          const { data, error } = await query.range(offsetBal, offsetBal + 999);
+          if (error) {
+            console.error('❌ Error loading initial balances:', error);
+            hasMoreBal = false;
+            break;
+          }
+          const batch = data || [];
+          allBal = [...allBal, ...batch];
+          offsetBal += 1000;
+          hasMoreBal = batch.length === 1000;
+        }
+        console.log(`✅ Carregados ${allBal.length} registros de saldos_iniciais`);
+        if (shouldApplyState()) {
+          setInitialBalances(allBal);
+        } else {
+          markPendingReloadIfStale();
+        }
+      } catch (initialBalanceError) {
+        console.error('❌ Exception loading initial balances:', initialBalanceError);
+        if (thisLoadId === loadDataVersionRef.current) setInitialBalances([]);
+      }
+
       // Load accounts payable - FILTRADO POR DATA E BUSINESS_UNIT NO BANCO (otimizado com índices)
       // IMPORTANTE: Incluir registros com payment_date no período OU registros sem payment_date mas com due_date no período
       let apData: any[] | null = [];
@@ -719,7 +752,7 @@ function AppContent() {
         while (hasMoreRec) {
           let query = supabase
             .from('receitas_manuais')
-            .select('id, status, business_unit, conta, descricao, data, valor')
+            .select('id, status, business_unit, conta, descricao, data, valor, created_at')
             .gte('data', startDate)
             .lte('data', endDate)
             .order('data', { ascending: false });
@@ -880,7 +913,7 @@ function AppContent() {
           while (hasMoreTx) {
             let query = supabase
               .from('transacoes_financeiras')
-              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
+              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id, created_at')
               .in('import_id', activeImportIds)
               .gte('transaction_date', startDate)
               .lte('transaction_date', endDate);
@@ -1023,39 +1056,6 @@ function AppContent() {
       if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
       if (cmvDREData) {
         setCmvDRE(cmvDREData);
-      }
-
-      // Load initial_balances - CARREGAR TODOS OS SALDOS (sem filtro de data), paginação 500
-      try {
-        let initialBalancesData: any[] | null = [];
-        let allBal: any[] = [];
-        let offsetBal = 0;
-        let hasMoreBal = true;
-        while (hasMoreBal) {
-          const query = supabase
-            .from('saldos_iniciais')
-            .select('import_id, business_unit, balance_date, balance, bank_name, id')
-            .order('balance_date', { ascending: false });
-          const { data, error } = await query.range(offsetBal, offsetBal + 999);
-          if (error) {
-            console.error('❌ Error loading initial balances:', error);
-            hasMoreBal = false;
-            break;
-          }
-          const batch = data || [];
-          allBal = [...allBal, ...batch];
-          offsetBal += 1000;
-          hasMoreBal = batch.length === 1000;
-        }
-        initialBalancesData = allBal;
-        console.log(`✅ Carregados ${initialBalancesData.length} registros de saldos_iniciais${filteredBusinessUnits ? ` (filtrado por ${filteredBusinessUnits.length} business units)` : ''}`);
-        
-        if (!shouldApplyState()) { markPendingReloadIfStale(); return; }
-        // Sempre definir o estado, mesmo se vazio
-        setInitialBalances(initialBalancesData);
-      } catch (initialBalanceError) {
-        console.error('❌ Exception loading initial balances:', initialBalanceError);
-        if (thisLoadId === loadDataVersionRef.current) setInitialBalances([]);
       }
 
     } catch (error) {
@@ -3317,7 +3317,8 @@ function AppContent() {
       amount: Number(r.valor) || 0,
       status: r.status || 'previsto',
       chart_of_accounts: r.conta,
-      descricao: r.descricao
+      descricao: r.descricao,
+      created_at: r.created_at
     }));
   }, [receitasManuais]);
 
@@ -3386,14 +3387,22 @@ function AppContent() {
   const getFilteredInitialBalancesRaw = useMemo(() => {
     let filtered = initialBalances;
 
-    // Filtrar por data do saldo (balance_date) até o FIM do período selecionado.
-    // Isso permite que lançamentos dentro do período (ex.: semana/dia) participem do card e detalhamento.
-    const periodEnd = (filters.endDate?.trim() || filters.startDate?.trim() || '');
+    // Filtrar por data do saldo até o FIM do período.
+    // Nunca usar startDate como fim (excluía lançamentos dentro do período).
+    // Se só houver startDate, usa o fim do mês dessa data; se ambos vazios, não corta por data.
+    let periodEnd = filters.endDate?.trim() || '';
+    if (!periodEnd && filters.startDate?.trim()) {
+      try {
+        periodEnd = format(endOfMonth(parseISO(filters.startDate.trim())), 'yyyy-MM-dd');
+      } catch {
+        periodEnd = getDefaultPeriod().end;
+      }
+    }
     if (periodEnd) {
       filtered = filtered.filter(bal => {
         const balanceDate = bal.balance_date;
-        if (!balanceDate) return true; // Se não tem data, mantém
-        return balanceDate <= periodEnd;
+        if (!balanceDate) return true;
+        return String(balanceDate).slice(0, 10) <= periodEnd;
       });
     }
 
@@ -3454,20 +3463,21 @@ function AppContent() {
 
   // Mesmos registros que sustentam o valor do card Saldo Inicial (no período ou mais recente antes do período)
   const getInitialBalanceDetailRecords = useMemo(() => {
-    let startDateStr = filters.startDate || '';
-    if (!startDateStr || startDateStr.trim() === '') {
-      const defaultPeriod = getDefaultPeriod();
-      startDateStr = defaultPeriod.start;
-    }
-    const startDateObj = startDateStr ? new Date(startDateStr) : null;
+    const defaultPeriod = getDefaultPeriod();
+    const startDateStr = (filters.startDate?.trim() || defaultPeriod.start);
+    const endDateStr = (filters.endDate?.trim() || defaultPeriod.end);
+    const toDay = (d: any) => (d ? String(d).slice(0, 10) : '');
     const allBalances = (getFilteredInitialBalancesRaw || []).filter(bal => !!bal.balance_date);
-    const balancesInPeriod = startDateObj ? allBalances.filter(bal => new Date(bal.balance_date) >= startDateObj) : [];
+    const balancesInPeriod = allBalances.filter(bal => {
+      const d = toDay(bal.balance_date);
+      return d >= startDateStr && d <= endDateStr;
+    });
     let allBalancesForBeforePeriod = (initialBalances || []).filter(bal => !!bal.balance_date);
     if (companies.length > 0 && getFilteredCompanyCodesNormalized.hasActive) {
       const normalizedCompanyCodes = getFilteredCompanyCodesNormalized.codes;
       allBalancesForBeforePeriod = allBalancesForBeforePeriod.filter(bal => normalizedCompanyCodes.includes(normalizeCode(bal.business_unit)));
     }
-    const balancesBeforePeriodFiltered = startDateObj ? allBalancesForBeforePeriod.filter(bal => new Date(bal.balance_date) < startDateObj) : [];
+    const balancesBeforePeriodFiltered = allBalancesForBeforePeriod.filter(bal => toDay(bal.balance_date) < startDateStr);
     let balancesToUse: Record<string, any> = {};
     const hasBalanceInPeriod = balancesInPeriod.length > 0;
     if (hasBalanceInPeriod) {
@@ -3475,7 +3485,7 @@ function AppContent() {
         const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
         const existing = acc[key];
         if (!existing) acc[key] = bal;
-        else if ((bal.balance_date || '') < (existing.balance_date || '')) acc[key] = bal;
+        else if (toDay(bal.balance_date) < toDay(existing.balance_date)) acc[key] = bal;
         return acc;
       }, {} as Record<string, any>);
     } else if (showLatestInitialBalance && (balancesBeforePeriodFiltered.length > 0 || allBalancesForBeforePeriod.length > 0)) {
@@ -3486,7 +3496,7 @@ function AppContent() {
       balancesToUse = latestCandidates.reduce((acc, bal) => {
         const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
         const existing = acc[key];
-        if (!existing || (bal.balance_date || '') > (existing.balance_date || '')) acc[key] = bal;
+        if (!existing || toDay(bal.balance_date) > toDay(existing.balance_date)) acc[key] = bal;
         else if (!acc[key]) acc[key] = bal;
         return acc;
       }, {} as Record<string, any>);
@@ -3500,9 +3510,10 @@ function AppContent() {
       amount: Number(bal.balance) || 0,
       balance: Number(bal.balance) || 0,
       bank_name: bal.bank_name || '-',
-      status: 'realizado'
+      status: 'realizado',
+      created_at: bal.created_at
     }));
-  }, [getFilteredInitialBalancesRaw, initialBalances, companies, getFilteredCompanyCodesNormalized, filters.startDate, showLatestInitialBalance]);
+  }, [getFilteredInitialBalancesRaw, initialBalances, companies, getFilteredCompanyCodesNormalized, filters.startDate, filters.endDate, showLatestInitialBalance]);
 
   // Dados detalhados para Total de Recebimentos (receitas + receita_crediario + transações positivas)
   const getFilteredTotalInflows = useMemo(() => {
@@ -3791,7 +3802,7 @@ function AppContent() {
           (async () => {
             let query = supabase
               .from('receitas_manuais')
-              .select('id, status, business_unit, conta, descricao, data, valor')
+              .select('id, status, business_unit, conta, descricao, data, valor, created_at')
               .gte('data', baseStartDate || '')
               .lte('data', baseEndDate || '');
             if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
@@ -3815,14 +3826,15 @@ function AppContent() {
               amount: Number(r.valor) || 0,
               chart_of_accounts: r.conta,
               status: r.status || 'previsto',
-              descricao: r.descricao
+              descricao: r.descricao,
+              created_at: r.created_at
             }));
           })(),
           (async () => {
             if (activeImportIds.length === 0) return [];
             let query = supabase
               .from('transacoes_financeiras')
-              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
+              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id, created_at')
               .in('import_id', activeImportIds)
               .gt('amount', 0);
             if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
@@ -3928,7 +3940,7 @@ function AppContent() {
         // Período não filtra aqui para não zerar a lista quando o dashboard está em outro mês
         let query = supabase
           .from('saldos_iniciais')
-          .select('import_id, business_unit, balance_date, balance, bank_name, id', { count: 'exact' });
+          .select('import_id, business_unit, balance_date, balance, bank_name, id, created_at', { count: 'exact' });
 
         if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
           query = query.in('business_unit', filteredBusinessUnits);
@@ -3960,7 +3972,8 @@ function AppContent() {
           amount: Number(bal.balance) || 0,
           balance: Number(bal.balance) || 0,
           bank_name: bal.bank_name || '-',
-          status: 'realizado'
+          status: 'realizado',
+          created_at: bal.created_at
         }));
 
         return {
@@ -4455,12 +4468,10 @@ function AppContent() {
     // Calculate initial balance from database - pega o saldo inicial do início do período filtrado
     // Primeiro, vamos separar saldos DENTRO do período (>= startDate) dos saldos ANTES do período (< startDate)
     // Se filters.startDate estiver vazio, usar o período padrão (mês atual) - mesma lógica do loadDataFromSupabase
-    let startDateStr = filters.startDate || '';
-    if (!startDateStr || startDateStr.trim() === '') {
-      const defaultPeriod = getDefaultPeriod();
-      startDateStr = defaultPeriod.start;
-    }
-    const startDateObj = startDateStr ? new Date(startDateStr) : null;
+    const defaultPeriodForBalance = getDefaultPeriod();
+    const startDateStr = (filters.startDate?.trim() || defaultPeriodForBalance.start);
+    const endDateStr = (filters.endDate?.trim() || defaultPeriodForBalance.end);
+    const toDay = (d: any) => (d ? String(d).slice(0, 10) : '');
 
     // Para buscar saldos dentro do período, usa os dados filtrados
     const allBalances = (getFilteredInitialBalancesRaw || [])
@@ -4469,11 +4480,10 @@ function AppContent() {
         return !!balanceDate; // Apenas filtra saldos com data válida
       });
 
-    // Separar saldos dentro do período (>= startDate) dos saldos antes do período (< startDate)
+    // Separar saldos dentro do período (startDate <= balance_date <= endDate)
     const balancesInPeriod = allBalances.filter(bal => {
-      if (!startDateObj) return false;
-      const balanceDateObj = new Date(bal.balance_date);
-      return balanceDateObj >= startDateObj;
+      const d = toDay(bal.balance_date);
+      return d >= startDateStr && d <= endDateStr;
     });
 
     // Para buscar saldos ANTES do período, usa TODOS os saldos (não apenas os filtrados)
@@ -4497,23 +4507,13 @@ function AppContent() {
     // Guardar todos os saldos já filtrados por empresa/grupo (sem corte de data)
     const balancesAnyDateFiltered = balancesBeforePeriod;
 
-    // Filtrar apenas saldos antes do período (balance_date < startDate)
-    // IMPORTANTE: Se não há startDate, não podemos filtrar por data
+    // Filtrar apenas saldos antes do período (balance_date < startDate) — comparação YYYY-MM-DD
     let balancesBeforePeriodFiltered: any[] = [];
-    if (startDateObj) {
-      balancesBeforePeriodFiltered = balancesBeforePeriod.filter(bal => {
-        const balanceDateObj = new Date(bal.balance_date);
-        const isBefore = balanceDateObj < startDateObj;
-        return isBefore;
-      });
-      console.log(`  - Saldos antes do período (${startDateStr}): ${balancesBeforePeriodFiltered.length}`);
-      if (balancesBeforePeriodFiltered.length > 0) {
-        const dates = balancesBeforePeriodFiltered.map(b => b.balance_date).sort().reverse();
-        console.log(`  - Datas encontradas (mais recente primeiro):`, dates.slice(0, 5));
-      }
-    } else {
-      console.log(`  - ⚠️ ATENÇÃO: startDateObj é null! Não é possível filtrar saldos antes do período.`);
-      console.log(`  - Isso significa que filters.startDate está vazio ou inválido.`);
+    balancesBeforePeriodFiltered = balancesBeforePeriod.filter(bal => toDay(bal.balance_date) < startDateStr);
+    console.log(`  - Saldos antes do período (${startDateStr}): ${balancesBeforePeriodFiltered.length}`);
+    if (balancesBeforePeriodFiltered.length > 0) {
+      const dates = balancesBeforePeriodFiltered.map(b => b.balance_date).sort().reverse();
+      console.log(`  - Datas encontradas (mais recente primeiro):`, dates.slice(0, 5));
     }
 
     balancesBeforePeriod = balancesBeforePeriodFiltered;
@@ -4607,22 +4607,18 @@ function AppContent() {
             hasBalance: false,
             isLatestBeforePeriod: false
           };
-          return result;
         }
       }
       }
 
-      // Usar apenas a data mais recente: não somar valores de datas diferentes
+      // Somar todos os grupos (bank+unit); cada entrada já é o mais recente daquele grupo
       const valuesFromBalancesToUse = Object.values(balancesToUse);
       const balanceDates = valuesFromBalancesToUse
         .map((bal: any) => bal.balance_date)
         .filter((date: string) => date);
       const mostRecentDate = balanceDates.length > 0 ? balanceDates.sort().reverse()[0] : null;
-      const balancesOnMostRecentDate = mostRecentDate
-        ? valuesFromBalancesToUse.filter((bal: any) => bal.balance_date === mostRecentDate)
-        : valuesFromBalancesToUse;
 
-      const calculatedInitialBalance = balancesOnMostRecentDate
+      const calculatedInitialBalance = valuesFromBalancesToUse
         .reduce((sum: number, bal: any) => {
           const balanceValue = bal?.balance;
           if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
@@ -4638,7 +4634,7 @@ function AppContent() {
         forecasted: calculatedInitialBalance || 0,
         actual: calculatedInitialBalance || 0,
         date: calculatedInitialBalanceDate,
-        hasBalance: hasBalanceInPeriod || balancesOnMostRecentDate.length > 0,
+        hasBalance: hasBalanceInPeriod || valuesFromBalancesToUse.length > 0,
         isLatestBeforePeriod: isLatestBeforePeriod
       };
     }

@@ -9,6 +9,39 @@ const EMPTY_ARR: any[] = [];
 const EMPTY_ARR_NUM: number[] = [];
 const EMPTY_ARR_STR: (number | string)[] = [];
 
+type EditReceitaRow = {
+  id: string;
+  status: string;
+  unidade: string;
+  conta: string;
+  descricao: string;
+  data: string;
+  valor: string;
+  /** Presente nas linhas geradas por "Distribuir por mês" */
+  distributionGroupId?: string;
+};
+
+const parseEditReceitaValor = (v: string) => {
+  if (!v || !String(v).trim()) return 0;
+  const normalized = String(v).replace(/\./g, '').replace(',', '.');
+  return parseFloat(normalized) || 0;
+};
+
+/** Divide total em N partes com 2 casas; o resto vai para o último dia. */
+const splitAmountAcrossDays = (total: number, days: number): number[] => {
+  if (days <= 0) return [];
+  const cents = Math.round(total * 100);
+  const base = Math.floor(cents / days);
+  const amounts = Array.from({ length: days }, () => base / 100);
+  const allocated = base * days;
+  const remainderCents = cents - allocated;
+  amounts[days - 1] = (base + remainderCents) / 100;
+  return amounts;
+};
+
+const formatEditReceitaValor = (n: number) =>
+  n.toFixed(2).replace('.', ',');
+
 interface KPIDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -84,7 +117,9 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
   const [editReceitaModalOpen, setEditReceitaModalOpen] = useState(false);
   const [editReceitaSubView, setEditReceitaSubView] = useState<'novos' | 'lancados'>('novos');
   const [editReceitaMode, setEditReceitaMode] = useState<'mes' | 'semana' | 'dia'>('mes');
-  const [editReceitaRows, setEditReceitaRows] = useState<Array<{ id: string; status: string; unidade: string; conta: string; descricao: string; data: string; valor: string }>>([]);
+  const [editReceitaRows, setEditReceitaRows] = useState<EditReceitaRow[]>([]);
+  /** Snapshot da linha-mãe por groupId, para "Cancelar distribuição" */
+  const [distributionSnapshots, setDistributionSnapshots] = useState<Record<string, EditReceitaRow>>({});
   // Estado da aba "Lançados" (já gravados no banco)
   const [lancadosRows, setLancadosRows] = useState<Array<{ dbId: number; status: string; unidade: string; conta: string; descricao: string; data: string; valor: string }>>([]);
   const [lancadosLoading, setLancadosLoading] = useState(false);
@@ -143,6 +178,8 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
       setStatusDropdownOpen(false);
       setEditReceitaModalOpen(false);
       setEditReceitaSubView('novos');
+      setEditReceitaRows(EMPTY_ARR);
+      setDistributionSnapshots({});
       setLancadosRows(EMPTY_ARR);
       setLancadosDeletedIds(EMPTY_ARR_NUM);
       setEditSaldoModalOpen(false);
@@ -274,6 +311,19 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
   const formatDate = (date: string) => {
     if (!date) return '-';
     const d = new Date(date + 'T00:00:00');
+    return d.toLocaleDateString('pt-BR');
+  };
+
+  /** Data de lançamento (created_at): aceita YYYY-MM-DD ou timestamptz ISO */
+  const formatLaunchDate = (date: string | null | undefined) => {
+    if (!date) return '-';
+    const s = String(date).trim();
+    if (!s) return '-';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      return new Date(s + 'T00:00:00').toLocaleDateString('pt-BR');
+    }
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return '-';
     return d.toLocaleDateString('pt-BR');
   };
 
@@ -434,12 +484,12 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
 
   const buildInitialRowsForMode = useCallback((mode: 'mes' | 'semana' | 'dia', period: { start: string; end: string }) => {
     const { start, end } = period;
-    const rows: Array<{ id: string; status: string; unidade: string; conta: string; descricao: string; data: string; valor: string }> = [];
+    const rows: EditReceitaRow[] = [];
     const startDate = new Date(start + 'T00:00:00');
     const endDate = new Date(end + 'T00:00:00');
 
     const newId = () => `edit-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    const emptyRow = (data: string) => ({
+    const emptyRow = (data: string): EditReceitaRow => ({
       id: newId(),
       status: 'previsto',
       unidade: '',
@@ -473,12 +523,14 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
   useEffect(() => {
     if (editReceitaModalOpen && type === 'total_inflows') {
       const period = getEditReceitaPeriod();
+      setDistributionSnapshots({});
       setEditReceitaRows(buildInitialRowsForMode(editReceitaMode, period));
     }
   }, [editReceitaModalOpen, type, editReceitaMode, getEditReceitaPeriod, buildInitialRowsForMode]);
 
   const handleEditReceitaModeChange = (mode: 'mes' | 'semana' | 'dia') => {
     setEditReceitaMode(mode);
+    setDistributionSnapshots({});
     const period = getEditReceitaPeriod();
     setEditReceitaRows(buildInitialRowsForMode(mode, period));
   };
@@ -488,7 +540,21 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
   };
 
   const removeEditReceitaRow = (id: string) => {
-    setEditReceitaRows(prev => prev.filter(r => r.id !== id));
+    setEditReceitaRows(prev => {
+      const removed = prev.find(r => r.id === id);
+      const next = prev.filter(r => r.id !== id);
+      if (removed?.distributionGroupId) {
+        const stillInGroup = next.some(r => r.distributionGroupId === removed.distributionGroupId);
+        if (!stillInGroup) {
+          setDistributionSnapshots(snaps => {
+            const copy = { ...snaps };
+            delete copy[removed.distributionGroupId!];
+            return copy;
+          });
+        }
+      }
+      return next;
+    });
   };
 
   const addEditReceitaRow = () => {
@@ -505,6 +571,90 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
     }]);
   };
 
+  const distributeReceitaRowByMonth = (rowId: string) => {
+    const row = editReceitaRows.find(r => r.id === rowId);
+    if (!row || row.distributionGroupId) return;
+    if (!row.data?.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(row.data.trim())) {
+      notify({ type: 'error', title: 'Data inválida', message: 'Informe uma data válida na linha antes de distribuir.' });
+      return;
+    }
+    const total = parseEditReceitaValor(row.valor);
+    if (total <= 0) {
+      notify({ type: 'error', title: 'Valor inválido', message: 'Informe um valor maior que zero antes de distribuir.' });
+      return;
+    }
+    const [yStr, mStr] = row.data.trim().split('-');
+    const year = Number(yStr);
+    const month = Number(mStr); // 1-12
+    if (!year || !month || month < 1 || month > 12) {
+      notify({ type: 'error', title: 'Data inválida', message: 'Não foi possível identificar o mês da data informada.' });
+      return;
+    }
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const amounts = splitAmountAcrossDays(total, daysInMonth);
+    const groupId = `dist-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const dailyRows: EditReceitaRow[] = amounts.map((amount, i) => {
+      const day = i + 1;
+      const data = `${yStr}-${mStr}-${String(day).padStart(2, '0')}`;
+      return {
+        id: `edit-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 9)}`,
+        status: row.status || 'previsto',
+        unidade: row.unidade,
+        conta: row.conta,
+        descricao: row.descricao,
+        data,
+        valor: formatEditReceitaValor(amount),
+        distributionGroupId: groupId
+      };
+    });
+    const { distributionGroupId: _omit, ...originalSnapshot } = row;
+    setDistributionSnapshots(prev => ({ ...prev, [groupId]: { ...originalSnapshot } }));
+    setEditReceitaRows(prev => {
+      const idx = prev.findIndex(r => r.id === rowId);
+      if (idx < 0) return prev;
+      return [...prev.slice(0, idx), ...dailyRows, ...prev.slice(idx + 1)];
+    });
+  };
+
+  const cancelReceitaDistribution = (groupId: string) => {
+    const snapshot = distributionSnapshots[groupId];
+    if (!snapshot) return;
+    setEditReceitaRows(prev => {
+      const firstIdx = prev.findIndex(r => r.distributionGroupId === groupId);
+      const withoutGroup = prev.filter(r => r.distributionGroupId !== groupId);
+      if (firstIdx < 0) return withoutGroup;
+      const restored: EditReceitaRow = {
+        ...snapshot,
+        id: `edit-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+      };
+      return [...withoutGroup.slice(0, firstIdx), restored, ...withoutGroup.slice(firstIdx)];
+    });
+    setDistributionSnapshots(prev => {
+      const copy = { ...prev };
+      delete copy[groupId];
+      return copy;
+    });
+  };
+
+  const distributionGroupTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    for (const r of editReceitaRows) {
+      if (!r.distributionGroupId) continue;
+      totals[r.distributionGroupId] = (totals[r.distributionGroupId] || 0) + parseEditReceitaValor(r.valor);
+    }
+    return totals;
+  }, [editReceitaRows]);
+
+  const firstRowIdByDistributionGroup = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const r of editReceitaRows) {
+      if (r.distributionGroupId && !map[r.distributionGroupId]) {
+        map[r.distributionGroupId] = r.id;
+      }
+    }
+    return map;
+  }, [editReceitaRows]);
+
   const duplicatePreviousMonth = () => {
     const period = getEditReceitaPeriod();
     const [y, m] = period.start.split('-').map(Number);
@@ -514,17 +664,14 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
     const prevEndDate = new Date(prevYear, prevMonth, 0);
     const prevEnd = `${prevYear}-${String(prevMonth).padStart(2, '0')}-${String(prevEndDate.getDate()).padStart(2, '0')}`;
     const prevPeriod = { start: prevStart, end: prevEnd };
+    setDistributionSnapshots({});
     setEditReceitaRows(buildInitialRowsForMode(editReceitaMode, prevPeriod));
     // TODO: carregar dados do mês anterior do Supabase (receitas_manuais) quando a API estiver disponível
   };
 
   const [savingReceitas, setSavingReceitas] = useState(false);
   const saveEditReceita = async () => {
-    const parseValor = (v: string) => {
-      if (!v || !v.trim()) return 0;
-      const normalized = String(v).replace(/\./g, '').replace(',', '.');
-      return parseFloat(normalized) || 0;
-    };
+    const parseValor = parseEditReceitaValor;
     const naoEspecificado = 'não especificado';
     const rowsWithData = editReceitaRows.filter(r => r.data || r.unidade?.trim() || r.conta?.trim() || r.descricao?.trim() || r.valor?.trim());
     const invalid = rowsWithData.some(r => !r.data?.trim() || !r.unidade?.trim() || !r.status?.trim() || parseValor(r.valor) <= 0);
@@ -570,6 +717,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
         title: 'Recebimentos salvos',
         message: `${payload.length} lançamento(s) gravado(s) com sucesso.`
       });
+      setDistributionSnapshots({});
       onReceitasManuaisSaved?.();
       setEditReceitaModalOpen(false);
     } catch (err) {
@@ -932,7 +1080,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
           <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">Valor</th>
         </>
       );
-    } else if (type === 'mixed' || type === 'total_inflows' || type === 'total_outflows') {
+    } else if (type === 'mixed' || type === 'total_inflows' || type === 'total_outflows' || type === 'initial_balance') {
       return (
         <>
           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Origem</th>
@@ -941,6 +1089,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Conta</th>
           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Fornecedor/Descrição</th>
           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Data</th>
+          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Data de Lançamento</th>
           <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">Valor</th>
         </>
       );
@@ -1070,6 +1219,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
           <td className="px-4 py-3 text-sm text-gray-700">{getAccountOrCategory()}</td>
           <td className="px-4 py-3 text-sm text-gray-700">{getSupplierOrDescriptionForItem(item)}</td>
           <td className="px-4 py-3 text-sm text-gray-700">{getDate()}</td>
+          <td className="px-4 py-3 text-sm text-gray-500">{formatLaunchDate(item.created_at)}</td>
           <td className={`px-4 py-3 text-sm font-semibold text-right ${getAmountColor()}`}>
             {formatCurrency(getAmount())}
           </td>
@@ -1425,7 +1575,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
                     filteredData.map((item, index) => renderTableRow(item, index))
                   ) : (
                     <tr>
-                      <td colSpan={type === 'mixed' || type === 'total_inflows' || type === 'total_outflows' || type === 'initial_balance' ? 7 : 6} className="px-4 py-8 text-center text-gray-500">
+                      <td colSpan={type === 'mixed' || type === 'total_inflows' || type === 'total_outflows' || type === 'initial_balance' ? 8 : 6} className="px-4 py-8 text-center text-gray-500">
                         Nenhum registro encontrado
                       </td>
                     </tr>
@@ -1702,13 +1852,33 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
                               />
                             </td>
                             <td className="px-3 py-2 text-right">
-                              <input
-                                type="text"
-                                value={row.valor}
-                                onChange={e => updateEditReceitaRow(row.id, 'valor', e.target.value)}
-                                placeholder="0,00"
-                                className="w-full min-w-[100px] text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 text-right"
-                              />
+                              <div className="flex flex-col items-end gap-1">
+                                <input
+                                  type="text"
+                                  value={row.valor}
+                                  onChange={e => updateEditReceitaRow(row.id, 'valor', e.target.value)}
+                                  placeholder="0,00"
+                                  className="w-full min-w-[100px] text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 text-right"
+                                />
+                                {editReceitaMode === 'mes' && !row.distributionGroupId && (
+                                  <button
+                                    type="button"
+                                    onClick={() => distributeReceitaRowByMonth(row.id)}
+                                    className="text-xs text-blue-600 hover:text-blue-800 underline whitespace-nowrap"
+                                  >
+                                    Distribuir por mês
+                                  </button>
+                                )}
+                                {row.distributionGroupId && firstRowIdByDistributionGroup[row.distributionGroupId] === row.id && (
+                                  <button
+                                    type="button"
+                                    onClick={() => cancelReceitaDistribution(row.distributionGroupId!)}
+                                    className="text-xs text-amber-700 hover:text-amber-900 underline whitespace-nowrap"
+                                  >
+                                    Cancelar distribuição
+                                  </button>
+                                )}
+                              </div>
                             </td>
                             <td className="px-2 py-2 text-center">
                               <button
@@ -1726,6 +1896,29 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
                       </tbody>
                     </table>
                   </div>
+
+                  {editReceitaMode === 'mes' && Object.keys(distributionGroupTotals).length > 0 && (
+                    <div className="mt-2 space-y-1 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2">
+                      {Object.entries(distributionGroupTotals).map(([groupId, total], i) => {
+                        const original = distributionSnapshots[groupId];
+                        const originalTotal = original ? parseEditReceitaValor(original.valor) : null;
+                        return (
+                          <p key={groupId} className="text-sm text-gray-800">
+                            <span className="font-medium">
+                              Total distribuído{Object.keys(distributionGroupTotals).length > 1 ? ` #${i + 1}` : ''}:
+                            </span>{' '}
+                            {formatCurrency(total)}
+                            {originalTotal != null && (
+                              <span className={`ml-2 text-xs ${Math.abs(total - originalTotal) < 0.005 ? 'text-green-700' : 'text-amber-700'}`}>
+                                (original: {formatCurrency(originalTotal)}
+                                {Math.abs(total - originalTotal) >= 0.005 ? ' — divergente' : ' — confere'})
+                              </span>
+                            )}
+                          </p>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   <div className="flex flex-wrap items-center gap-3 pt-2">
                     <button
