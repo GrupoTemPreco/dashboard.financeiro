@@ -174,14 +174,3 @@ export interface Filters {
   startDate: string;
   endDate: string;
 }
-
-export interface CalendarDay {
-  date: string;
-  openingBalance: number;
-  forecastedRevenue: number;
-  actualRevenue: number;
-  forecastedOutflows: number;
-  actualOutflows: number;
-  finalBalanceForecasted: number;
-  finalBalanceActual: number;
-}

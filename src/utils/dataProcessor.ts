@@ -1,5 +1,4 @@
-import { FinancialRecord, KPIData, CalendarDay, Filters } from '../types/financial';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval } from 'date-fns';
+import { FinancialRecord, KPIData, Filters } from '../types/financial';
 
 export const filterData = (records: FinancialRecord[], filters: Filters): FinancialRecord[] => {
   return records.filter(record => {
@@ -67,37 +66,6 @@ export const calculateKPIs = (records: FinancialRecord[]): KPIData => {
       percentageOfRevenue: totals.actualRevenue ? (totals.actualOutflows / totals.actualRevenue) * 100 : 0
     }
   };
-};
-
-export const generateCalendarData = (records: FinancialRecord[], year: number, month: number): CalendarDay[] => {
-  const startDate = startOfMonth(new Date(year, month));
-  const endDate = endOfMonth(new Date(year, month));
-  const days = eachDayOfInterval({ start: startDate, end: endDate });
-
-  return days.map(day => {
-    const dayStr = format(day, 'yyyy-MM-dd');
-    const dayRecords = records.filter(r => r.date === dayStr);
-
-    const totals = dayRecords.reduce((acc, record) => ({
-      openingBalance: acc.openingBalance + record.openingBalance,
-      forecastedRevenue: acc.forecastedRevenue + record.forecastedRevenue,
-      forecastedOutflows: acc.forecastedOutflows + record.forecastedOutflows,
-      forecastedBalance: acc.forecastedBalance + record.openingBalance + record.forecastedRevenue - record.forecastedOutflows
-    }), {
-      openingBalance: 0,
-      forecastedRevenue: 0,
-      forecastedOutflows: 0,
-      forecastedBalance: 0
-    });
-
-    return {
-      date: dayStr,
-      openingBalance: totals.openingBalance,
-      forecastedRevenue: totals.forecastedRevenue,
-      forecastedOutflows: totals.forecastedOutflows,
-      forecastedBalance: totals.forecastedBalance
-    };
-  });
 };
 
 export const formatCurrency = (value: number): string => {

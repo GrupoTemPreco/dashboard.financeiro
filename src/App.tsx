@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { KPICard } from './components/KPICard';
 import { KPIDetailModal } from './components/KPIDetailModal';
-import { CalendarView } from './components/CalendarView';
+import { CalendarView, loadCalendarMonthData, computeCalendarDays, type CalendarDayValues } from './features/calendar';
 import { CashFlowChart } from './components/CashFlowChart';
 import { CashFlowAlerts } from './components/CashFlowAlerts';
 import { MonthlyComparison } from './components/MonthlyComparison';
@@ -23,7 +23,7 @@ import { NotificationProvider, useNotificationContext } from './contexts/Notific
 import { FinancialRecord, Filters, ImportedFile } from './types/financial';
 import { processExcelFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, processOrcamentoDREFile, processReceitaCrediarioFile, processVendasPorUsuarioFile, validateFileFormat } from './utils/excelProcessor';
 import { filterData, calculateKPIs } from './utils/dataProcessor';
-import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List, Moon, Sun, Eye, EyeOff } from 'lucide-react';
+import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List, Moon, Sun, Eye, EyeOff, X } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { startOfMonth, endOfMonth, format, parseISO, subMonths, subDays, differenceInCalendarDays, addDays, getDate, setDate, lastDayOfMonth } from 'date-fns';
 import { CapCoaMatchCollector, formatCapCoaLaunchMessage } from './lib/coaCapMatchCollector';
@@ -155,13 +155,11 @@ function AppContent() {
     year: new Date().getFullYear(),
     month: new Date().getMonth()
   });
-  const [calendarAccumulatedMode, setCalendarAccumulatedMode] = useState(false); // false = diário, true = acumulado
-  const [calendarViewData, setCalendarViewData] = useState<{
-    accountsPayable: any[];
-    financialTransactions: any[];
-    receitasManuais: any[];
-  }>({ accountsPayable: [], financialTransactions: [], receitasManuais: [] });
-  const [calendarDataLoading, setCalendarDataLoading] = useState(false);
+  const [calendarDays, setCalendarDays] = useState<CalendarDayValues[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarReloadTick, setCalendarReloadTick] = useState(0);
+  const [cashFlowChartModalOpen, setCashFlowChartModalOpen] = useState(false);
+  const [cashFlowAlertsModalOpen, setCashFlowAlertsModalOpen] = useState(false);
   const [loading, setLoading] = useState<{
     isLoading: boolean;
     currentFile?: string;
@@ -623,7 +621,7 @@ function AppContent() {
         while (hasMoreBal) {
           const query = supabase
             .from('saldos_iniciais')
-            .select('import_id, business_unit, balance_date, balance, bank_name, id, created_at')
+            .select('import_id, business_unit, balance_date, balance, bank_name, observacao, id, created_at')
             .order('balance_date', { ascending: false });
           const { data, error } = await query.range(offsetBal, offsetBal + 999);
           if (error) {
@@ -1090,170 +1088,33 @@ function AppContent() {
     loadDataFromSupabase(undefined, undefined, snapshot);
   }, []);
 
-  /** Carrega dados do calendário para o mês selecionado (independente do filtro de período global) */
-  const loadCalendarData = useCallback(async (year: number, month: number, accumulatedMode: boolean) => {
-    setCalendarDataLoading(true);
+  /** Carrega e agrega o mês do calendário (pipeline isolado em features/calendar) */
+  const reloadCalendarMonth = useCallback(async () => {
+    setCalendarLoading(true);
     try {
-      const firstDay = new Date(year, month, 1);
-      const lastDay = new Date(year, month + 1, 0);
-      const startDate = format(firstDay, 'yyyy-MM-dd');
-      const endDate = format(lastDay, 'yyyy-MM-dd');
-      const rangeStart = accumulatedMode
-        ? format(new Date(year, 0, 1), 'yyyy-MM-dd')
-        : startDate;
-
-      const { data: importsData } = await supabase.from('importacoes').select('id, is_deleted');
-      const activeImportIds = (importsData || []).filter((imp: any) => !imp.is_deleted).map((imp: any) => imp.id);
-      const hasActiveImports = activeImportIds.length > 0;
-
-      const f = filtersRef.current;
-      let filteredBusinessUnits: string[] | null = null;
-      if (companies.length > 0 && ((f.groups?.length ?? 0) > 0 || (f.companies?.length ?? 0) > 0)) {
-        let filtered = [...companies];
-        if ((f.groups?.length ?? 0) > 0) {
-          const groupSet = new Set(f.groups!.map((g: string) => String(g ?? '').trim().toLowerCase()));
-          filtered = filtered.filter((c) => groupSet.has(String(c.group_name ?? '').trim().toLowerCase()));
-        }
-        if ((f.companies?.length ?? 0) > 0) {
-          const codeMatches = (a: string, b: string) => {
-            const na = normalizeCode(a || '');
-            const nb = normalizeCode(b || '');
-            if (na === nb) return true;
-            const ca = toCanonicalBusinessUnit(a || '');
-            const cb = toCanonicalBusinessUnit(b || '');
-            return !!(ca && cb && ca === cb);
-          };
-          filtered = filtered.filter((c) =>
-            f.companies!.some((code: string) => codeMatches(String(c.company_code ?? ''), code))
-          );
-        }
-        if (filtered.length > 0) {
-          const codesSet = new Set<string>();
-          filtered.forEach((c) => {
-            const code = String(c.company_code ?? '').trim();
-            if (code) codesSet.add(code);
-            const canonical = toCanonicalBusinessUnit(code);
-            if (canonical) codesSet.add(canonical);
-            const norm = normalizeCode(code);
-            if (norm) codesSet.add(norm);
-          });
-          filteredBusinessUnits = codesSet.size > 0 ? Array.from(codesSet) : ['__NO_MATCH__'];
-        } else {
-          filteredBusinessUnits = ['__NO_MATCH__'];
-        }
-      }
-
-      let apData: any[] = [];
-      let transactionsData: any[] = [];
-      let receitasManuaisData: any[] = [];
-
-      {
-        const allAp: any[] = [];
-        let offset = 0;
-        let hasMore = true;
-        while (hasMore) {
-          let q = applyContasAPagarImportFilter(
-            supabase
-              .from('contas_a_pagar')
-              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id'),
-            activeImportIds
-          )
-            .not('payment_date', 'is', null)
-            .gte('payment_date', rangeStart)
-            .lte('payment_date', endDate);
-          if (filteredBusinessUnits?.length) q = q.in('business_unit', filteredBusinessUnits);
-          const { data, error } = await q.order('payment_date', { ascending: false }).range(offset, offset + 999);
-          if (error) throw error;
-          if (data?.length) {
-            allAp.push(...data);
-            offset += 1000;
-            hasMore = data.length === 1000;
-          } else hasMore = false;
-        }
-        offset = 0;
-        hasMore = true;
-        while (hasMore) {
-          let q2 = applyContasAPagarImportFilter(
-            supabase
-              .from('contas_a_pagar')
-              .select('import_id, business_unit, payment_date, due_date, amount, status, chart_of_accounts, creditor, id'),
-            activeImportIds
-          )
-            .gte('due_date', rangeStart)
-            .lte('due_date', endDate);
-          if (filteredBusinessUnits?.length) q2 = q2.in('business_unit', filteredBusinessUnits);
-          const { data: data2, error: err2 } = await q2.order('due_date', { ascending: false }).range(offset, offset + 999);
-          if (err2) throw err2;
-          if (data2?.length) {
-            const ids = new Set(allAp.map((x: any) => x.id));
-            allAp.push(...data2.filter((x: any) => !ids.has(x.id)));
-            offset += 1000;
-            hasMore = data2.length === 1000;
-          } else hasMore = false;
-        }
-        apData = allAp;
-      }
-
-      try {
-        let offsetRm = 0;
-        let hasMoreRm = true;
-        while (hasMoreRm) {
-          let q = supabase
-            .from('receitas_manuais')
-            .select('id, status, business_unit, conta, descricao, data, valor')
-            .gte('data', rangeStart)
-            .lte('data', endDate)
-            .order('data', { ascending: false });
-          if (filteredBusinessUnits?.length) q = q.in('business_unit', filteredBusinessUnits);
-          const { data, error } = await q.range(offsetRm, offsetRm + 999);
-          if (!error && data?.length) {
-            receitasManuaisData = [...receitasManuaisData, ...data];
-            offsetRm += 1000;
-            hasMoreRm = data.length === 1000;
-          } else hasMoreRm = false;
-        }
-      } catch (_) {}
-
-      if (hasActiveImports) {
-        try {
-          let offsetTf = 0;
-          let hasMoreTf = true;
-          while (hasMoreTf) {
-            let q = supabase
-              .from('transacoes_financeiras')
-              .select('import_id, business_unit, transaction_date, amount, status, chart_of_accounts, descricao, id')
-              .in('import_id', activeImportIds)
-              .gte('transaction_date', rangeStart)
-              .lte('transaction_date', endDate)
-              .order('transaction_date', { ascending: false });
-            if (filteredBusinessUnits?.length) q = q.in('business_unit', filteredBusinessUnits);
-            const { data, error } = await q.range(offsetTf, offsetTf + 999);
-            if (!error && data?.length) {
-              transactionsData = [...transactionsData, ...data];
-              offsetTf += 1000;
-              hasMoreTf = data.length === 1000;
-            } else hasMoreTf = false;
-          }
-        } catch (_) {}
-      }
-
-      setCalendarViewData({
-        accountsPayable: apData,
-        financialTransactions: transactionsData,
-        receitasManuais: receitasManuaisData
+      const businessUnits = getFilteredBusinessUnits();
+      const raw = await loadCalendarMonthData({
+        year: calendarDate.year,
+        month: calendarDate.month,
+        businessUnits,
       });
+      setCalendarDays(computeCalendarDays(raw, calendarDate.year, calendarDate.month));
     } catch (err) {
       console.error('Erro ao carregar dados do calendário:', err);
-      setCalendarViewData({ accountsPayable: [], financialTransactions: [], receitasManuais: [] });
+      setCalendarDays([]);
     } finally {
-      setCalendarDataLoading(false);
+      setCalendarLoading(false);
     }
-  }, [companies]);
+  }, [calendarDate.year, calendarDate.month, companies, filters.companies, filters.groups]);
 
-  // Carregar dados do calendário ao mudar mês, modo acumulado ou filtro de empresas/grupos
   useEffect(() => {
-    loadCalendarData(calendarDate.year, calendarDate.month, calendarAccumulatedMode);
-  }, [calendarDate.year, calendarDate.month, calendarAccumulatedMode, filters.companies, filters.groups, loadCalendarData]);
+    reloadCalendarMonth();
+  }, [reloadCalendarMonth, calendarReloadTick]);
+
+  const handleCalendarBalancesChanged = useCallback(() => {
+    refreshWithCurrentFilters();
+    setCalendarReloadTick((t) => t + 1);
+  }, [refreshWithCurrentFilters]);
 
   const loadImportsFromSupabase = async () => {
     try {
@@ -3478,30 +3339,26 @@ function AppContent() {
       allBalancesForBeforePeriod = allBalancesForBeforePeriod.filter(bal => normalizedCompanyCodes.includes(normalizeCode(bal.business_unit)));
     }
     const balancesBeforePeriodFiltered = allBalancesForBeforePeriod.filter(bal => toDay(bal.balance_date) < startDateStr);
-    let balancesToUse: Record<string, any> = {};
+    // COMPORTAMENTO NOVO (Parte 2): no período, listar TODOS os lançamentos que entram na soma do card
+    // (antes: só o de menor balance_date por bank+UN). Fallback "mais recente" permanece 1 por grupo.
+    let detailList: any[] = [];
     const hasBalanceInPeriod = balancesInPeriod.length > 0;
     if (hasBalanceInPeriod) {
-      balancesToUse = balancesInPeriod.reduce((acc, bal) => {
-        const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
-        const existing = acc[key];
-        if (!existing) acc[key] = bal;
-        else if (toDay(bal.balance_date) < toDay(existing.balance_date)) acc[key] = bal;
-        return acc;
-      }, {} as Record<string, any>);
+      detailList = balancesInPeriod;
     } else if (showLatestInitialBalance && (balancesBeforePeriodFiltered.length > 0 || allBalancesForBeforePeriod.length > 0)) {
-      // Prioriza o mais recente antes do período; se não houver, usa o mais recente disponível em qualquer data.
       const latestCandidates = balancesBeforePeriodFiltered.length > 0
         ? balancesBeforePeriodFiltered
         : allBalancesForBeforePeriod;
-      balancesToUse = latestCandidates.reduce((acc, bal) => {
+      const balancesToUse = latestCandidates.reduce((acc, bal) => {
         const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
         const existing = acc[key];
         if (!existing || toDay(bal.balance_date) > toDay(existing.balance_date)) acc[key] = bal;
         else if (!acc[key]) acc[key] = bal;
         return acc;
       }, {} as Record<string, any>);
+      detailList = Object.values(balancesToUse);
     }
-    return Object.values(balancesToUse).map((bal: any) => ({
+    return detailList.map((bal: any) => ({
       id: bal.id,
       source: 'initial_balance',
       type: 'Saldo Inicial',
@@ -3510,6 +3367,7 @@ function AppContent() {
       amount: Number(bal.balance) || 0,
       balance: Number(bal.balance) || 0,
       bank_name: bal.bank_name || '-',
+      observacao: bal.observacao ?? '',
       status: 'realizado',
       created_at: bal.created_at
     }));
@@ -3940,7 +3798,7 @@ function AppContent() {
         // Período não filtra aqui para não zerar a lista quando o dashboard está em outro mês
         let query = supabase
           .from('saldos_iniciais')
-          .select('import_id, business_unit, balance_date, balance, bank_name, id, created_at', { count: 'exact' });
+          .select('import_id, business_unit, balance_date, balance, bank_name, observacao, id, created_at', { count: 'exact' });
 
         if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
           query = query.in('business_unit', filteredBusinessUnits);
@@ -3972,6 +3830,7 @@ function AppContent() {
           amount: Number(bal.balance) || 0,
           balance: Number(bal.balance) || 0,
           bank_name: bal.bank_name || '-',
+          observacao: bal.observacao ?? '',
           status: 'realizado',
           created_at: bal.created_at
         }));
@@ -4104,7 +3963,7 @@ function AppContent() {
           (async () => {
             let query = supabase
               .from('saldos_iniciais')
-              .select('import_id, business_unit, balance_date, balance, bank_name, id', { count: 'exact' })
+              .select('import_id, business_unit, balance_date, balance, bank_name, observacao, id', { count: 'exact' })
               .lte('balance_date', baseEndDate || new Date().toISOString().split('T')[0]);
 
             if (filteredBusinessUnits && filteredBusinessUnits.length > 0) {
@@ -4518,30 +4377,10 @@ function AppContent() {
 
     balancesBeforePeriod = balancesBeforePeriodFiltered;
 
-    // Agrupar saldos DENTRO do período por bank_name + business_unit e pegar o mais próximo do início
-    const initialBalancesByBankAndUnit = balancesInPeriod.reduce((acc, bal) => {
-      const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
-      const existing = acc[key];
-      
-      if (!existing) {
-        acc[key] = bal;
-      } else {
-        // Compara as datas e pega o mais próximo do início do período (menor data >= startDate)
-        const existingDate = existing.balance_date || '';
-        const currentDate = bal.balance_date || '';
-        if (currentDate < existingDate) {
-          acc[key] = bal; // Pega o mais próximo do início (menor data)
-        }
-      }
-      
-      return acc;
-    }, {} as Record<string, any>);
+    // COMPORTAMENTO NOVO (Parte 2): somar TODOS os lançamentos no período (por grupo bank+UN
+    // e entre grupos). Antes: só o de menor balance_date por grupo. Fallback "mais recente" intacto.
+    const hasBalanceInPeriod = balancesInPeriod.length > 0;
 
-    // Verificar se há saldo DENTRO do período (não apenas antes dele)
-    const hasBalanceInPeriod = Object.keys(initialBalancesByBankAndUnit).length > 0;
-
-    // Se não houver saldo no período e o usuário não pediu para mostrar o mais recente,
-    // retornar indicador de que não há saldo
     if (!hasBalanceInPeriod && !showLatestInitialBalance) {
       result.initialBalance = {
         forecasted: 0,
@@ -4549,47 +4388,44 @@ function AppContent() {
         date: filters.startDate || new Date().toISOString().split('T')[0],
         hasBalance: false
       };
-    } else {
-      // Se não houver saldo no período mas o usuário pediu para mostrar o mais recente,
-      // buscar o saldo mais recente antes do período
-      let balancesToUse = initialBalancesByBankAndUnit;
-      let isLatestBeforePeriod = false;
+    } else if (hasBalanceInPeriod) {
+      const balanceDates = balancesInPeriod
+        .map((bal: any) => bal.balance_date)
+        .filter((date: string) => date);
+      const mostRecentDate = balanceDates.length > 0 ? balanceDates.sort().reverse()[0] : null;
+      const calculatedInitialBalance = balancesInPeriod.reduce((sum: number, bal: any) => {
+        const balanceValue = bal?.balance;
+        if (balanceValue === null || balanceValue === undefined || balanceValue === '') return sum;
+        const parsed = parseFloat(String(balanceValue));
+        return sum + (isNaN(parsed) ? 0 : parsed);
+      }, 0);
 
-      if (!hasBalanceInPeriod && showLatestInitialBalance) {
-        console.log('🔍 DEBUG - Buscando saldo mais recente antes do período:');
-        console.log(`  - Saldos disponíveis antes do período: ${balancesBeforePeriod.length}`);
-        
-        // Usar os saldos antes do período que já foram separados
-        // Agrupar por bank_name + business_unit e pegar o mais recente de cada grupo
-        balancesToUse = balancesBeforePeriod.reduce((acc, bal) => {
-          const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
-          const existing = acc[key];
-          
-          if (!existing) {
-            acc[key] = bal;
-          } else {
-            const existingDate = existing.balance_date || '';
-            const currentDate = bal.balance_date || '';
-            // Comparar datas como strings (formato YYYY-MM-DD)
-            if (currentDate > existingDate) {
-              acc[key] = bal; // Pega o mais recente antes do período
-            }
-          }
-          
-          return acc;
-        }, {} as Record<string, any>);
-        
-        console.log(`  - Saldos agrupados por banco/empresa: ${Object.keys(balancesToUse).length}`);
-        console.log(`  - Chaves encontradas:`, Object.keys(balancesToUse));
-        
-        // Verificar se realmente há saldos antes do período
-        isLatestBeforePeriod = Object.keys(balancesToUse).length > 0;
-        
-        console.log(`  - isLatestBeforePeriod: ${isLatestBeforePeriod}`);
-        
-        // Se não houver saldos antes do período, retornar indicador de que não há saldo
+      result.initialBalance = {
+        forecasted: calculatedInitialBalance || 0,
+        actual: calculatedInitialBalance || 0,
+        date: mostRecentDate || (filters.startDate || new Date().toISOString().split('T')[0]),
+        hasBalance: true,
+        isLatestBeforePeriod: false
+      };
+    } else {
+      // showLatestInitialBalance && !hasBalanceInPeriod
+      console.log('🔍 DEBUG - Buscando saldo mais recente antes do período:');
+      console.log(`  - Saldos disponíveis antes do período: ${balancesBeforePeriod.length}`);
+
+      let balancesToUse = balancesBeforePeriod.reduce((acc, bal) => {
+        const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
+        const existing = acc[key];
+        if (!existing) {
+          acc[key] = bal;
+        } else if ((bal.balance_date || '') > (existing.balance_date || '')) {
+          acc[key] = bal;
+        }
+        return acc;
+      }, {} as Record<string, any>);
+
+      let isLatestBeforePeriod = Object.keys(balancesToUse).length > 0;
+
       if (!isLatestBeforePeriod) {
-        // Fallback: se não houver saldo antes do período, usar o saldo mais recente disponível.
         console.log('⚠️ Nenhum saldo antes do período; aplicando fallback para o mais recente disponível.');
         balancesToUse = balancesAnyDateFiltered.reduce((acc, bal) => {
           const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
@@ -4598,45 +4434,38 @@ function AppContent() {
           else if ((bal.balance_date || '') > (existing.balance_date || '')) acc[key] = bal;
           return acc;
         }, {} as Record<string, any>);
-
-        if (Object.keys(balancesToUse).length === 0) {
-          result.initialBalance = {
-            forecasted: 0,
-            actual: 0,
-            date: filters.startDate || new Date().toISOString().split('T')[0],
-            hasBalance: false,
-            isLatestBeforePeriod: false
-          };
-        }
-      }
+        isLatestBeforePeriod = false;
       }
 
-      // Somar todos os grupos (bank+unit); cada entrada já é o mais recente daquele grupo
       const valuesFromBalancesToUse = Object.values(balancesToUse);
-      const balanceDates = valuesFromBalancesToUse
-        .map((bal: any) => bal.balance_date)
-        .filter((date: string) => date);
-      const mostRecentDate = balanceDates.length > 0 ? balanceDates.sort().reverse()[0] : null;
-
-      const calculatedInitialBalance = valuesFromBalancesToUse
-        .reduce((sum: number, bal: any) => {
+      if (valuesFromBalancesToUse.length === 0) {
+        result.initialBalance = {
+          forecasted: 0,
+          actual: 0,
+          date: filters.startDate || new Date().toISOString().split('T')[0],
+          hasBalance: false,
+          isLatestBeforePeriod: false
+        };
+      } else {
+        const balanceDates = valuesFromBalancesToUse
+          .map((bal: any) => bal.balance_date)
+          .filter((date: string) => date);
+        const mostRecentDate = balanceDates.length > 0 ? balanceDates.sort().reverse()[0] : null;
+        const calculatedInitialBalance = valuesFromBalancesToUse.reduce((sum: number, bal: any) => {
           const balanceValue = bal?.balance;
-          if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
-            return sum;
-          }
+          if (balanceValue === null || balanceValue === undefined || balanceValue === '') return sum;
           const parsed = parseFloat(String(balanceValue));
           return sum + (isNaN(parsed) ? 0 : parsed);
         }, 0);
 
-      const calculatedInitialBalanceDate = mostRecentDate || (filters.startDate || new Date().toISOString().split('T')[0]);
-
-      result.initialBalance = {
-        forecasted: calculatedInitialBalance || 0,
-        actual: calculatedInitialBalance || 0,
-        date: calculatedInitialBalanceDate,
-        hasBalance: hasBalanceInPeriod || valuesFromBalancesToUse.length > 0,
-        isLatestBeforePeriod: isLatestBeforePeriod
-      };
+        result.initialBalance = {
+          forecasted: calculatedInitialBalance || 0,
+          actual: calculatedInitialBalance || 0,
+          date: mostRecentDate || (filters.startDate || new Date().toISOString().split('T')[0]),
+          hasBalance: true,
+          isLatestBeforePeriod
+        };
+      }
     }
     
     // Saldo Final = Saldo Inicial + Total de Recebimentos - Total de Pagamentos
@@ -4649,17 +4478,6 @@ function AppContent() {
     return result;
   }, [filteredData, accountsPayableTotals, forecastedEntriesTotals, revenueTotals, receitaCrediarioTotals, transactionTotals, cmvTotals, getFilteredInitialBalancesRaw, companies, filters, showLatestInitialBalance, initialBalances]);
 
-
-  // Saldo inicial para o calendário (SEM filtro de período, apenas empresas/grupos)
-  const getCalendarInitialBalances = useMemo(() => {
-    if (companies.length === 0) return initialBalances;
-    const { codes: normalizedCompanyCodes, hasActive: hasActiveFilters } = getFilteredCompanyCodesNormalized;
-    if (!hasActiveFilters) return initialBalances;
-    return initialBalances.filter(bal => {
-      const normalizedBU = normalizeCode(bal.business_unit);
-      return normalizedCompanyCodes.includes(normalizedBU);
-    });
-  }, [initialBalances, companies, getFilteredCompanyCodesNormalized]);
 
   // Calculate daily cash flow based on actual data from database (SEM filtro de período)
   const dailyCashFlow = useMemo(() => {
@@ -4688,107 +4506,6 @@ function AppContent() {
       let forecastedBalance: number;
       let actualBalance: number;
 
-      if (calendarAccumulatedMode) {
-        // MODO ACUMULADO: calcula saldo final acumulado até aquele dia (como o card faz)
-        // Saldo Inicial: pega o saldo inicial mais recente até dateStr (atualizado manualmente diariamente)
-        const balancesUpToDate = initialBalances
-          .filter(bal => {
-            if (!filterByCompany(bal)) return false;
-            const balanceDate = bal?.balance_date;
-            if (!balanceDate) return false;
-            return balanceDate <= dateStr;
-          });
-
-        // Agrupar por bank_name + business_unit e pegar o mais recente de cada grupo
-        const latestBalancesByBankAndUnit = balancesUpToDate.reduce((acc, bal) => {
-          const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
-          const existing = acc[key];
-          
-          if (!existing) {
-            acc[key] = bal;
-          } else {
-            // Se já existe, compara as datas e pega o mais recente
-            const existingDate = existing.balance_date || '';
-            const currentDate = bal.balance_date || '';
-            if (currentDate > existingDate) {
-              acc[key] = bal;
-            }
-          }
-          
-          return acc;
-        }, {} as Record<string, any>);
-
-        // Somar os valores dos saldos mais recentes de cada banco/empresa
-        dayInitialBalance = Object.values(latestBalancesByBankAndUnit)
-          .reduce((sum: number, bal: any) => {
-            const balanceValue = bal?.balance;
-            if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
-              return sum;
-            }
-            const parsed = parseFloat(String(balanceValue));
-            return sum + (isNaN(parsed) ? 0 : parsed);
-          }, 0);
-
-        // Recebimentos Previstos acumulados até dateStr
-        const forecastedRevenues = getFilteredRevenues
-          .filter(r => filterByCompany(r) && r.payment_date <= dateStr && (r.status?.toLowerCase() === 'previsto' || r.status?.toLowerCase() === 'pendente'))
-          .reduce((sum, r) => sum + (r.amount || 0), 0);
-
-        const forecastedTransactionsInflows = financialTransactions
-          .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount > 0 && t.status?.toLowerCase() === 'previsto')
-          .reduce((sum, t) => sum + (t.amount || 0), 0);
-
-        dayForecastedInflows = forecastedRevenues + forecastedTransactionsInflows;
-
-        // Recebimentos Realizados acumulados até dateStr
-        const actualRevenues = getFilteredRevenues
-          .filter(r => filterByCompany(r) && r.payment_date <= dateStr && r.status?.toLowerCase() === 'realizado')
-          .reduce((sum, r) => sum + (r.amount || 0), 0);
-
-        const actualTransactionsInflows = financialTransactions
-          .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount > 0 && t.status?.toLowerCase() === 'realizado')
-          .reduce((sum, t) => sum + (t.amount || 0), 0);
-
-        dayActualInflows = actualRevenues + actualTransactionsInflows;
-
-        // Pagamentos Previstos acumulados até dateStr
-        // Para status "previsto", usar due_date se payment_date for NULL
-        const forecastedOutflowsAccountsPayable = accountsPayable
-          .filter(ap => {
-            if (!filterByCompany(ap) || ap.status?.toLowerCase() !== 'previsto') return false;
-            // Se tem payment_date, usar ele. Se não tem, usar due_date
-            const dateToCompare = ap.payment_date || ap.due_date;
-            return dateToCompare && dateToCompare <= dateStr;
-          })
-          .reduce((sum, ap) => {
-            const amount = parseFloat(ap.amount || 0);
-            return sum + (isNaN(amount) ? 0 : amount);
-          }, 0);
-
-        const forecastedTransactionsOutflows = financialTransactions
-          .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount < 0 && t.status?.toLowerCase() === 'previsto')
-          .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
-
-        dayForecastedOutflows = forecastedOutflowsAccountsPayable + forecastedTransactionsOutflows;
-
-        // Pagamentos Realizados acumulados até dateStr
-        const actualOutflowsAccountsPayable = accountsPayable
-          .filter(ap => filterByCompany(ap) && ap.payment_date <= dateStr && ap.status?.toLowerCase() === 'realizado')
-          .reduce((sum, ap) => {
-            const amount = parseFloat(ap.amount || 0);
-            return sum + (isNaN(amount) ? 0 : amount);
-          }, 0);
-
-        const actualTransactionsOutflows = financialTransactions
-          .filter(t => filterByCompany(t) && t.transaction_date <= dateStr && t.amount < 0 && t.status?.toLowerCase() === 'realizado')
-          .reduce((sum, t) => sum + Math.abs(t.amount || 0), 0);
-
-        dayActualOutflows = actualOutflowsAccountsPayable + actualTransactionsOutflows;
-
-        // Saldo Final = Saldo Inicial (acumulado) + Recebimentos (acumulados) - Pagamentos (acumulados)
-        forecastedBalance = dayInitialBalance + dayForecastedInflows - dayForecastedOutflows;
-        actualBalance = dayInitialBalance + dayActualInflows - dayActualOutflows;
-      } else {
         // MODO DIÁRIO: calcula APENAS os MOVIMENTOS DAQUELE DIA específico (não acumulado)
         // Saldo Inicial: apenas saldos com balance_date === dateStr (saldo inicial do dia, atualizado manualmente via planilha)
         dayInitialBalance = initialBalances
@@ -4849,7 +4566,6 @@ function AppContent() {
         // Cada dia mostra apenas a movimentação daquele dia específico
         forecastedBalance = dayInitialBalance + dayForecastedInflows - dayForecastedOutflows;
         actualBalance = dayInitialBalance + dayActualInflows - dayActualOutflows;
-      }
 
       days.push({
         date: dateStr,
@@ -4874,151 +4590,7 @@ function AppContent() {
     }
 
     return days;
-  }, [getFilteredRevenues, accountsPayable, forecastedEntries, financialTransactions, initialBalances, companies, getFilteredCompanyCodesNormalized, calendarAccumulatedMode]);
-
-  // Fluxo diário do calendário: usa dados carregados por loadCalendarData, due_date para previsto, payment_date para realizado, sem forecastedEntries
-  const calendarDailyCashFlow = useMemo(() => {
-    const { accountsPayable: calAp, financialTransactions: calTx, receitasManuais: calRec } = calendarViewData;
-    const calRevenues = calRec.map((r: any) => ({
-      business_unit: r.business_unit,
-      payment_date: r.data,
-      amount: Number(r.valor) || 0,
-      status: r.status || 'previsto'
-    }));
-
-    const year = calendarDate.year;
-    const month = calendarDate.month;
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const rangeStart = calendarAccumulatedMode ? new Date(year, 0, 1) : firstDay;
-    const rangeEnd = lastDay;
-
-    const days: any[] = [];
-    const { codes: normalizedCompanyCodes, hasActive: hasActiveFilters } = getFilteredCompanyCodesNormalized;
-    const filterByCompany = (item: any) => {
-      if (companies.length === 0 || !hasActiveFilters) return true;
-      return normalizedCompanyCodes.includes(normalizeCode(item.business_unit));
-    };
-
-    const initialBalancesCal = getCalendarInitialBalances;
-
-    for (let d = new Date(rangeStart); d <= rangeEnd; d.setDate(d.getDate() + 1)) {
-      const dateStr = d.toISOString().split('T')[0];
-      let dayInitialBalance: number;
-      let dayForecastedInflows: number;
-      let dayActualInflows: number;
-      let dayForecastedOutflows: number;
-      let dayActualOutflows: number;
-      let forecastedBalance: number;
-      let actualBalance: number;
-
-      if (calendarAccumulatedMode) {
-        const balancesUpToDate = initialBalancesCal.filter((bal: any) => {
-          if (!filterByCompany(bal)) return false;
-          const balanceDate = bal?.balance_date;
-          return balanceDate && balanceDate <= dateStr;
-        });
-        const latestByBank = balancesUpToDate.reduce((acc: Record<string, any>, bal: any) => {
-          const key = `${bal.bank_name || '-'}_${bal.business_unit || '-'}`;
-          const existing = acc[key];
-          if (!existing || (bal.balance_date || '') > (existing.balance_date || '')) acc[key] = bal;
-          return acc;
-        }, {});
-        dayInitialBalance = Object.values(latestByBank).reduce((sum: number, bal: any) => {
-          const v = bal?.balance;
-          if (v == null || v === '') return sum;
-          const p = parseFloat(String(v));
-          return sum + (isNaN(p) ? 0 : p);
-        }, 0);
-
-        dayForecastedInflows = calRevenues.filter((r: any) => filterByCompany(r) && r.payment_date <= dateStr && ['previsto', 'pendente'].includes(String(r.status || '').toLowerCase())).reduce((s: number, r: any) => s + (r.amount || 0), 0) +
-          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date <= dateStr && (t.amount || 0) > 0 && String(t.status || '').toLowerCase() === 'previsto').reduce((s: number, t: any) => s + (t.amount || 0), 0);
-        dayActualInflows = calRevenues.filter((r: any) => filterByCompany(r) && r.payment_date <= dateStr && String(r.status || '').toLowerCase() === 'realizado').reduce((s: number, r: any) => s + (r.amount || 0), 0) +
-          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date <= dateStr && (t.amount || 0) > 0 && String(t.status || '').toLowerCase() === 'realizado').reduce((s: number, t: any) => s + (t.amount || 0), 0);
-
-        dayForecastedOutflows = calAp.filter((ap: any) => {
-          if (!filterByCompany(ap) || String(ap.status || '').toLowerCase() !== 'previsto') return false;
-          const dt = ap.due_date || ap.payment_date;
-          return dt && dt <= dateStr;
-        }).reduce((s: number, ap: any) => s + (parseFloat(ap.amount) || 0), 0) +
-          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date <= dateStr && (t.amount || 0) < 0 && String(t.status || '').toLowerCase() === 'previsto').reduce((s: number, t: any) => s + Math.abs(t.amount || 0), 0);
-        dayActualOutflows = calAp.filter((ap: any) => filterByCompany(ap) && ap.payment_date && ap.payment_date <= dateStr && String(ap.status || '').toLowerCase() === 'realizado').reduce((s: number, ap: any) => s + (parseFloat(ap.amount) || 0), 0) +
-          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date <= dateStr && (t.amount || 0) < 0 && String(t.status || '').toLowerCase() === 'realizado').reduce((s: number, t: any) => s + Math.abs(t.amount || 0), 0);
-
-        forecastedBalance = dayInitialBalance + dayForecastedInflows - dayForecastedOutflows;
-        actualBalance = dayInitialBalance + dayActualInflows - dayActualOutflows;
-      } else {
-        dayInitialBalance = initialBalancesCal.filter((bal: any) => filterByCompany(bal) && bal?.balance_date === dateStr).reduce((s: number, bal: any) => {
-          const v = bal?.balance;
-          if (v == null || v === '') return s;
-          return s + (parseFloat(String(v)) || 0);
-        }, 0);
-
-        dayForecastedInflows = calRevenues.filter((r: any) => filterByCompany(r) && r.payment_date === dateStr && ['previsto', 'pendente'].includes(String(r.status || '').toLowerCase())).reduce((s: number, r: any) => s + (r.amount || 0), 0) +
-          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date === dateStr && (t.amount || 0) > 0 && String(t.status || '').toLowerCase() === 'previsto').reduce((s: number, t: any) => s + (t.amount || 0), 0);
-        dayActualInflows = calRevenues.filter((r: any) => filterByCompany(r) && r.payment_date === dateStr && String(r.status || '').toLowerCase() === 'realizado').reduce((s: number, r: any) => s + (r.amount || 0), 0) +
-          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date === dateStr && (t.amount || 0) > 0 && String(t.status || '').toLowerCase() === 'realizado').reduce((s: number, t: any) => s + (t.amount || 0), 0);
-
-        dayForecastedOutflows = calAp.filter((ap: any) => filterByCompany(ap) && String(ap.status || '').toLowerCase() === 'previsto' && (ap.due_date === dateStr || ap.payment_date === dateStr)).reduce((s: number, ap: any) => s + (parseFloat(ap.amount) || 0), 0) +
-          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date === dateStr && (t.amount || 0) < 0 && String(t.status || '').toLowerCase() === 'previsto').reduce((s: number, t: any) => s + Math.abs(t.amount || 0), 0);
-        dayActualOutflows = calAp.filter((ap: any) => filterByCompany(ap) && ap.payment_date === dateStr && String(ap.status || '').toLowerCase() === 'realizado').reduce((s: number, ap: any) => s + (parseFloat(ap.amount) || 0), 0) +
-          calTx.filter((t: any) => filterByCompany(t) && t.transaction_date === dateStr && (t.amount || 0) < 0 && String(t.status || '').toLowerCase() === 'realizado').reduce((s: number, t: any) => s + Math.abs(t.amount || 0), 0);
-
-        forecastedBalance = dayInitialBalance + dayForecastedInflows - dayForecastedOutflows;
-        actualBalance = dayInitialBalance + dayActualInflows - dayActualOutflows;
-      }
-
-      days.push({ date: dateStr, forecastedInflows: dayForecastedInflows, actualInflows: dayActualInflows, forecastedOutflows: dayForecastedOutflows, actualOutflows: dayActualOutflows, forecastedBalance, actualBalance });
-    }
-    return days;
-  }, [calendarViewData, calendarDate.year, calendarDate.month, calendarAccumulatedMode, getCalendarInitialBalances, companies, getFilteredCompanyCodesNormalized]);
-
-  const calendarData = useMemo(() => {
-    const year = calendarDate.year;
-    const month = calendarDate.month;
-
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const calendarDays = [];
-
-    for (let day = 1; day <= daysInMonth; day++) {
-      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const dayData = calendarDailyCashFlow.find(d => d.date === dateStr);
-
-      if (dayData) {
-        // Usa o saldo final de cada dia (previsto e realizado)
-        calendarDays.push({
-          date: day,
-          openingBalance: 0,
-          forecastedRevenue: dayData.forecastedInflows,
-          forecastedOutflows: dayData.forecastedOutflows,
-          forecastedBalance: dayData.forecastedBalance, // Saldo final previsto do dia
-          actualBalance: dayData.actualBalance // Saldo final realizado do dia
-        });
-      } else {
-        // Se não há dados para o dia, mostra apenas o saldo inicial (sem recebimentos/pagamentos)
-        const calendarInitialBalance = (getCalendarInitialBalances || [])
-          .reduce((sum, bal) => {
-            const balanceValue = bal?.balance;
-            if (balanceValue === null || balanceValue === undefined || balanceValue === '') {
-              return sum;
-            }
-            const parsed = parseFloat(String(balanceValue));
-            return sum + (isNaN(parsed) ? 0 : parsed);
-          }, 0);
-
-        calendarDays.push({
-          date: day,
-          openingBalance: 0,
-          forecastedRevenue: 0,
-          forecastedOutflows: 0,
-          forecastedBalance: calendarInitialBalance, // Saldo inicial (sem recebimentos/pagamentos do dia)
-          actualBalance: calendarInitialBalance // Saldo inicial (sem recebimentos/pagamentos do dia)
-        });
-      }
-    }
-
-    return calendarDays;
-  }, [calendarDailyCashFlow, calendarDate.year, calendarDate.month, getCalendarInitialBalances]);
+  }, [getFilteredRevenues, accountsPayable, forecastedEntries, financialTransactions, initialBalances, companies, getFilteredCompanyCodesNormalized]);
 
   const uniqueGroups = useMemo(() => [...new Set(companies.map(c => c.group_name))], [companies]);
   const companiesForSidebar = useMemo(() =>
@@ -5905,28 +5477,102 @@ function AppContent() {
                   </div>
                 )}
 
-              {/* Calendar, Chart and Alerts - ocultos quando entregaResultadoHidden */}
+              {/* Calendar centralizado — gráfico e alertas em modais */}
               {!entregaResultadoHidden && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8 items-start">
-                  <div>
+                <div className="mb-8 flex justify-center">
+                  <div className="w-full max-w-4xl xl:max-w-5xl">
                     <CalendarView
-                      data={calendarData}
+                      days={calendarDays}
                       year={calendarDate.year}
                       month={calendarDate.month}
                       onMonthChange={(year, month) => setCalendarDate({ year, month })}
                       darkMode={darkMode}
-                      accumulatedMode={calendarAccumulatedMode}
-                      onToggleAccumulatedMode={() => setCalendarAccumulatedMode(!calendarAccumulatedMode)}
-                      loading={calendarDataLoading}
+                      loading={calendarLoading}
+                      validUnitCodes={companies.map((c: any) => normalizeCode(c.company_code))}
+                      bankOptions={availableBanks}
+                      onBalancesChanged={handleCalendarBalancesChanged}
+                      onOpenCashFlowChart={() => setCashFlowChartModalOpen(true)}
+                      onOpenAlerts={() => setCashFlowAlertsModalOpen(true)}
+                      alertsCount={alertsData?.length ?? 0}
                     />
                   </div>
-                  <div className="space-y-4">
-                    {dataLoading ? (
-                      <ChartSkeleton darkMode={darkMode} />
-                    ) : (
-                      <CashFlowChart data={cashFlowData} darkMode={darkMode} alerts={alertsData} />
-                    )}
-                    <CashFlowAlerts data={alertsData} darkMode={darkMode} />
+                </div>
+              )}
+
+              {/* Modal: Fluxo de Caixa Diário */}
+              {cashFlowChartModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                  <div
+                    className="absolute inset-0 bg-black/60"
+                    onClick={() => setCashFlowChartModalOpen(false)}
+                    aria-hidden
+                  />
+                  <div
+                    className={`relative w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-xl shadow-2xl border ${
+                      darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
+                    }`}
+                  >
+                    <div
+                      className={`sticky top-0 z-10 flex items-center justify-between px-5 py-3 border-b ${
+                        darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
+                      }`}
+                    >
+                      <h3 className={`text-lg font-semibold ${darkMode ? 'text-slate-100' : 'text-gray-900'}`}>
+                        Fluxo de Caixa Diário
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => setCashFlowChartModalOpen(false)}
+                        className={`p-2 rounded-lg ${darkMode ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-gray-100 text-gray-500'}`}
+                        aria-label="Fechar"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                    <div className="p-4">
+                      {dataLoading ? (
+                        <ChartSkeleton darkMode={darkMode} />
+                      ) : (
+                        <CashFlowChart data={cashFlowData} darkMode={darkMode} alerts={alertsData} />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Modal: Alertas de Fluxo de Caixa */}
+              {cashFlowAlertsModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                  <div
+                    className="absolute inset-0 bg-black/60"
+                    onClick={() => setCashFlowAlertsModalOpen(false)}
+                    aria-hidden
+                  />
+                  <div
+                    className={`relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl shadow-2xl border ${
+                      darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
+                    }`}
+                  >
+                    <div
+                      className={`sticky top-0 z-10 flex items-center justify-between px-5 py-3 border-b ${
+                        darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
+                      }`}
+                    >
+                      <h3 className={`text-lg font-semibold ${darkMode ? 'text-slate-100' : 'text-gray-900'}`}>
+                        Alertas de Fluxo de Caixa
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => setCashFlowAlertsModalOpen(false)}
+                        className={`p-2 rounded-lg ${darkMode ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-gray-100 text-gray-500'}`}
+                        aria-label="Fechar"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                    <div className="p-4">
+                      <CashFlowAlerts data={alertsData} darkMode={darkMode} />
+                    </div>
                   </div>
                 </div>
               )}
@@ -6055,7 +5701,7 @@ function AppContent() {
         initialEndDate={modalState.initialEndDate}
         sourceTables={modalState.sourceTables}
         onReceitasManuaisSaved={refreshWithCurrentFilters}
-        onSaldosIniciaisSaved={refreshWithCurrentFilters}
+        onSaldosIniciaisSaved={handleCalendarBalancesChanged}
         onRefreshDetail={refreshWithCurrentFilters}
         validUnitCodes={companies.map((c: any) => normalizeCode(c.company_code))}
         onShowToast={(id) => setActiveToast(id)}

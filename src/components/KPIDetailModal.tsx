@@ -130,8 +130,8 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
   const [editSaldoModalOpen, setEditSaldoModalOpen] = useState(false);
   const [editSaldoSubView, setEditSaldoSubView] = useState<'novos' | 'lancados'>('novos');
   const [editSaldoMode, setEditSaldoMode] = useState<'mes' | 'semana' | 'dia'>('mes');
-  const [editSaldoRows, setEditSaldoRows] = useState<Array<{ id: string; unidade: string; banco: string; bancoOutro: string; valor: string; data: string }>>([]);
-  const [saldoLancadosRows, setSaldoLancadosRows] = useState<Array<{ dbId: number | string; unidade: string; banco: string; valor: string; data: string }>>([]);
+  const [editSaldoRows, setEditSaldoRows] = useState<Array<{ id: string; unidade: string; banco: string; bancoOutro: string; valor: string; data: string; observacao: string }>>([]);
+  const [saldoLancadosRows, setSaldoLancadosRows] = useState<Array<{ dbId: number | string; unidade: string; banco: string; valor: string; data: string; observacao: string }>>([]);
   const [saldoLancadosLoading, setSaldoLancadosLoading] = useState(false);
   const [saldoLancadosSaving, setSaldoLancadosSaving] = useState(false);
   const [saldoLancadosDeletedIds, setSaldoLancadosDeletedIds] = useState<(number | string)[]>([]);
@@ -336,6 +336,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
   // Helper para coluna Fornecedor/Descrição (usado no filtro e na tabela)
   // Para receitas (source === 'revenues') usar descricao do lançamento, não o type 'Receita'
   const getSupplierOrDescriptionForItem = useCallback((item: any): string => {
+    if (item.source === 'initial_balance' && item.observacao != null && item.observacao !== '') return item.observacao;
     if (item.descricao != null && item.descricao !== '') return item.descricao;
     if (item.source === 'transactions' && (item.description != null && item.description !== '')) return item.description;
     if (item.bank_name) return item.bank_name;
@@ -855,7 +856,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
     const startDate = new Date(start + 'T00:00:00');
     const endDate = new Date(end + 'T00:00:00');
     const newId = () => `saldo-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    const emptyRow = (dataStr: string) => ({ id: newId(), unidade: '', banco: '', bancoOutro: '', data: dataStr, valor: '' });
+    const emptyRow = (dataStr: string) => ({ id: newId(), unidade: '', banco: '', bancoOutro: '', data: dataStr, valor: '', observacao: '' });
     if (mode === 'mes') {
       rows.push(emptyRow(start));
     } else if (mode === 'semana') {
@@ -898,7 +899,8 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
       banco: '',
       bancoOutro: '',
       data: lastData,
-      valor: ''
+      valor: '',
+      observacao: ''
     }]);
   };
   const duplicatePreviousMonthSaldo = () => {
@@ -941,7 +943,8 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
         business_unit: r.unidade.trim(),
         bank_name: r.banco === 'Outro' ? (r.bancoOutro || '').trim() || 'Outro' : r.banco,
         balance: parseValor(r.valor),
-        balance_date: r.data
+        balance_date: r.data,
+        observacao: (r.observacao || '').trim() || null
       }));
     if (payload.length === 0) {
       setEditSaldoModalOpen(false);
@@ -968,7 +971,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
     try {
       const { data: rows, error } = await supabase
         .from('saldos_iniciais')
-        .select('id, business_unit, bank_name, balance, balance_date')
+        .select('id, business_unit, bank_name, balance, balance_date, observacao')
         .gte('balance_date', period.start)
         .lte('balance_date', period.end)
         .order('balance_date', { ascending: false });
@@ -978,7 +981,8 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
         unidade: r.business_unit || '',
         banco: r.bank_name || '',
         valor: r.balance != null ? String(r.balance) : '',
-        data: r.balance_date || ''
+        data: r.balance_date || '',
+        observacao: r.observacao || ''
       })));
       setSaldoLancadosDeletedIds([]);
     } catch (e) {
@@ -1030,7 +1034,8 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
           business_unit: row.unidade.trim(),
           bank_name: (row.banco || '').trim() || 'Outro',
           balance: parseValor(row.valor),
-          balance_date: row.data
+          balance_date: row.data,
+          observacao: (row.observacao || '').trim() || null
         }).eq('id', row.dbId);
         if (error) throw error;
       }
@@ -1086,8 +1091,8 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Origem</th>
           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Status</th>
           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">UN</th>
-          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Conta</th>
-          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Fornecedor/Descrição</th>
+          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">{type === 'initial_balance' ? 'Banco' : 'Conta'}</th>
+          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">{type === 'initial_balance' ? 'Observação' : 'Fornecedor/Descrição'}</th>
           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Data</th>
           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Data de Lançamento</th>
           <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">Valor</th>
@@ -1177,6 +1182,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
       };
 
       const getAccountOrCategory = () => {
+        if (item.source === 'initial_balance' && item.bank_name) return item.bank_name;
         if (item.category) return item.category;
         if (item.chart_of_accounts) return item.chart_of_accounts;
         if (item.type) return item.type;
@@ -1986,12 +1992,13 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
                                   <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Banco</th>
                                   <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Data</th>
                                   <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 uppercase">Valor</th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Observação</th>
                                   <th className="px-2 py-2 text-center text-xs font-semibold text-gray-700 uppercase w-12"></th>
                                 </tr>
                               </thead>
                               <tbody className="bg-white divide-y divide-gray-200">
                                 {saldoLancadosRows.length === 0 ? (
-                                  <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-gray-500">Nenhum saldo no período.</td></tr>
+                                  <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-500">Nenhum saldo no período.</td></tr>
                                 ) : (
                                   saldoLancadosRows.map((row, index) => (
                                     <tr key={String(row.dbId)} className="hover:bg-gray-50">
@@ -2007,6 +2014,9 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
                                       </td>
                                       <td className="px-3 py-2 text-right">
                                         <input type="text" value={row.valor} onChange={e => updateSaldoLancadosRow(row.dbId, 'valor', e.target.value)} placeholder="0,00" className="w-full min-w-[100px] text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 text-right" />
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        <input type="text" value={row.observacao} onChange={e => updateSaldoLancadosRow(row.dbId, 'observacao', e.target.value)} placeholder="Opcional" className="w-full min-w-[140px] text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5" />
                                       </td>
                                       <td className="px-2 py-2 text-center">
                                         <button type="button" onClick={() => removeSaldoLancadosRow(row.dbId)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md" title="Remover"><X className="w-4 h-4" /></button>
@@ -2043,6 +2053,7 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
                               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Banco</th>
                               <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Data</th>
                               <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700 uppercase">Valor</th>
+                              <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Observação</th>
                               <th className="px-2 py-2 text-center text-xs font-semibold text-gray-700 uppercase w-12"></th>
                             </tr>
                           </thead>
@@ -2068,6 +2079,9 @@ export const KPIDetailModal: React.FC<KPIDetailModalProps> = ({
                                 </td>
                                 <td className="px-3 py-2 text-right">
                                   <input type="text" value={row.valor} onChange={e => updateEditSaldoRow(row.id, 'valor', e.target.value)} placeholder="0,00" className="w-full min-w-[100px] text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 text-right" />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input type="text" value={row.observacao} onChange={e => updateEditSaldoRow(row.id, 'observacao', e.target.value)} placeholder="Opcional" className="w-full min-w-[140px] text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5" />
                                 </td>
                                 <td className="px-2 py-2 text-center">
                                   <button type="button" onClick={() => removeEditSaldoRow(row.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md" title="Remover"><X className="w-4 h-4" /></button>

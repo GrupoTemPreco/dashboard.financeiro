@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Building2, Users, Calendar, Filter, BarChart3, TrendingUp, Activity, FileText, ChevronLeft, ChevronRight, Maximize, ChevronDown, Check, RefreshCw, X, Plus, Edit2 } from 'lucide-react';
+import { Building2, Users, Calendar, Filter, BarChart3, TrendingUp, Activity, ChevronLeft, ChevronRight, Maximize, ChevronDown, Check, RefreshCw, X, Plus, Edit2 } from 'lucide-react';
 import { Filters } from '../types/financial';
 
 // Filtro de grupos ativo — filtra por group_name (empresas/lojas do grupo)
@@ -136,7 +136,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const pages = [
     { id: 'cashflow', name: 'Fluxo de Caixa', icon: TrendingUp },
-    { id: 'dre', name: 'DRE', icon: FileText }
+    // DRE oculto temporariamente
+    // { id: 'dre', name: 'DRE', icon: FileText }
   ];
 
   return (
