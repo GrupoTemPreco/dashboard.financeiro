@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { KPICard } from './components/KPICard';
+import { DualMetricKPICard } from './components/DualMetricKPICard';
 import { KPIDetailModal } from './components/KPIDetailModal';
 import { CalendarView, loadCalendarMonthData, computeCalendarDays, type CalendarDayValues } from './features/calendar';
 import { CashFlowChart } from './components/CashFlowChart';
@@ -12,7 +13,7 @@ import { ExpenseBreakdown } from './components/ExpenseBreakdown';
 import { DREPage } from './components/DREPage';
 import { CompanyFormModal } from './components/CompanyFormModal';
 import { CompanyEditModal } from './components/CompanyEditModal';
-import { DespesasOperacionaisTable, formatLastUpdate } from './components/DespesasOperacionaisTable';
+import { DespesasOperacionaisTable, formatLastUpdate, computeDespesasOperacionaisValuesMap } from './components/DespesasOperacionaisTable';
 import { ErrorModal } from './components/ErrorModal';
 import { DuplicateFileModal } from './components/DuplicateFileModal';
 import { ChartSkeleton } from './components/ChartSkeleton';
@@ -23,11 +24,10 @@ import { NotificationProvider, useNotificationContext } from './contexts/Notific
 import { FinancialRecord, Filters, ImportedFile } from './types/financial';
 import { processExcelFile, processAccountsPayableFile, processRevenuesFile, processFinancialTransactionsFile, processForecastedEntriesFile, processRevenuesDREFile, processCMVDREFile, processInitialBalancesFile, processOrcamentoDREFile, processReceitaCrediarioFile, processVendasPorUsuarioFile, validateFileFormat } from './utils/excelProcessor';
 import { filterData, calculateKPIs } from './utils/dataProcessor';
-import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Target, List, Moon, Sun, Eye, EyeOff, X } from 'lucide-react';
+import { DollarSign, TrendingUp, Pill, ArrowDown, ArrowUp, Calculator, Scale, List, Moon, Sun, Eye, EyeOff, X } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { startOfMonth, endOfMonth, format, parseISO, subMonths, subDays, differenceInCalendarDays, addDays, getDate, setDate, lastDayOfMonth } from 'date-fns';
 import { CapCoaMatchCollector, formatCapCoaLaunchMessage } from './lib/coaCapMatchCollector';
-import { computeDespesasOperacionaisValuesMap } from './components/DespesasOperacionaisTable';
 import { computeDeducoesValuesMap } from './lib/dreDeducoesValues';
 import { computeLucrosDistribuidosValuesMap } from './lib/dreLucrosDistribuidosValues';
 import { computeInvestimentoValuesMap } from './lib/dreInvestimentoValues';
@@ -218,6 +218,8 @@ function AppContent() {
   const [, setIsPermanentlyUnlocked] = useState(false);
   const [dreWarningClosed, setDreWarningClosed] = useState(false);
   const [entregaResultadoHidden, setEntregaResultadoHidden] = useState(true); // padrão: oculto (calendário, gráfico, alertas)
+  /** Card Entrega de Resultado: qual métrica do card CMV/CMP está visível */
+  const [cmvCmpCardMode, setCmvCmpCardMode] = useState<'cmv' | 'cmp'>('cmv');
   // unlockClickCount é usado indiretamente através do callback do setState em handleUnlockClick
   // @ts-ignore - valor usado indiretamente via callback do setState
   const [unlockClickCount, setUnlockClickCount] = useState(0);
@@ -4271,6 +4273,104 @@ function AppContent() {
     forecasted: directCmvSalesTotals?.previous ?? 0
   }), [directCmvSalesTotals]);
 
+  /**
+   * Métricas Entrega de Resultado derivadas da mesma agregação da tabela (CAP + plano de contas).
+   * Faturamento para CMP% espelha mercadoriasComparison da tabela (vendas_por_usuario + filtro BU +
+   * período atual / mês civil anterior) — NÃO usa directRevenue.actual porque o período anterior
+   * da Receita Direta é janela deslocada, não o mês civil do prevRealizado.
+   * No período atual, directRevenue.actual e faturamentoAtual tendem a coincidir, mas o
+   * denominador do CMP% deve seguir a tabela para o % bater com a UI de mercadorias.
+   */
+  const entregaResultadoCapMetrics = useMemo(() => {
+    const valuesMap = computeDespesasOperacionaisValuesMap(accountsPayable, filters, companies);
+    const despesasOp = valuesMap['despesas-op'] ?? { prevRealizado: 0, curRealizado: 0, curPrevisto: 0 };
+    const mercadorias = valuesMap['despesas-op-mercadorias'] ?? {
+      prevRealizado: 0,
+      curRealizado: 0,
+      curPrevisto: 0
+    };
+
+    let currentStart = filters.startDate?.trim() || '';
+    let currentEnd = filters.endDate?.trim() || '';
+    if (!currentStart || !currentEnd) {
+      const def = getDefaultPeriod();
+      currentStart = def.start;
+      currentEnd = def.end;
+    }
+    const startDate = parseISO(currentStart);
+    const prevMonthDate = subMonths(startDate, 1);
+    const prevStart = format(startOfMonth(prevMonthDate), 'yyyy-MM-dd');
+    const prevEnd = format(endOfMonth(prevMonthDate), 'yyyy-MM-dd');
+
+    let allowedBusinessUnits: Set<string> | null = null;
+    if (companies.length > 0) {
+      const hasActive = filters.groups.length > 0 || filters.companies.length > 0;
+      if (hasActive) {
+        allowedBusinessUnits = new Set(
+          companies
+            .filter(
+              c =>
+                (filters.groups.length === 0 || filters.groups.includes(c.group_name)) &&
+                (filters.companies.length === 0 ||
+                  filters.companies.some(
+                    (code: string) =>
+                      String(code).trim() === String(c.company_code ?? '').trim() ||
+                      normalizeCode(code) === normalizeCode(c.company_code ?? '')
+                  ))
+            )
+            .map(c => normalizeCode(c.company_code))
+        );
+      }
+    }
+    const businessUnitAllowed = (businessUnit: any) =>
+      allowedBusinessUnits === null || allowedBusinessUnits.has(normalizeCode(businessUnit));
+    const toDate = (v: any) => (v == null ? '' : String(v).split('T')[0]);
+    const num = (v: any) => Number(v) || 0;
+
+    const faturamentoAtual = (vendasPorUsuarioRows || [])
+      .filter(r => {
+        const d = toDate(r.data);
+        return d && d >= currentStart && d <= currentEnd && businessUnitAllowed(r.business_unit);
+      })
+      .reduce((sum, r) => sum + num(r.amount), 0);
+    const faturamentoPrev = (vendasPorUsuarioRows || [])
+      .filter(r => {
+        const d = toDate(r.data);
+        return d && d >= prevStart && d <= prevEnd && businessUnitAllowed(r.business_unit);
+      })
+      .reduce((sum, r) => sum + num(r.amount), 0);
+
+    const cmpAtual = mercadorias.curRealizado;
+    const cmpPrev = mercadorias.prevRealizado;
+
+    return {
+      despesasOp: {
+        actual: despesasOp.curRealizado,
+        previous: despesasOp.prevRealizado,
+        prevStart,
+        prevEnd
+      },
+      cmp: {
+        actual: cmpAtual,
+        previous: cmpPrev,
+        prevStart,
+        prevEnd,
+        percentageOfRevenue: faturamentoAtual > 0 ? (cmpAtual / faturamentoAtual) * 100 : 0,
+        percentageOfRevenuePrev: faturamentoPrev > 0 ? (cmpPrev / faturamentoPrev) * 100 : 0
+      },
+      faturamentoAtual,
+      faturamentoPrev
+    };
+  }, [
+    accountsPayable,
+    filters.startDate,
+    filters.endDate,
+    filters.groups,
+    filters.companies,
+    companies,
+    vendasPorUsuarioRows
+  ]);
+
   const kpiData = useMemo(() => {
     const baseKpis = calculateKPIs(filteredData);
 
@@ -5405,46 +5505,98 @@ function AppContent() {
                       loading={dataLoading}
                       />
                       <KPICard
-                        title="CMV"
-                        forecasted={kpiData.cogs.forecasted}
-                        actual={kpiData.cogs.actual}
-                        percentage={kpiData.cogs.percentageOfRevenue}
+                        title={cmvCmpCardMode === 'cmv' ? 'CMV' : 'CMP'}
+                        forecasted={
+                          cmvCmpCardMode === 'cmv'
+                            ? kpiData.cogs.forecasted
+                            : entregaResultadoCapMetrics.cmp.previous
+                        }
+                        actual={
+                          cmvCmpCardMode === 'cmv'
+                            ? kpiData.cogs.actual
+                            : entregaResultadoCapMetrics.cmp.actual
+                        }
+                        percentage={
+                          cmvCmpCardMode === 'cmv'
+                            ? kpiData.cogs.percentageOfRevenue
+                            : entregaResultadoCapMetrics.cmp.percentageOfRevenue
+                        }
                         icon={<Pill className="w-5 h-5" />}
                         color="orange"
                         section="result"
                         darkMode={darkMode}
                         detailsComingSoon
+                        loading={dataLoading}
                         forecastedLabel={
-                          directCmvSalesTotals
-                            ? `Período anterior (${format(parseISO(directCmvSalesTotals.prevStart), 'dd/MM/yy')} - ${format(parseISO(directCmvSalesTotals.prevEnd), 'dd/MM/yy')})`
-                            : 'Período anterior'
+                          cmvCmpCardMode === 'cmv'
+                            ? directCmvSalesTotals
+                              ? `Período anterior (${format(parseISO(directCmvSalesTotals.prevStart), 'dd/MM/yy')} - ${format(parseISO(directCmvSalesTotals.prevEnd), 'dd/MM/yy')})`
+                              : 'Período anterior'
+                            : `Período anterior (${format(parseISO(entregaResultadoCapMetrics.despesasOp.prevStart), 'dd/MM/yy')} - ${format(parseISO(entregaResultadoCapMetrics.despesasOp.prevEnd), 'dd/MM/yy')})`
                         }
-                      loading={dataLoading}
+                        actualLabel="Realizado"
+                        headerAction={
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCmvCmpCardMode(prev => (prev === 'cmv' ? 'cmp' : 'cmv'))
+                            }
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                              darkMode
+                                ? 'border-slate-600 text-slate-200 hover:bg-slate-800'
+                                : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+                            }`}
+                            title={
+                              cmvCmpCardMode === 'cmv'
+                                ? 'Alternar para CMP (pago)'
+                                : 'Alternar para CMV (vendas)'
+                            }
+                          >
+                            {cmvCmpCardMode === 'cmv' ? 'Ver CMP' : 'Ver CMV'}
+                          </button>
+                        }
                       />
                       <KPICard
-                        title="Total de Despesas"
-                        forecasted={kpiData.totalExpenses.forecasted}
-                        actual={kpiData.totalExpenses.actual}
+                        title="Despesas Operacionais"
+                        forecasted={entregaResultadoCapMetrics.despesasOp.previous}
+                        actual={entregaResultadoCapMetrics.despesasOp.actual}
                         icon={<Calculator className="w-5 h-5" />}
                         color="red"
                         section="result"
                         darkMode={darkMode}
-                        forecastedLabel="Previsto (por vencimento)"
-                        actualLabel="Realizado (por pagamento)"
-                        onViewDetails={() => openKPIDetail('Detalhes: Total de Despesas', getFilteredTotalOutflowsTable, 'total_outflows', ['contas_a_pagar', 'transacoes_financeiras'])}
-                      loading={dataLoading}
+                        detailsComingSoon
+                        forecastedLabel={`Período anterior (${format(parseISO(entregaResultadoCapMetrics.despesasOp.prevStart), 'dd/MM/yy')} - ${format(parseISO(entregaResultadoCapMetrics.despesasOp.prevEnd), 'dd/MM/yy')})`}
+                        actualLabel="Realizado"
+                        loading={dataLoading}
                       />
-                      <KPICard
-                        title="Resultado Operacional"
-                        forecasted={kpiData.directRevenue.forecasted - kpiData.cogs.forecasted - kpiData.totalExpenses.forecasted}
-                        actual={kpiData.directRevenue.actual - kpiData.cogs.actual - kpiData.totalExpenses.actual}
-                        percentage={kpiData.directRevenue.actual !== 0 ? ((kpiData.directRevenue.actual - kpiData.cogs.actual - kpiData.totalExpenses.actual) / kpiData.directRevenue.actual) * 100 : 0}
-                        icon={<Target className="w-5 h-5" />}
-                        color="indigo"
-                        section="result"
+                      <DualMetricKPICard
+                        title="Resultado Líquido"
+                        icon={<Scale className="w-5 h-5" />}
+                        color="green"
                         darkMode={darkMode}
                         detailsComingSoon
-                      loading={dataLoading}
+                        loading={dataLoading}
+                        showPreviousAndVariation={false}
+                        primary={{
+                          keyLabel: 'CMV',
+                          previous: 0,
+                          actual:
+                            kpiData.directRevenue.actual -
+                            kpiData.cogs.actual -
+                            entregaResultadoCapMetrics.despesasOp.actual,
+                          previousLabel: '',
+                          actualLabel: 'Resultado Líquido (CMV)'
+                        }}
+                        secondary={{
+                          keyLabel: 'CMP',
+                          previous: 0,
+                          actual:
+                            kpiData.directRevenue.actual -
+                            entregaResultadoCapMetrics.cmp.actual -
+                            entregaResultadoCapMetrics.despesasOp.actual,
+                          previousLabel: '',
+                          actualLabel: 'Resultado Líquido (CMP)'
+                        }}
                       />
                   </>
                 </div>

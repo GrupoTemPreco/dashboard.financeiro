@@ -1,51 +1,60 @@
 import React, { useState } from 'react';
 import { TrendingUp, TrendingDown, List } from 'lucide-react';
 
-interface KPICardProps {
-  title: string;
-  forecasted: number;
+export type DualMetricKPICardColor =
+  | 'yellow'
+  | 'red'
+  | 'blue'
+  | 'green'
+  | 'purple'
+  | 'orange'
+  | 'teal'
+  | 'indigo';
+
+export interface DualMetricBlock {
+  /** Ex.: "CMV" ou "CMP" — usado nos labels */
+  keyLabel: string;
+  previous: number;
   actual: number;
-  percentage?: number;
-  icon: React.ReactNode;
-  color: 'yellow' | 'red' | 'blue' | 'green' | 'purple' | 'orange' | 'teal' | 'indigo';
-  section?: 'cashflow' | 'result';
-  onViewDetails?: () => void;
-  darkMode?: boolean;
-  loading?: boolean;
-  /** Quando true, mostra tooltip "Em breve" no hover em vez de abrir modal ao clicar */
-  detailsComingSoon?: boolean;
-  /** Label da linha Previsto (ex: "Previsto (por vencimento)") */
-  forecastedLabel?: string;
-  /** Label da linha Realizado (ex: "Realizado (por pagamento)") */
-  actualLabel?: string;
-  /** Conteúdo opcional no header (ex.: toggle), à esquerda dos botões de detalhes/trend */
-  headerAction?: React.ReactNode;
+  /** Se definido, mostra "% sobre Receita" sob o realizado */
+  percentageOfRevenue?: number;
+  previousLabel: string;
+  actualLabel: string;
 }
 
-export const KPICard: React.FC<KPICardProps> = ({
+interface DualMetricKPICardProps {
+  title: string;
+  primary: DualMetricBlock;
+  secondary: DualMetricBlock;
+  icon: React.ReactNode;
+  color: DualMetricKPICardColor;
+  darkMode?: boolean;
+  loading?: boolean;
+  detailsComingSoon?: boolean;
+  /** Quando false, oculta blocos de período anterior e variação (útil p/ Resultado Líquido) */
+  showPreviousAndVariation?: boolean;
+}
+
+const formatCurrency = (value: number) =>
+  new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value || 0);
+
+export const DualMetricKPICard: React.FC<DualMetricKPICardProps> = ({
   title,
-  forecasted,
-  actual,
-  percentage,
+  primary,
+  secondary,
   icon,
   color,
-  onViewDetails,
   darkMode = false,
   loading = false,
   detailsComingSoon = false,
-  forecastedLabel = 'Previsto',
-  actualLabel = 'Realizado',
-  headerAction
+  showPreviousAndVariation = true
 }) => {
   const [showComingSoonTooltip, setShowComingSoonTooltip] = useState(false);
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    }).format(value || 0);
-  };
 
   const getColorClasses = () => {
     if (darkMode) {
@@ -57,7 +66,7 @@ export const KPICard: React.FC<KPICardProps> = ({
             icon: 'text-amber-300 bg-slate-900',
             accent: 'text-amber-300',
             glow: 'hover:shadow-[0_0_32px_rgba(245,158,11,0.45)]'
-          } as any;
+          } as const;
         case 'red':
           return {
             bg: 'bg-[#0F172A]',
@@ -65,7 +74,7 @@ export const KPICard: React.FC<KPICardProps> = ({
             icon: 'text-rose-300 bg-slate-900',
             accent: 'text-rose-300',
             glow: 'hover:shadow-[0_0_32px_rgba(248,113,113,0.45)]'
-          } as any;
+          } as const;
         case 'blue':
           return {
             bg: 'bg-[#0F172A]',
@@ -73,7 +82,7 @@ export const KPICard: React.FC<KPICardProps> = ({
             icon: 'text-sky-300 bg-slate-900',
             accent: 'text-sky-300',
             glow: 'hover:shadow-[0_0_32px_rgba(59,130,246,0.45)]'
-          } as any;
+          } as const;
         case 'green':
           return {
             bg: 'bg-[#0F172A]',
@@ -81,7 +90,7 @@ export const KPICard: React.FC<KPICardProps> = ({
             icon: 'text-emerald-300 bg-slate-900',
             accent: 'text-emerald-300',
             glow: 'hover:shadow-[0_0_32px_rgba(16,185,129,0.45)]'
-          } as any;
+          } as const;
         case 'purple':
           return {
             bg: 'bg-[#0F172A]',
@@ -89,7 +98,7 @@ export const KPICard: React.FC<KPICardProps> = ({
             icon: 'text-violet-300 bg-slate-900',
             accent: 'text-violet-300',
             glow: 'hover:shadow-[0_0_32px_rgba(139,92,246,0.45)]'
-          } as any;
+          } as const;
         case 'orange':
           return {
             bg: 'bg-[#0F172A]',
@@ -97,7 +106,7 @@ export const KPICard: React.FC<KPICardProps> = ({
             icon: 'text-orange-300 bg-slate-900',
             accent: 'text-orange-300',
             glow: 'hover:shadow-[0_0_32px_rgba(249,115,22,0.45)]'
-          } as any;
+          } as const;
         case 'teal':
           return {
             bg: 'bg-[#0F172A]',
@@ -105,7 +114,7 @@ export const KPICard: React.FC<KPICardProps> = ({
             icon: 'text-teal-300 bg-slate-900',
             accent: 'text-teal-300',
             glow: 'hover:shadow-[0_0_32px_rgba(45,212,191,0.45)]'
-          } as any;
+          } as const;
         case 'indigo':
           return {
             bg: 'bg-[#0F172A]',
@@ -113,7 +122,7 @@ export const KPICard: React.FC<KPICardProps> = ({
             icon: 'text-indigo-300 bg-slate-900',
             accent: 'text-indigo-300',
             glow: 'hover:shadow-[0_0_32px_rgba(79,70,229,0.45)]'
-          } as any;
+          } as const;
         default:
           return {
             bg: 'bg-[#0F172A]',
@@ -121,7 +130,7 @@ export const KPICard: React.FC<KPICardProps> = ({
             icon: 'text-slate-200 bg-slate-900',
             accent: 'text-slate-100',
             glow: 'hover:shadow-[0_0_32px_rgba(148,163,184,0.45)]'
-          } as any;
+          } as const;
       }
     }
 
@@ -193,34 +202,86 @@ export const KPICard: React.FC<KPICardProps> = ({
   };
 
   const colors: any = getColorClasses();
-  const difference = actual - forecasted;
-  const isPositive = difference >= 0;
+  const primaryDiff = primary.actual - primary.previous;
+  const secondaryDiff = secondary.actual - secondary.previous;
+  const primaryPositive = primaryDiff >= 0;
+  const secondaryPositive = secondaryDiff >= 0;
+  // Sem bloco de variação: tendência pelo sinal do resultado primário
+  const headerPositive = showPreviousAndVariation ? primaryDiff >= 0 : primary.actual >= 0;
+
+  const muted = darkMode ? 'text-slate-300' : 'text-gray-500';
+  const valueMuted = darkMode ? 'text-slate-100' : 'text-gray-700';
+  const borderT = darkMode ? 'border-slate-700' : 'border-slate-200';
+  const varPositive = darkMode ? 'text-emerald-300' : 'text-emerald-600';
+  const varNegative = darkMode ? 'text-rose-300' : 'text-red-600';
+
+  const renderMetricBlock = (block: DualMetricBlock, diff: number, isPositive: boolean, isPrimary: boolean) => (
+    <div className={`space-y-2 ${!isPrimary ? `pt-3 border-t ${borderT}` : ''}`}>
+      {showPreviousAndVariation && (
+        <div className="flex justify-between items-center gap-2">
+          <span className={`text-xs font-medium ${muted}`}>{block.previousLabel}</span>
+          <span className={`text-sm font-semibold tabular-nums ${valueMuted}`}>{formatCurrency(block.previous)}</span>
+        </div>
+      )}
+
+      <div className="flex justify-between items-center gap-2">
+        <span className={`text-xs font-medium ${muted}`}>{block.actualLabel}</span>
+        <span className={`text-lg font-bold tabular-nums ${colors.accent}`}>{formatCurrency(block.actual)}</span>
+      </div>
+
+      {block.percentageOfRevenue !== undefined && (
+        <div className="flex justify-between items-center gap-2">
+          <span className={`text-xs font-medium ${muted}`}>% sobre Receita</span>
+          <span className={`text-sm font-semibold tabular-nums ${valueMuted}`}>
+            {block.percentageOfRevenue.toFixed(1)}%
+          </span>
+        </div>
+      )}
+
+      {showPreviousAndVariation && (
+        <div className="flex justify-between items-center gap-2">
+          <span className={`text-xs font-medium ${muted}`}>Variação ({block.keyLabel})</span>
+          <span className={`text-sm font-semibold tabular-nums ${isPositive ? varPositive : varNegative}`}>
+            {isPositive ? '+' : ''}
+            {formatCurrency(diff)}
+          </span>
+        </div>
+      )}
+    </div>
+  );
 
   return (
-    <div className={`relative ${colors.bg} rounded-lg p-6 border-l-4 ${colors.border} shadow-[0_18px_40px_rgba(15,23,42,0.18)] ${darkMode ? (colors.glow || '') : 'hover:shadow-[0_22px_55px_rgba(15,23,42,0.28)]'} transition-all duration-300`}>
-      {/* Conteúdo principal do card */}
+    <div
+      className={`relative ${colors.bg} rounded-lg p-6 border-l-4 ${colors.border} shadow-[0_18px_40px_rgba(15,23,42,0.18)] ${
+        darkMode ? colors.glow || '' : 'hover:shadow-[0_22px_55px_rgba(15,23,42,0.28)]'
+      } transition-all duration-300`}
+    >
       <div className={loading ? 'opacity-40 pointer-events-none' : ''}>
         <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center flex-1">
+          <div className="flex items-center flex-1 min-w-0">
             <div className={`p-1.5 rounded-lg ${darkMode ? 'bg-slate-950' : 'bg-white'} shadow-sm ${colors.icon}`}>
               {icon}
             </div>
-            <h3 className={`text-xs font-semibold ml-2 ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>{title}</h3>
+            <h3 className={`text-xs font-semibold ml-2 truncate ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
+              {title}
+            </h3>
           </div>
-          <div className="flex items-center gap-2">
-            {headerAction}
-            {(onViewDetails || detailsComingSoon) && (
+          <div className="flex items-center gap-2 shrink-0">
+            {detailsComingSoon && (
               <div className="relative">
                 <button
-                  onClick={detailsComingSoon ? undefined : onViewDetails}
-                  onMouseEnter={() => detailsComingSoon && setShowComingSoonTooltip(true)}
-                  onMouseLeave={() => detailsComingSoon && setShowComingSoonTooltip(false)}
-                  className={`p-1.5 rounded-lg shadow-sm border transition-colors ${darkMode ? 'bg-slate-900/80 hover:bg-slate-900 border-slate-700' : 'bg-white/70 hover:bg-white border-slate-200'}`}
-                  title={detailsComingSoon ? undefined : 'Ver detalhes'}
+                  type="button"
+                  onMouseEnter={() => setShowComingSoonTooltip(true)}
+                  onMouseLeave={() => setShowComingSoonTooltip(false)}
+                  className={`p-1.5 rounded-lg shadow-sm border transition-colors ${
+                    darkMode
+                      ? 'bg-slate-900/80 hover:bg-slate-900 border-slate-700'
+                      : 'bg-white/70 hover:bg-white border-slate-200'
+                  }`}
                 >
                   <List className="w-4 h-4 text-gray-600" />
                 </button>
-                {detailsComingSoon && showComingSoonTooltip && (
+                {showComingSoonTooltip && (
                   <div
                     className={`absolute left-1/2 -translate-x-1/2 top-full mt-1 w-56 p-4 rounded-lg shadow-lg border z-50 ${
                       darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
@@ -238,53 +299,20 @@ export const KPICard: React.FC<KPICardProps> = ({
                 )}
               </div>
             )}
-            {isPositive ? (
+            {headerPositive ? (
               <TrendingUp className="w-4 h-4 text-green-500" />
             ) : (
               <TrendingDown className="w-4 h-4 text-red-500" />
             )}
           </div>
         </div>
-        
-        <div className="space-y-2">
-          <div className="flex justify-between items-center">
-            <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>{forecastedLabel}</span>
-            <span className={`text-sm font-semibold ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
-              {formatCurrency(forecasted)}
-            </span>
-          </div>
-          
-          <div className="flex justify-between items-center">
-            <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>{actualLabel}</span>
-            <span className={`text-lg font-bold ${colors.accent}`}>
-              {formatCurrency(actual)}
-            </span>
-          </div>
-          
-          {percentage !== undefined && (
-            <div className={`pt-2 border-t ${darkMode ? 'border-slate-700' : 'border-slate-200'}`}>
-              <div className="flex justify-between items-center">
-                <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>% sobre Receita</span>
-                <span className={`text-sm font-semibold ${darkMode ? 'text-slate-100' : 'text-gray-700'}`}>
-                  {percentage.toFixed(1)}%
-                </span>
-              </div>
-            </div>
-          )}
-          
-          <div className={`pt-2 border-t ${darkMode ? 'border-slate-700' : 'border-slate-200'}`}>
-            <div className="flex justify-between items-center">
-              <span className={`text-xs font-medium ${darkMode ? 'text-slate-300' : 'text-gray-500'}`}>Variação</span>
-              <span className={`text-sm font-semibold ${isPositive ? (darkMode ? 'text-emerald-300' : 'text-emerald-600') : (darkMode ? 'text-rose-300' : 'text-red-600')}`}>
-                {isPositive ? '+' : ''}{formatCurrency(difference)}
-              </span>
-            </div>
-          </div>
-          
+
+        <div className="space-y-1">
+          {renderMetricBlock(primary, primaryDiff, primaryPositive, true)}
+          {renderMetricBlock(secondary, secondaryDiff, secondaryPositive, false)}
         </div>
       </div>
 
-      {/* Overlay de carregamento com blur */}
       {loading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/35 dark:bg-slate-950/35 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-2">
